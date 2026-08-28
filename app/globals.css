@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --turnos-bg: #f2f7f9;
+    --turnos-ink: #0a2634;
+    --turnos-muted: #64748b;
+    --turnos-brand: #1c86a8;
+    --turnos-brand-dark: #135872;
+    --turnos-sidebar: #0a2634;
+  }
+
+  html {
+    height: -webkit-fill-available;
+    background: var(--turnos-bg);
+  }
+
+  body {
+    min-height: 100vh;
+    min-height: -webkit-fill-available;
+    min-height: 100dvh;
+    background: var(--turnos-bg);
+    color: var(--turnos-ink);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  *,
+  *::before,
+  *::after {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  [role='button'],
+  a {
+    touch-action: manipulation;
+  }
+
+  /*
+   * Table cells never wrap. Wrapped values (periods, amounts, attendance counts) made
+   * rows ragged and hard to scan; every table already lives inside a horizontally
+   * scrollable container, so overflow is handled by scrolling instead of by breaking
+   * lines. Stacked content still stacks: nowrap only prevents breaks inside a text run.
+   */
+  th,
+  td {
+    white-space: nowrap;
+  }
+
+  /* Opt-out for the rare cell that genuinely needs prose. */
+  th.whitespace-normal,
+  td.whitespace-normal,
+  th .whitespace-normal,
+  td .whitespace-normal {
+    white-space: normal;
+  }
+}
+
+/*
+ * Interactive controls stay flat across the product. The selector also covers
+ * link-based actions and their children so a local utility cannot reintroduce
+ * a decorative shadow. Focus uses a real outline instead of Tailwind's
+ * box-shadow-based ring.
+ */
+@layer utilities {
+  :is(button, [role='button'], a),
+  :is(button, [role='button'], a) * {
+    box-shadow: none !important;
+    filter: none !important;
+  }
+
+  :is(button, [role='button'], a):focus-visible {
+    outline: 3px solid var(--turnos-brand) !important;
+    outline-offset: 3px !important;
+  }
+}
+
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #c3dbe4 transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #c3dbe4;
+  border-radius: 999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #a3c6d3;
+}
+
+/*
+ * Sidebar variant: the navy panel needs a translucent thumb instead of the light one,
+ * which read as a bright bar sitting on top of the navigation.
+ */
+.sidebar-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.38);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #a3c6d3;
+}

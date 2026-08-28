@@ -1,0 +1,12 @@
+name: Prueba Actions SigaTech
+
+on:
+  workflow_dispatch:
+
+jobs:
+  prueba:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Confirmar runner
+        run: echo "GitHub Actions funciona correctamente"
