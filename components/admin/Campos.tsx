@@ -14,6 +14,7 @@ type EtiquetaProps = {
   children: React.ReactNode
 }
 
+
 export function Campo({ etiqueta, ayuda, className, children }: EtiquetaProps) {
   return (
     <label className={cn('block', className)}>
