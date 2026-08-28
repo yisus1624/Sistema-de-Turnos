@@ -102,7 +102,23 @@ test('cada anuncio se repite las veces configuradas', async () => {
   assert.deepEqual(dichos, ['C-001', 'C-001', 'C-001'])
 })
 
-test('entre repeticiones del mismo turno hay una pausa, y entre turnos no', async () => {
+test('si hay otro turno detras en la cola, el actual se dice una sola vez', async () => {
+  const dichos = []
+  // Pausa larga: si el turno se repitiera, la prueba lo notaria por tiempo.
+  const cola = new ColaDeAnuncios(async (texto) => { dichos.push(texto) }, 200)
+
+  const opciones = { voz: COLOMBIANA, repeticiones: 2, volumen: 1 }
+  cola.encolar('C-001', opciones)
+  cola.encolar('O-002', opciones)
+
+  await new Promise((resolve) => setTimeout(resolve, 500))
+
+  // C-001 tenia a O-002 esperando detras: se dice una vez y se pasa al
+  // siguiente. O-002 queda solo en la cola (nadie detras): si se repite.
+  assert.deepEqual(dichos, ['C-001', 'O-002', 'O-002'])
+})
+
+test('entre repeticiones del mismo turno hay una pausa; el que tiene otro detras no espera esa pausa', async () => {
   const momentos = []
   const PAUSA = 40
 
@@ -118,13 +134,13 @@ test('entre repeticiones del mismo turno hay una pausa, y entre turnos no', asyn
 
   assert.deepEqual(
     momentos.map((m) => m.texto),
-    ['C-001', 'C-001', 'O-002', 'O-002'],
+    ['C-001', 'O-002', 'O-002'],
   )
 
-  // Repeticion del mismo turno: espera la pausa.
-  assert.ok(momentos[1].en - momentos[0].en >= PAUSA - 5)
-  // Cambio de turno: arranca de inmediato.
-  assert.ok(momentos[2].en - momentos[1].en < PAUSA)
+  // C-001 no se repite (O-002 ya esperaba): pasa al siguiente de inmediato.
+  assert.ok(momentos[1].en - momentos[0].en < PAUSA)
+  // O-002 quedo solo en la cola: si se repite, con pausa entre repeticiones.
+  assert.ok(momentos[2].en - momentos[1].en >= PAUSA - 5)
 })
 
 test('sin voz en español no se anuncia nada', async () => {

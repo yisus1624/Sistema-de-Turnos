@@ -15,8 +15,8 @@
  * libre o vuelve a llamar.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Clock, SpeakerHigh, SpeakerX, WarningCircle } from '@phosphor-icons/react/dist/ssr'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Clock, CornersIn, CornersOut, SpeakerHigh, SpeakerX, WarningCircle } from '@phosphor-icons/react/dist/ssr'
 import type { EventoTurno } from '@/lib/realtime/hub'
 import type { CasillaPantalla, ConfiguracionPantalla } from '@/lib/turnos/types'
 import {
@@ -92,46 +92,58 @@ function Reloj() {
 function Casilla({ casilla, resaltada }: { casilla: CasillaPantalla; resaltada: boolean }) {
   const ocupada = Boolean(casilla.codigo)
 
+  // Numero suelto del consultorio ("Consultorio 5" -> "5"), para el bloque
+  // secundario de la tarjeta: de un vistazo, sin tener que leer el nombre.
+  const numeroModulo = casilla.moduloNombre.match(/\d+\s*$/)?.[0]?.trim()
+
   return (
     <div
-      className={`flex min-h-0 flex-col overflow-hidden rounded-2xl border-4 transition-colors duration-500 ${
+      className={`flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_10px_rgba(10,38,52,.08)] ring-1 transition-all duration-500 ${
         ocupada
           ? resaltada
-            ? 'border-emerald-400 bg-white motion-safe:animate-[pulse_1s_ease-in-out_2]'
-            : 'border-brand-200 bg-white'
-          : 'border-slate-200 bg-slate-50'
+            ? 'ring-2 ring-emerald-400 motion-safe:animate-[pulse_1s_ease-in-out_2]'
+            : 'ring-slate-200'
+          : 'ring-slate-200'
       }`}
     >
       <div
-        className={`shrink-0 truncate px-4 py-2 text-center text-[clamp(0.85rem,1.6vw,1.15rem)] font-black uppercase tracking-wide ${
-          ocupada ? 'bg-brand-700 text-white' : 'bg-slate-200 text-slate-500'
+        className={`shrink-0 truncate px-3 py-1.5 text-center text-[clamp(0.65rem,calc(1.6vmin*var(--escala)),1rem)] font-black uppercase tracking-wide ${
+          ocupada ? 'bg-slate-100 text-brand-900' : 'bg-slate-100 text-slate-400'
         }`}
       >
-        {casilla.moduloNombre}
-        {casilla.profesionalNombre ? ` · ${casilla.profesionalNombre}` : ''}
+        {/* El numero del consultorio ya se ve grande abajo; aqui basta con
+            quien atiende (o el nombre del modulo si es una ventanilla). */}
+        {casilla.profesionalNombre ?? casilla.moduloNombre}
       </div>
 
       {ocupada ? (
         <>
-          <div className="grid min-h-0 flex-1 place-items-center bg-brand-50 px-3 py-4">
-            <span className="truncate text-[clamp(2.25rem,7vw,5.5rem)] font-black leading-none tracking-[-0.03em] text-brand-800">
-              {casilla.codigo}
-            </span>
+          {/* Franja partida en dos tonos, al estilo de un letrero digital: el
+              turno en el bloque oscuro (lo que se anuncia), el numero del
+              consultorio en el bloque claro (a donde dirigirse). */}
+          <div className="grid grid-cols-[1.7fr_1fr]">
+            <div className="grid place-items-center bg-brand-950 px-2 py-[clamp(0.4rem,calc(1.6vmin*var(--escala)),1rem)]">
+              <span className="text-[clamp(1.4rem,calc(7vmin*var(--escala)),3.5rem)] font-black leading-none tracking-[-0.03em] text-white">
+                {casilla.codigo}
+              </span>
+            </div>
+            <div className="grid place-items-center bg-brand-600 px-2 py-[clamp(0.4rem,calc(1.6vmin*var(--escala)),1rem)]">
+              <span className="text-[clamp(1.2rem,calc(6vmin*var(--escala)),3rem)] font-black leading-none text-white">
+                {numeroModulo ?? '—'}
+              </span>
+            </div>
           </div>
-          <div className="shrink-0 bg-brand-800 px-3 py-2 text-center text-white">
-            <p className="truncate text-[clamp(1rem,2.1vw,1.4rem)] font-black leading-tight">
+          {/* El servicio ya se anuncia en el titulo de la columna, asi que
+              aqui solo va el paciente: menos ruido, letra mas grande. */}
+          <div className="shrink-0 bg-brand-900 px-3 py-2 text-center text-white">
+            <p className="text-balance text-[clamp(0.85rem,calc(2.4vmin*var(--escala)),1.5rem)] font-black leading-tight">
               {casilla.pacienteVisible ?? casilla.servicioNombre}
             </p>
-            {casilla.pacienteVisible ? (
-              <p className="truncate text-xs font-bold uppercase tracking-wide text-brand-200">
-                {casilla.servicioNombre}
-              </p>
-            ) : null}
           </div>
         </>
       ) : (
-        <div className="grid min-h-0 flex-1 place-items-center px-3 py-6">
-          <span className="text-[clamp(1rem,2vw,1.35rem)] font-black uppercase tracking-wide text-slate-400">
+        <div className="grid place-items-center bg-slate-50 px-3 py-[clamp(0.9rem,calc(3.5vmin*var(--escala)),2rem)]">
+          <span className="text-[clamp(0.75rem,calc(2vmin*var(--escala)),1.15rem)] font-black uppercase tracking-wide text-slate-400">
             Libre
           </span>
         </div>
@@ -145,20 +157,23 @@ export default function PantallaPublicaPage() {
   const [conectado, setConectado] = useState(false)
   const [sonidoActivo, setSonidoActivo] = useState(true)
   const [voz, setVoz] = useState<SpeechSynthesisVoice | null>(null)
+  const [pantallaCompleta, setPantallaCompleta] = useState(false)
 
   const [configuracion, setConfiguracion] = useState<ConfiguracionPantalla>(CONFIGURACION_POR_DEFECTO)
   // Una entrada por modulo activo, en el mismo orden que entrega el servidor.
   // Nunca se reordena ni se quita por tiempo: solo cambia el contenido de la
   // casilla cuyo modulo llamo o se libero.
   const [casillas, setCasillas] = useState<CasillaPantalla[]>([])
-  const [resaltados, setResaltados] = useState<Set<string>>(new Set())
+  // Un solo modulo resaltado a la vez: el foco sigue al llamado mas reciente,
+  // no se queda pegado en el anterior mientras ya se esta llamando a otro.
+  const [resaltado, setResaltado] = useState<string | null>(null)
 
   // Inicializacion perezosa: una sola cola por montaje, sin recrearla en cada render.
   const [cola] = useState(() => new ColaDeAnuncios(locutorNavegador))
   const sonidoRef = useRef(sonidoActivo)
   const vozRef = useRef(voz)
   const configuracionRef = useRef(configuracion)
-  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const timerResalteRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     sonidoRef.current = sonidoActivo
@@ -186,28 +201,25 @@ export default function PantallaPublicaPage() {
     cargarEstado()
   }, [cargarEstado])
 
-  /** Prende el resalte de un modulo y programa que se apague solo. */
+  /**
+   * Prende el resalte de un modulo y programa que se apague solo. Quitar el
+   * timer previo (de OTRO modulo) apaga su resalte de inmediato: el foco
+   * salta al ultimo llamado en vez de quedarse encendido en dos casillas a
+   * la vez mientras el anterior espera a que se cumplan sus 8 segundos.
+   */
   const resaltar = useCallback((moduloId: string) => {
-    setResaltados((previos) => new Set(previos).add(moduloId))
+    if (timerResalteRef.current) clearTimeout(timerResalteRef.current)
 
-    const timerPrevio = timersRef.current.get(moduloId)
-    if (timerPrevio) clearTimeout(timerPrevio)
-
-    const timer = setTimeout(() => {
-      setResaltados((previos) => {
-        const copia = new Set(previos)
-        copia.delete(moduloId)
-        return copia
-      })
-      timersRef.current.delete(moduloId)
+    setResaltado(moduloId)
+    timerResalteRef.current = setTimeout(() => {
+      setResaltado((actual) => (actual === moduloId ? null : actual))
+      timerResalteRef.current = null
     }, MS_RESALTE)
-    timersRef.current.set(moduloId, timer)
   }, [])
 
   useEffect(() => {
-    const timers = timersRef.current
     return () => {
-      for (const timer of timers.values()) clearTimeout(timer)
+      if (timerResalteRef.current) clearTimeout(timerResalteRef.current)
     }
   }, [])
 
@@ -265,10 +277,34 @@ export default function PantallaPublicaPage() {
     return () => es.close()
   }, [activo, manejarEvento, cargarEstado])
 
+  /**
+   * Pantalla completa real (sin barra de direcciones ni pestañas), que es
+   * como debe quedar en el televisor de la sala de espera. El navegador solo
+   * la concede dentro de un gesto del usuario, por eso se pide desde un
+   * clic y nunca automaticamente al cargar.
+   */
+  const alternarPantallaCompleta = useCallback(() => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {})
+    } else {
+      void document.documentElement.requestFullscreen().catch(() => {})
+    }
+  }, [])
+
+  // El usuario tambien puede salir con Escape o F11: hay que seguir el estado
+  // real del navegador, no solo el de nuestro boton.
+  useEffect(() => {
+    const alCambiar = () => setPantallaCompleta(Boolean(document.fullscreenElement))
+    document.addEventListener('fullscreenchange', alCambiar)
+    return () => document.removeEventListener('fullscreenchange', alCambiar)
+  }, [])
+
   function activarPantalla() {
     setActivo(true)
-    // Gesto del usuario: desbloquea el autoplay de audio en el navegador.
+    // Gesto del usuario: desbloquea el autoplay de audio en el navegador y,
+    // de paso, deja la pantalla a todo el televisor sin barras del navegador.
     sonarCampana(1)
+    void document.documentElement.requestFullscreen().catch(() => {})
   }
 
   /** Deja oir como sonara un llamado, antes de dejar la pantalla en el televisor. */
@@ -281,6 +317,22 @@ export default function PantallaPublicaPage() {
     })
   }
 
+  // Agrupadas por servicio (Consulta externa, Odontologia...) para que el
+  // paciente busque directo en la fila de su especialidad, en vez de tener
+  // que barrer toda la cuadricula. Las ventanillas (sin servicio fijo) van
+  // en su propio grupo. El orden es el de llegada de cada servicio, el mismo
+  // en que el servidor entrega los modulos.
+  const grupos = useMemo(() => {
+    const mapa = new Map<string, { clave: string; nombre: string; casillas: CasillaPantalla[] }>()
+    for (const casilla of casillas) {
+      const clave = casilla.servicioId || 'ventanilla'
+      const grupo = mapa.get(clave)
+      if (grupo) grupo.casillas.push(casilla)
+      else mapa.set(clave, { clave, nombre: casilla.servicioNombre, casillas: [casilla] })
+    }
+    return Array.from(mapa.values())
+  }, [casillas])
+
   if (!activo) {
     const vozColombiana = esVozColombiana(voz)
 
@@ -290,7 +342,8 @@ export default function PantallaPublicaPage() {
           <Isotipo size={96} className="mx-auto" />
           <h1 className="text-3xl font-black tracking-[-0.02em]">Pantalla de turnos</h1>
           <p className="text-brand-100">
-            {NOMBRE_INSTITUCION}. Pulsa el boton para activar la pantalla y el sonido de los llamados.
+            {NOMBRE_INSTITUCION}. Pulsa el boton para activar la pantalla completa y el sonido de los
+            llamados.
           </p>
           <button
             onClick={activarPantalla}
@@ -329,7 +382,7 @@ export default function PantallaPublicaPage() {
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900">
-      <header className="flex shrink-0 items-center justify-between gap-6 bg-white px-8 py-4">
+      <header className="flex shrink-0 items-center justify-between gap-6 border-b border-slate-200 bg-white px-8 py-4 shadow-[0_1px_0_rgba(10,38,52,.04)]">
         <div className="flex items-center gap-4">
           <Isotipo size={56} />
           <div className="leading-tight">
@@ -357,13 +410,29 @@ export default function PantallaPublicaPage() {
           >
             {sonidoActivo ? <SpeakerHigh size={22} weight="bold" /> : <SpeakerX size={22} weight="bold" />}
           </button>
+          <button
+            onClick={alternarPantallaCompleta}
+            className="grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-slate-600 transition hover:bg-slate-200"
+            aria-label={pantallaCompleta ? 'Salir de pantalla completa' : 'Ver en pantalla completa'}
+            title={pantallaCompleta ? 'Salir de pantalla completa' : 'Ver en pantalla completa'}
+          >
+            {pantallaCompleta ? <CornersIn size={22} weight="bold" /> : <CornersOut size={22} weight="bold" />}
+          </button>
         </div>
       </header>
 
       {/*
-        Cuadricula fija: una casilla por modulo activo, todas visibles a la
-        vez. `auto-fit` reparte el espacio disponible solo con 1, con 4 o con
-        10+ casillas, sin que el operador tenga que ajustar nada.
+        Una COLUMNA por servicio (Consulta externa, Odontologia...), para que
+        el paciente busque directo en la columna de su especialidad. TODOS
+        los consultorios activos se muestran siempre, sin esconder ninguno:
+        `--escala` (calculada de la columna mas llena) encoge la letra de
+        cada tarjeta a medida que hay mas, para que sigan cabiendo todas
+        legibles en vez de desbordar la pantalla.
+        Si hay tantos servicios que las columnas no caben en el ancho de la
+        pantalla, se pueden desplazar de lado (nunca se recorta ni desaparece
+        nada): a proposito esta pantalla no rota nada por tiempo (ver
+        comentario del archivo), asi que el desplazamiento manual es la
+        salida segura.
       */}
       <div className="min-h-0 flex-1 overflow-auto p-4">
         {casillas.length === 0 ? (
@@ -372,11 +441,33 @@ export default function PantallaPublicaPage() {
           </div>
         ) : (
           <div
-            className="grid h-full auto-rows-fr gap-4"
-            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))' }}
+            className="grid min-h-full items-start gap-4"
+            style={
+              {
+                gridTemplateColumns: `repeat(${grupos.length}, minmax(220px, 1fr))`,
+                '--escala': Math.max(0.45, Math.min(1, 4 / Math.max(1, ...grupos.map((g) => g.casillas.length)))),
+              } as React.CSSProperties
+            }
           >
-            {casillas.map((casilla) => (
-              <Casilla key={casilla.moduloId} casilla={casilla} resaltada={resaltados.has(casilla.moduloId)} />
+            {grupos.map((grupo) => (
+              <section key={grupo.clave} className="flex flex-col gap-2">
+                {/* El nombre del servicio es lo PRIMERO que busca el paciente
+                    ("¿donde esta pediatria?"), asi que va centrado y grande. */}
+                <h2 className="shrink-0 rounded-lg bg-brand-100 px-3 py-1.5 text-center text-[clamp(1rem,2.2vmin,1.6rem)] font-black uppercase leading-tight tracking-[0.04em] text-brand-900">
+                  {grupo.nombre}
+                </h2>
+                {/* Rotulos de las dos mitades de cada tarjeta, para que se
+                    entienda que numero es el turno y cual el consultorio. */}
+                <div className="grid shrink-0 grid-cols-[1.7fr_1fr] overflow-hidden rounded-lg text-center text-[clamp(0.8rem,1.7vmin,1.25rem)] font-black uppercase tracking-wide text-white">
+                  <span className="truncate bg-brand-950 px-2 py-1.5">Turno</span>
+                  <span className="truncate bg-brand-600 px-2 py-1.5">Consultorio</span>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {grupo.casillas.map((casilla) => (
+                    <Casilla key={casilla.moduloId} casilla={casilla} resaltada={resaltado === casilla.moduloId} />
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         )}

@@ -114,6 +114,14 @@ function sembrar(): EstadoMemoria {
     { id: 'mod-consultorio-2', nombre: 'Consultorio 2', servicioId: 'srv-consulta-externa', activo: true },
     { id: 'mod-consultorio-3', nombre: 'Consultorio 3', servicioId: 'srv-odontologia', activo: true },
     { id: 'mod-consultorio-4', nombre: 'Consultorio 4', servicioId: 'srv-pediatria', activo: true },
+    // Consultorios 5-10: solo para poder simular carga con varios
+    // profesionales y consultorios activos a la vez (ver scripts/simular-carga.mjs).
+    { id: 'mod-consultorio-5', nombre: 'Consultorio 5', servicioId: 'srv-consulta-externa', activo: true },
+    { id: 'mod-consultorio-6', nombre: 'Consultorio 6', servicioId: 'srv-consulta-externa', activo: true },
+    { id: 'mod-consultorio-7', nombre: 'Consultorio 7', servicioId: 'srv-odontologia', activo: true },
+    { id: 'mod-consultorio-8', nombre: 'Consultorio 8', servicioId: 'srv-odontologia', activo: true },
+    { id: 'mod-consultorio-9', nombre: 'Consultorio 9', servicioId: 'srv-pediatria', activo: true },
+    { id: 'mod-consultorio-10', nombre: 'Consultorio 10', servicioId: 'srv-pediatria', activo: true },
   ]
 
   const profesionales: Profesional[] = [
@@ -121,6 +129,12 @@ function sembrar(): EstadoMemoria {
     { id: 'pro-gomez', nombre: 'Dra. Gomez', servicioId: 'srv-consulta-externa', moduloId: 'mod-consultorio-2', activo: true },
     { id: 'pro-salas', nombre: 'Dr. Salas', servicioId: 'srv-odontologia', moduloId: 'mod-consultorio-3', activo: true },
     { id: 'pro-rios', nombre: 'Dra. Rios', servicioId: 'srv-pediatria', moduloId: 'mod-consultorio-4', activo: true },
+    { id: 'pro-torres', nombre: 'Dr. Torres', servicioId: 'srv-consulta-externa', moduloId: 'mod-consultorio-5', activo: true },
+    { id: 'pro-mejia', nombre: 'Dra. Mejia', servicioId: 'srv-consulta-externa', moduloId: 'mod-consultorio-6', activo: true },
+    { id: 'pro-vega', nombre: 'Dr. Vega', servicioId: 'srv-odontologia', moduloId: 'mod-consultorio-7', activo: true },
+    { id: 'pro-lopez', nombre: 'Dra. Lopez', servicioId: 'srv-odontologia', moduloId: 'mod-consultorio-8', activo: true },
+    { id: 'pro-ramirez', nombre: 'Dr. Ramirez', servicioId: 'srv-pediatria', moduloId: 'mod-consultorio-9', activo: true },
+    { id: 'pro-castro', nombre: 'Dra. Castro', servicioId: 'srv-pediatria', moduloId: 'mod-consultorio-10', activo: true },
   ]
 
   // Citas de ejemplo. En produccion vienen de la API del hospital.
@@ -134,6 +148,18 @@ function sembrar(): EstadoMemoria {
     ['1067890129', 'Jorge Eliecer Pacheco Luna', 'pro-salas', 9, 30],
     ['1067890130', 'Sofia Alejandra Nuñez Paz', 'pro-rios', 8, 15],
     ['1067890131', 'Miguel Angel Duran Rojas', 'pro-rios', 8, 45],
+    ['1067890132', 'Diana Patricia Osorio Vanegas', 'pro-torres', 8, 10],
+    ['1067890133', 'Ricardo Andres Bermudez Cano', 'pro-torres', 8, 35],
+    ['1067890134', 'Camila Andrea Salcedo Toro', 'pro-mejia', 8, 5],
+    ['1067890135', 'Esteban David Quintero Arias', 'pro-mejia', 8, 40],
+    ['1067890136', 'Paola Andrea Villamil Prada', 'pro-vega', 9, 10],
+    ['1067890137', 'Julian Esteban Cardenas Roa', 'pro-vega', 9, 40],
+    ['1067890138', 'Natalia Andrea Beltran Ospina', 'pro-lopez', 9, 15],
+    ['1067890139', 'Sergio Andres Montoya Diaz', 'pro-lopez', 9, 45],
+    ['1067890140', 'Valentina Reyes Guerrero', 'pro-ramirez', 8, 20],
+    ['1067890141', 'Samuel David Cifuentes Leon', 'pro-ramirez', 8, 50],
+    ['1067890142', 'Isabella Rodriguez Pena', 'pro-castro', 8, 25],
+    ['1067890143', 'Mateo Alejandro Sierra Buitrago', 'pro-castro', 8, 55],
   ]
 
   const citas: Cita[] = agenda.map(([documento, nombre, profesionalId, hora, minuto]) => ({

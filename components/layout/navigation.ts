@@ -3,6 +3,7 @@ import {
   CalendarPlus,
   ChartBar,
   ClockCounterClockwise,
+  Flask,
   Gear,
   Megaphone,
   MonitorPlay,
@@ -56,6 +57,10 @@ export const rolNav: Record<RolUsuario, NavSection[]> = {
         { label: 'Usuarios', href: '/admin/usuarios', icon: UsersThree },
         { label: 'Pantalla y audio', href: '/admin/pantalla', icon: MonitorPlay },
       ],
+    },
+    {
+      label: 'Pruebas',
+      items: [{ label: 'Simulacion de carga', href: '/admin/pruebas', icon: Flask }],
     },
   ],
   OPERADOR: [

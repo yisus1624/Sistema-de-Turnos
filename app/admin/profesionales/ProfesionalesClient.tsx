@@ -72,6 +72,41 @@ function formatoFechaHora(iso: string): string {
   }).format(new Date(iso))
 }
 
+/**
+ * El backend solo guarda el hash del token: el enlace en claro no se puede
+ * volver a pedir al servidor. Para poder "ver" un enlace vigente sin generar
+ * uno nuevo, se guarda una copia en el navegador del administrador, y se
+ * valida contra `expiraEn` para saber si sigue siendo el acceso actual.
+ */
+function claveCache(profesionalId: string) {
+  return `enlace-profesional:${profesionalId}`
+}
+
+function leerEnlaceCacheado(profesionalId: string): { url: string; expiraEn: string } | null {
+  try {
+    const raw = localStorage.getItem(claveCache(profesionalId))
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function guardarEnlaceCacheado(profesionalId: string, data: { url: string; expiraEn: string }) {
+  try {
+    localStorage.setItem(claveCache(profesionalId), JSON.stringify(data))
+  } catch {
+    // localStorage puede fallar (modo privado, cuota llena); no es critico.
+  }
+}
+
+function limpiarEnlaceCacheado(profesionalId: string) {
+  try {
+    localStorage.removeItem(claveCache(profesionalId))
+  } catch {
+    // ver comentario de guardarEnlaceCacheado.
+  }
+}
+
 export default function ProfesionalesClient() {
   const [profesionales, setProfesionales] = useState<Profesional[]>([])
   const [servicios, setServicios] = useState<Servicio[]>([])
@@ -85,8 +120,11 @@ export default function ProfesionalesClient() {
   const [minutos, setMinutos] = useState(0)
   const [generando, setGenerando] = useState(false)
 
-  // Resultado: el enlace solo se muestra una vez.
+  // Resultado a mostrar: recien generado, o el vigente recuperado del cache.
   const [enlaceGenerado, setEnlaceGenerado] = useState<{ url: string; expiraEn: string } | null>(null)
+  const [enlaceEsNuevo, setEnlaceEsNuevo] = useState(false)
+  // Hay un acceso vigente pero su enlace no esta en el cache de este navegador.
+  const [sinCacheVigente, setSinCacheVigente] = useState(false)
   const [copiado, setCopiado] = useState(false)
 
   // Confirmacion de revocar.
@@ -142,8 +180,22 @@ export default function ProfesionalesClient() {
     setProfesionalActivo(profesional)
     setHoras(12)
     setMinutos(0)
-    setEnlaceGenerado(null)
     setCopiado(false)
+    setEnlaceEsNuevo(false)
+    setSinCacheVigente(false)
+
+    const acceso = ultimoAccesoDe(profesional.id)
+    if (estadoDelAcceso(acceso) === 'vigente' && acceso) {
+      const cacheado = leerEnlaceCacheado(profesional.id)
+      if (cacheado && cacheado.expiraEn === acceso.expiraEn) {
+        setEnlaceGenerado(cacheado)
+        return
+      }
+      setEnlaceGenerado(null)
+      setSinCacheVigente(true)
+      return
+    }
+    setEnlaceGenerado(null)
   }
 
   const duracionMinutos = horas * 60 + minutos
@@ -169,8 +221,10 @@ export default function ProfesionalesClient() {
         { method: 'POST', body: JSON.stringify({ horas, minutos }) },
       )
       setEnlaceGenerado(data)
-      console.log('DEBUG_ENLACE', data.url)
-      toast.success('Enlace generado', `Para ${profesionalActivo.nombre}. Solo se muestra ahora.`)
+      setEnlaceEsNuevo(true)
+      setSinCacheVigente(false)
+      guardarEnlaceCacheado(profesionalActivo.id, data)
+      toast.success('Enlace generado', `Para ${profesionalActivo.nombre}.`)
       await cargar()
     } catch (error) {
       toast.error('No se pudo generar el enlace', mensajeDeError(error))
@@ -195,6 +249,7 @@ export default function ProfesionalesClient() {
     setRevocando(true)
     try {
       await pedir(`/api/profesionales/accesos/${aRevocar.id}`, { method: 'DELETE' })
+      limpiarEnlaceCacheado(aRevocar.profesionalId)
       toast.info('Enlace revocado', 'El doctor ya no podra usarlo.')
       setARevocar(null)
       await cargar()
@@ -228,7 +283,11 @@ export default function ProfesionalesClient() {
                 const acceso = ultimoAccesoDe(profesional.id)
                 const estado = estadoDelAcceso(acceso)
                 return (
-                  <tr key={profesional.id} className="hover:bg-slate-50">
+                  <tr
+                    key={profesional.id}
+                    className="cursor-pointer hover:bg-slate-50"
+                    onClick={() => abrirGenerar(profesional)}
+                  >
                     <td className="px-4 py-3 font-black text-brand-950">{profesional.nombre}</td>
                     <td className="px-4 py-3 text-slate-600">{nombreServicio(profesional.servicioId)}</td>
                     <td className="px-4 py-3 text-slate-600">{nombreModulo(profesional.moduloId)}</td>
@@ -244,12 +303,26 @@ export default function ProfesionalesClient() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="secondary" onClick={() => abrirGenerar(profesional)}>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            abrirGenerar(profesional)
+                          }}
+                        >
                           <LinkIcon size={16} weight="bold" />
-                          Generar enlace
+                          {estado === 'vigente' ? 'Ver enlace' : 'Generar enlace'}
                         </Button>
                         {estado === 'vigente' && acceso ? (
-                          <Button size="sm" variant="danger" onClick={() => setARevocar(acceso)}>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setARevocar(acceso)
+                            }}
+                          >
                             <Prohibit size={16} weight="bold" />
                             Revocar
                           </Button>
@@ -267,15 +340,21 @@ export default function ProfesionalesClient() {
       <Modal
         open={!!profesionalActivo}
         onClose={() => setProfesionalActivo(null)}
-        title={enlaceGenerado ? 'Enlace generado' : `Generar enlace para ${profesionalActivo?.nombre ?? ''}`}
+        title={profesionalActivo?.nombre ?? ''}
         description={
-          enlaceGenerado
-            ? 'Copialo y enviaselo al doctor ahora: por seguridad, no se puede volver a mostrar.'
-            : 'Elige cuanto debe durar el enlace. Se pensó para que coincida con la duracion del turno del doctor.'
+          profesionalActivo
+            ? `${nombreServicio(profesionalActivo.servicioId)} · ${nombreModulo(profesionalActivo.moduloId)}`
+            : undefined
         }
       >
+        <p className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-400">Enlace de acceso</p>
         {enlaceGenerado ? (
           <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              {enlaceEsNuevo
+                ? 'Copialo y enviaselo al doctor ahora.'
+                : 'Este es el enlace activo para este profesional en este dispositivo.'}
+            </p>
             <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
               <input
                 readOnly
@@ -289,7 +368,7 @@ export default function ProfesionalesClient() {
               </Button>
             </div>
             <p className="text-sm text-slate-600">
-              Vence el <strong>{formatoFechaHora(enlaceGenerado.expiraEn)}</strong>.
+              Vence el <strong>{formatoFechaHora(enlaceGenerado.expiraEn)}</strong> ({tiempoRestante(enlaceGenerado.expiraEn)}).
             </p>
             <div className="flex justify-end">
               <Button variant="secondary" onClick={() => setProfesionalActivo(null)}>
@@ -297,8 +376,24 @@ export default function ProfesionalesClient() {
               </Button>
             </div>
           </div>
+        ) : sinCacheVigente ? (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Ya se genero un enlace para este profesional y sigue vigente, pero no se puede volver a mostrar en
+              este dispositivo. Puedes generar uno nuevo: el anterior dejara de funcionar de inmediato.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="secondary" onClick={() => setProfesionalActivo(null)}>
+                Cancelar
+              </Button>
+              <Button onClick={() => setSinCacheVigente(false)}>Generar uno nuevo</Button>
+            </div>
+          </div>
         ) : (
           <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Elige cuanto debe durar el enlace. Se pensó para que coincida con la duracion del turno del doctor.
+            </p>
             <div className="grid grid-cols-2 gap-4">
               <Campo etiqueta="Horas">
                 <Entrada

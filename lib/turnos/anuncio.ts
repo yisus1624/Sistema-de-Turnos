@@ -175,6 +175,12 @@ export class ColaDeAnuncios {
           // no puede dejar la cola trancada.
         }
 
+        // Si ya hay otro turno esperando, no repetimos este: se dice una sola
+        // vez y se pasa al siguiente, para no hacer esperar a los demas
+        // consultorios detras de una racha de llamados. Solo se repite el
+        // turno que quedo solo en la cola (nadie esperando detras).
+        if (this.pendientes.length > 0) break
+
         // Pausa entre repeticiones del MISMO turno, para que el paciente
         // alcance a reaccionar antes de volver a oirlo. Entre turnos distintos
         // no hace falta: ya cambian el codigo y el consultorio.

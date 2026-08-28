@@ -14,6 +14,7 @@ import {
   ArrowClockwise,
   CheckCircle,
   Info,
+  MapPin,
   Megaphone,
   Stethoscope,
   UserMinus,
@@ -40,9 +41,6 @@ const ETIQUETA_AGENDA: Record<EstadoAgendaItem, { texto: string; tone: 'blue' | 
   ATENDIDA: { texto: 'Atendido', tone: 'green' },
   AUSENTE: { texto: 'No se presento', tone: 'red' },
 }
-
-const claseCampo =
-  'h-11 w-full max-w-xs rounded-xl border border-slate-200 px-3 text-sm font-semibold text-brand-950 outline-none focus:border-brand-500'
 
 export default function ConsultorioClient({ token }: { token: string }) {
   const [cargando, setCargando] = useState(true)
@@ -134,6 +132,11 @@ export default function ConsultorioClient({ token }: { token: string }) {
     })
 
   const programadosHoy = agenda.filter((item) => item.estado === 'PROGRAMADA').length
+  // Al doctor solo le mostramos pacientes confirmados (ya registraron su
+  // llegada en admisiones); los que aun no llegan solo generan el aviso de
+  // arriba, para no llenarle la agenda de citas con las que no puede hacer nada.
+  const agendaConfirmada = agenda.filter((item) => item.estado !== 'PROGRAMADA')
+  const consultorioActual = modulos.find((m) => m.id === moduloId)
 
   if (cargando) {
     return (
@@ -165,33 +168,21 @@ export default function ConsultorioClient({ token }: { token: string }) {
   return (
     <main className="min-h-screen bg-slate-100 px-4 py-6 sm:px-6">
       <div className="mx-auto max-w-3xl space-y-5">
-        <header className="flex items-center gap-3">
-          <Isotipo size={40} />
-          <div className="leading-tight">
-            <p className="text-lg font-black tracking-[-0.02em] text-brand-950">{profesional.nombre}</p>
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{NOMBRE_INSTITUCION}</p>
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Isotipo size={40} />
+            <div className="leading-tight">
+              <p className="text-lg font-black tracking-[-0.02em] text-brand-950">{profesional.nombre}</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{NOMBRE_INSTITUCION}</p>
+            </div>
           </div>
+          {consultorioActual ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-100 bg-brand-50 px-3 py-1.5 text-sm font-bold text-brand-700">
+              <MapPin size={16} weight="bold" />
+              {consultorioActual.nombre}
+            </span>
+          ) : null}
         </header>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Consultorio</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-bold text-slate-700">
-                Donde estas atendiendo
-              </span>
-              <select className={claseCampo} value={moduloId} onChange={(e) => setModuloId(e.target.value)}>
-                {modulos.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.nombre}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </CardContent>
-        </Card>
 
         <Card>
           <CardHeader>
@@ -199,15 +190,15 @@ export default function ConsultorioClient({ token }: { token: string }) {
           </CardHeader>
           <CardContent className="space-y-5">
             {turnoActual ? (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center">
-                <p className="text-sm font-bold uppercase tracking-wide text-slate-500">Turno</p>
+              <div className="rounded-2xl border-2 border-brand-100 bg-brand-50 p-6 text-center">
+                <p className="text-xs font-bold uppercase tracking-wide text-brand-600">Turno en atencion</p>
                 <p className="mt-1 text-5xl font-black tracking-[-0.03em] text-brand-950">
                   {turnoActual.codigo}
                 </p>
                 {turnoActual.nombrePaciente ? (
                   <p className="mt-2 text-2xl font-black text-slate-800">{turnoActual.nombrePaciente}</p>
                 ) : null}
-                <p className="mt-2 text-sm text-slate-600">
+                <p className="mt-2 text-sm font-semibold text-brand-700">
                   Llamado {turnoActual.vecesLlamado} {turnoActual.vecesLlamado === 1 ? 'vez' : 'veces'}
                   {turnoActual.horaLlamado ? ` · ${horaCorta(turnoActual.horaLlamado)}` : ''}
                 </p>
@@ -281,7 +272,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
         <Card>
           <CardHeader>
             <div className="flex flex-wrap items-end justify-between gap-4">
-              <CardTitle>Agenda del dia ({agenda.length})</CardTitle>
+              <CardTitle>Agenda del dia ({agendaConfirmada.length})</CardTitle>
               <Campo etiqueta="Fecha" className="max-w-[10rem]">
                 <Entrada type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
               </Campo>
@@ -289,26 +280,32 @@ export default function ConsultorioClient({ token }: { token: string }) {
           </CardHeader>
           <CardContent>
             {/*
-              La AGENDA COMPLETA (no solo "en espera"): asi el doctor ve
-              tambien las citas que aun no registraron llegada y entiende que
-              el sistema no esta vacio, solo esta esperando a admisiones.
+              Solo pacientes CONFIRMADOS (ya registraron llegada en admisiones).
+              Los que aun no llegan (PROGRAMADA) no aportan nada aqui: ya se
+              avisa arriba cuantos faltan por confirmar.
             */}
-            {agenda.length === 0 ? (
-              <p className="text-sm text-slate-500">No tienes citas programadas para este dia.</p>
+            {agendaConfirmada.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                {agenda.length > 0
+                  ? 'Aun no hay pacientes confirmados para este dia.'
+                  : 'No tienes citas programadas para este dia.'}
+              </p>
             ) : (
               <ol className="space-y-2">
-                {agenda.map((item) => {
+                {agendaConfirmada.map((item) => {
                   const etiqueta = ETIQUETA_AGENDA[item.estado]
                   return (
                     <li
                       key={item.citaId}
-                      className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-100 bg-white px-4 py-2.5 text-sm"
+                      className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-100 bg-white px-4 py-3 text-sm shadow-sm"
                     >
-                      <span className="shrink-0 text-xs font-bold text-slate-400">{horaCorta(item.horaCita)}</span>
+                      <span className="shrink-0 rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500">
+                        {horaCorta(item.horaCita)}
+                      </span>
                       {item.codigo ? (
-                        <span className="font-black text-brand-950">{item.codigo}</span>
+                        <span className="shrink-0 font-black text-brand-950">{item.codigo}</span>
                       ) : null}
-                      <span className="min-w-0 flex-1 truncate text-slate-700">{item.nombrePaciente}</span>
+                      <span className="min-w-0 flex-1 truncate font-semibold text-slate-700">{item.nombrePaciente}</span>
                       <Badge tone={etiqueta.tone}>{etiqueta.texto}</Badge>
                     </li>
                   )
