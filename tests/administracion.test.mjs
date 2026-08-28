@@ -87,7 +87,7 @@ test('la configuracion se guarda parcialmente', async () => {
 })
 
 test('las estadisticas cuentan generados, atendidos, ausentes y tiempos', async () => {
-  const hoy = new Date().toISOString().slice(0, 10)
+  const hoy = hoyColombia()
 
   const atendido = await repo.generarTurnoDeVentanilla('srv-siau')
   await repo.llamarSiguiente({
@@ -122,8 +122,13 @@ test('un dia sin turnos devuelve el resumen en cero', async () => {
   assert.deepEqual(estadisticas.porFuncionario, [])
 })
 
+// Dia de hoy en hora Colombia (no UTC), igual que lo calcula la UI.
+function hoyColombia() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(new Date())
+}
+
 test('el historico filtra por codigo parcial y ordena del mas reciente', async () => {
-  const hoy = new Date().toISOString().slice(0, 10)
+  const hoy = hoyColombia()
   const todos = await repo.historico({ fecha: hoy })
 
   assert.ok(todos.length > 0)
@@ -136,4 +141,21 @@ test('el historico filtra por codigo parcial y ordena del mas reciente', async (
 
   const soloSiau = await repo.historico({ codigo: 'S-' })
   assert.ok(soloSiau.every((t) => t.codigo.startsWith('S-')))
+})
+
+test('el historico y las estadisticas cuentan el dia en hora Colombia, no en UTC', async () => {
+  const turno = await repo.generarTurnoDeVentanilla('srv-siau')
+  // 02:30 UTC = 21:30 del dia ANTERIOR en Colombia (UTC-5).
+  turno.fechaGeneracion = '2026-06-15T02:30:00.000Z'
+
+  // Debe contar en el dia colombiano (14), no en el dia UTC (15).
+  const enDiaColombia = await repo.historico({ fecha: '2026-06-14' })
+  assert.ok(enDiaColombia.some((t) => t.id === turno.id), 'el turno debe verse en su dia local (14)')
+
+  const enDiaUtc = await repo.historico({ fecha: '2026-06-15' })
+  assert.equal(enDiaUtc.some((t) => t.id === turno.id), false, 'no debe verse en el dia UTC (15)')
+
+  const stats = await repo.estadisticas('2026-06-14')
+  const siau = stats.porServicio.find((s) => s.servicioId === 'srv-siau')
+  assert.ok(siau.generados >= 1, 'las estadisticas del dia local deben incluir el turno')
 })

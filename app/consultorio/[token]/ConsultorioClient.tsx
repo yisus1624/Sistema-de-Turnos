@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ArrowClockwise,
   CheckCircle,
+  Info,
   Megaphone,
   Stethoscope,
   UserMinus,
@@ -23,11 +24,22 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { Campo, Entrada } from '@/components/admin/Campos'
+import { hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
 import { Isotipo, NOMBRE_INSTITUCION } from '@/components/brand/Marca'
-import type { Modulo, Profesional, Turno } from '@/lib/turnos/types'
+import type { EstadoAgendaItem, ItemAgendaProfesional, Modulo, Profesional, Turno } from '@/lib/turnos/types'
 
 type Accion = 'llamar' | 'repetir' | 'atendido' | 'ausente' | null
+
+/** Como se ve cada estado de la agenda para el doctor: color y texto humano. */
+const ETIQUETA_AGENDA: Record<EstadoAgendaItem, { texto: string; tone: 'blue' | 'green' | 'amber' | 'red' | 'slate' }> = {
+  PROGRAMADA: { texto: 'Aun no ha llegado', tone: 'slate' },
+  EN_ESPERA: { texto: 'En espera', tone: 'blue' },
+  LLAMADO: { texto: 'En atencion', tone: 'amber' },
+  EN_ATENCION: { texto: 'En atencion', tone: 'amber' },
+  ATENDIDA: { texto: 'Atendido', tone: 'green' },
+  AUSENTE: { texto: 'No se presento', tone: 'red' },
+}
 
 const claseCampo =
   'h-11 w-full max-w-xs rounded-xl border border-slate-200 px-3 text-sm font-semibold text-brand-950 outline-none focus:border-brand-500'
@@ -41,6 +53,11 @@ export default function ConsultorioClient({ token }: { token: string }) {
   const [moduloId, setModuloId] = useState('')
   const [pendientes, setPendientes] = useState<Turno[]>([])
   const [turnoActual, setTurnoActual] = useState<Turno | null>(null)
+  const [agenda, setAgenda] = useState<ItemAgendaProfesional[]>([])
+  // Que dia de la agenda se esta viendo. Por defecto hoy; el doctor puede
+  // revisar otro dia sin que eso afecte a quien puede llamar (eso siempre
+  // sale de los turnos EN_ESPERA de HOY, via `pendientes`).
+  const [fecha, setFecha] = useState(hoyEnColombia())
   const [accion, setAccion] = useState<Accion>(null)
 
   const cargarEstado = useCallback(async () => {
@@ -50,12 +67,14 @@ export default function ConsultorioClient({ token }: { token: string }) {
         modulos: Modulo[]
         pendientes: Turno[]
         turnoActual: Turno | null
-      }>(`/api/consultorio/${token}`)
+        agenda: ItemAgendaProfesional[]
+      }>(`/api/consultorio/${token}?fecha=${fecha}`)
 
       setProfesional(data.profesional)
       setModulos(data.modulos)
       setPendientes(data.pendientes)
       setTurnoActual(data.turnoActual)
+      setAgenda(data.agenda)
       // El consultorio habitual del doctor queda preseleccionado.
       setModuloId((actual) => actual || data.profesional.moduloId || data.modulos[0]?.id || '')
       setTokenInvalido(false)
@@ -64,7 +83,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
     } finally {
       setCargando(false)
     }
-  }, [token])
+  }, [token, fecha])
 
   useEffect(() => {
     cargarEstado()
@@ -113,6 +132,8 @@ export default function ConsultorioClient({ token }: { token: string }) {
       setTurnoActual(null)
       await cargarEstado()
     })
+
+  const programadosHoy = agenda.filter((item) => item.estado === 'PROGRAMADA').length
 
   if (cargando) {
     return (
@@ -199,6 +220,22 @@ export default function ConsultorioClient({ token }: { token: string }) {
               />
             )}
 
+            {/*
+              Sin esto, un doctor con citas programadas pero sin nadie EN_ESPERA
+              ve el boton apagado y cree que el sistema esta roto. El aviso
+              explica que falta el paso de admisiones (registrar la llegada).
+            */}
+            {!turnoActual && pendientes.length === 0 && fecha === hoyEnColombia() && programadosHoy > 0 ? (
+              <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <Info size={20} weight="fill" className="mt-0.5 shrink-0" />
+                <span>
+                  Tienes {programadosHoy} {programadosHoy === 1 ? 'paciente' : 'pacientes'} en agenda para
+                  hoy; {programadosHoy === 1 ? 'aparecera' : 'aparecerán'} para llamar cuando{' '}
+                  {programadosHoy === 1 ? 'registre' : 'registren'} su llegada en admisiones.
+                </span>
+              </div>
+            ) : null}
+
             <Button
               onClick={llamarSiguiente}
               loading={accion === 'llamar'}
@@ -243,29 +280,39 @@ export default function ConsultorioClient({ token }: { token: string }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>En espera ({pendientes.length})</CardTitle>
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <CardTitle>Agenda del dia ({agenda.length})</CardTitle>
+              <Campo etiqueta="Fecha" className="max-w-[10rem]">
+                <Entrada type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+              </Campo>
+            </div>
           </CardHeader>
           <CardContent>
-            {pendientes.length === 0 ? (
-              <p className="text-sm text-slate-500">No tienes pacientes en espera en este momento.</p>
+            {/*
+              La AGENDA COMPLETA (no solo "en espera"): asi el doctor ve
+              tambien las citas que aun no registraron llegada y entiende que
+              el sistema no esta vacio, solo esta esperando a admisiones.
+            */}
+            {agenda.length === 0 ? (
+              <p className="text-sm text-slate-500">No tienes citas programadas para este dia.</p>
             ) : (
               <ol className="space-y-2">
-                {pendientes.map((turno, indice) => (
-                  <li
-                    key={turno.id}
-                    className="flex items-center gap-3 rounded-xl border border-slate-100 bg-white px-4 py-2.5 text-sm"
-                  >
-                    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-slate-100 text-xs font-black text-slate-600">
-                      {indice + 1}
-                    </span>
-                    <span className="font-black text-brand-950">{turno.codigo}</span>
-                    <span className="min-w-0 flex-1 truncate text-slate-700">{turno.nombrePaciente ?? '—'}</span>
-                    <span className="shrink-0 text-xs font-bold text-slate-400">
-                      {horaCorta(turno.horaCita ?? turno.fechaGeneracion)}
-                    </span>
-                    {turno.prioridad === 'PRIORITARIO' ? <Badge tone="amber">Prioritario</Badge> : null}
-                  </li>
-                ))}
+                {agenda.map((item) => {
+                  const etiqueta = ETIQUETA_AGENDA[item.estado]
+                  return (
+                    <li
+                      key={item.citaId}
+                      className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-100 bg-white px-4 py-2.5 text-sm"
+                    >
+                      <span className="shrink-0 text-xs font-bold text-slate-400">{horaCorta(item.horaCita)}</span>
+                      {item.codigo ? (
+                        <span className="font-black text-brand-950">{item.codigo}</span>
+                      ) : null}
+                      <span className="min-w-0 flex-1 truncate text-slate-700">{item.nombrePaciente}</span>
+                      <Badge tone={etiqueta.tone}>{etiqueta.texto}</Badge>
+                    </li>
+                  )
+                })}
               </ol>
             )}
           </CardContent>

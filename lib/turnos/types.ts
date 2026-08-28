@@ -163,6 +163,40 @@ export interface Turno {
   nombrePaciente?: string | null
 }
 
+/**
+ * Situacion de una cita dentro de la agenda del doctor, mezclando el estado
+ * de la CITA (aun no genera turno) con el del TURNO que genera cuando el
+ * paciente ya llego. Existe para que el doctor entienda POR QUE no puede
+ * llamar a alguien que ve en su lista: si sigue en PROGRAMADA es porque
+ * admisiones todavia no registro su llegada, no porque el sistema falle.
+ */
+export type EstadoAgendaItem =
+  | 'PROGRAMADA'
+  | 'EN_ESPERA'
+  | 'LLAMADO'
+  | 'EN_ATENCION'
+  | 'ATENDIDA'
+  | 'AUSENTE'
+
+/**
+ * Una fila de la agenda del dia de un profesional: la cita, y si ya genero
+ * turno, su situacion actual. `citaId` siempre esta presente porque toda fila
+ * de la agenda parte de una cita; `turnoId` solo existe desde que el paciente
+ * registro su llegada.
+ */
+export interface ItemAgendaProfesional {
+  citaId: string
+  turnoId: string | null
+  documentoPaciente: string
+  nombrePaciente: string
+  /** Hora programada de la cita, ISO 8601. */
+  horaCita: string
+  estado: EstadoAgendaItem
+  /** Codigo del turno, si ya existe (desde que el paciente llego). */
+  codigo: string | null
+  vecesLlamado: number
+}
+
 /** Filtros para consultar el historico (requerimiento seccion 18). */
 export interface FiltroHistorico {
   fecha?: string
@@ -211,6 +245,12 @@ export interface ConfiguracionPantalla {
   ultimosVisibles: number
   /** Mensaje institucional que corre al pie de la pantalla. */
   mensajePie: string
+  /**
+   * Maximo de citas que se le pueden agendar a un profesional en un mismo dia
+   * (su "turno"/jornada). 0 = sin limite. Lo configura el administrador; el
+   * operador no puede pasarse al crear citas.
+   */
+  maxCitasPorProfesional: number
 }
 
 /** Indicadores de atencion (requerimiento seccion 19). */

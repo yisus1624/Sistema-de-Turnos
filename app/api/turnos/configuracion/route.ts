@@ -19,6 +19,7 @@ const configuracionSchema = z.object({
   volumen: z.number().min(0).max(1).optional(),
   ultimosVisibles: z.number().int().min(3).max(10).optional(),
   mensajePie: z.string().trim().max(200).optional(),
+  maxCitasPorProfesional: z.number().int().min(0).max(200).optional(),
 })
 
 export async function PUT(request: Request) {

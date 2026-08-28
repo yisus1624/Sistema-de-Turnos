@@ -204,6 +204,48 @@ test('la pantalla lista una casilla por cada modulo activo', async () => {
   assert.ok(casillas.every((c) => typeof c.moduloNombre === 'string'))
 })
 
+test('la agenda del profesional muestra PROGRAMADA antes de la llegada (trazabilidad)', async () => {
+  const cita = await citaLibre('1067890129') // Dr. Salas, aun sin llegada
+
+  const fecha = cita.horaCita.slice(0, 10)
+  const agenda = await repo.agendaProfesional('pro-salas', fecha)
+  const item = agenda.find((i) => i.citaId === cita.id)
+
+  assert.ok(item, 'la cita debe aparecer en la agenda aunque no haya llegado el paciente')
+  assert.equal(item.estado, 'PROGRAMADA')
+  assert.equal(item.turnoId, null)
+  assert.equal(item.codigo, null)
+  assert.equal(item.nombrePaciente, cita.nombrePaciente)
+})
+
+test('la agenda sigue al turno de punta a punta: PROGRAMADA -> EN_ESPERA -> LLAMADO -> ATENDIDA', async () => {
+  const cita = await citaLibre('1067890131') // Dra. Rios
+  const fecha = cita.horaCita.slice(0, 10)
+
+  const antes = await repo.agendaProfesional('pro-rios', fecha)
+  assert.equal(antes.find((i) => i.citaId === cita.id).estado, 'PROGRAMADA')
+
+  await repo.registrarLlegada(cita.id)
+  const enEspera = await repo.agendaProfesional('pro-rios', fecha)
+  assert.equal(enEspera.find((i) => i.citaId === cita.id).estado, 'EN_ESPERA')
+
+  const llamado = await repo.llamarSiguiente({
+    profesionalId: 'pro-rios',
+    moduloId: 'mod-consultorio-4',
+    funcionarioId: 'usuario-prueba',
+  })
+  const llamadaAgenda = await repo.agendaProfesional('pro-rios', fecha)
+  assert.equal(llamadaAgenda.find((i) => i.citaId === cita.id).estado, 'LLAMADO')
+
+  await repo.marcarAtendido(llamado.id)
+  const final = await repo.agendaProfesional('pro-rios', fecha)
+  assert.equal(final.find((i) => i.citaId === cita.id).estado, 'ATENDIDA')
+})
+
+test('un profesional inexistente en la agenda produce error', async () => {
+  await assert.rejects(() => repo.agendaProfesional('pro-no-existe', '2026-01-01'), /profesional/i)
+})
+
 test('el servicio o el modulo inexistente producen error', async () => {
   await assert.rejects(() => repo.generarTurnoDeVentanilla('srv-no-existe'), /servicio/i)
   await assert.rejects(

@@ -7,8 +7,16 @@ import { registrarEvento } from '@/lib/seguridad/registro'
 // 15 minutos a 72 horas: mismo rango que valida el repositorio. Se repite
 // aqui para devolver un mensaje en espanol antes de tocar el dominio.
 const vigenciaSchema = z.object({
-  horas: z.number().int().min(0).max(72),
-  minutos: z.number().int().min(0).max(59),
+  horas: z
+    .number({ invalid_type_error: 'Indica las horas de vigencia.' })
+    .int('Las horas deben ser un numero entero.')
+    .min(0, 'Las horas no pueden ser negativas.')
+    .max(72, 'La vigencia no puede pasar de 72 horas.'),
+  minutos: z
+    .number({ invalid_type_error: 'Indica los minutos de vigencia.' })
+    .int('Los minutos deben ser un numero entero.')
+    .min(0, 'Los minutos no pueden ser negativos.')
+    .max(59, 'Los minutos deben estar entre 0 y 59.'),
 })
 
 /**

@@ -1,5 +1,6 @@
 import type { Icon } from '@phosphor-icons/react'
 import {
+  CalendarPlus,
   ChartBar,
   ClockCounterClockwise,
   Gear,
@@ -61,8 +62,9 @@ export const rolNav: Record<RolUsuario, NavSection[]> = {
     {
       label: 'Atencion',
       items: [
-        { label: 'Llamado de turnos', href: '/operador', icon: Megaphone },
+        { label: 'Agenda de citas', href: '/operador/agenda', icon: CalendarPlus },
         { label: 'Registro de llegada', href: '/operador/admisiones', icon: UserFocus },
+        { label: 'Llamado de turnos', href: '/operador', icon: Megaphone },
         { label: 'Historico', href: '/operador/historico', icon: ClockCounterClockwise },
       ],
     },

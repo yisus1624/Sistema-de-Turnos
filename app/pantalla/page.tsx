@@ -6,13 +6,13 @@
  * Sin autenticacion a proposito: se abre en el televisor de la sala de espera.
  * Todo lo que llega aqui viene ya enmascarado desde el servidor.
  *
- * QUE PASA CUANDO VARIOS CONSULTORIOS LLAMAN CASI AL TIEMPO:
- *   - El panel grande no se reemplaza de golpe. Los llamados entran a una cola
- *     visual y cada uno se sostiene unos segundos, en el mismo orden en que se
- *     anuncian por audio.
- *   - La columna izquierda muestra TODOS los llamados recientes desde el primer
- *     instante, con su modulo. Asi, aunque el panel grande ya haya rotado, el
- *     paciente encuentra su turno sin esperar.
+ * DISEÑO: el turno NO se pasa solo, lo pasa el doctor o el operador al pulsar
+ * "siguiente". Por eso esta pantalla NO rota nada por tiempo: pinta una
+ * cuadricula con UNA CASILLA FIJA POR MODULO (consultorio o ventanilla) y esa
+ * casilla solo cambia cuando llega el evento de ese modulo puntual. Si hay 4
+ * doctores atendiendo se ven los 4 a la vez; si hay 10, se ven los 10. Nunca
+ * desaparece una casilla por el paso del tiempo, solo cuando el modulo queda
+ * libre o vuelve a llamar.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -30,8 +30,8 @@ import {
 } from '@/lib/turnos/anuncio'
 import { Isotipo, NOMBRE_INSTITUCION, NOMBRE_SISTEMA } from '@/components/brand/Marca'
 
-/** Cuanto se sostiene cada llamado en el panel grande antes de pasar al siguiente. */
-const MS_EN_PANTALLA = 6000
+/** Cuanto dura el resalte visual de la casilla recien llamada, en milisegundos. */
+const MS_RESALTE = 8000
 
 const CONFIGURACION_POR_DEFECTO: ConfiguracionPantalla = {
   audioActivo: true,
@@ -39,6 +39,19 @@ const CONFIGURACION_POR_DEFECTO: ConfiguracionPantalla = {
   volumen: 1,
   ultimosVisibles: 5,
   mensajePie: '',
+  maxCitasPorProfesional: 20,
+}
+
+/** Una casilla "libre" (sin turno) para reponer un modulo cuando se libera. */
+function casillaLibreDesde(casilla: CasillaPantalla): CasillaPantalla {
+  return {
+    ...casilla,
+    turnoId: null,
+    codigo: null,
+    pacienteVisible: null,
+    horaLlamado: null,
+    vecesLlamado: 0,
+  }
 }
 
 function Reloj() {
@@ -75,6 +88,58 @@ function Reloj() {
   )
 }
 
+/** Una casilla de la cuadricula: fija en su lugar, solo cambia su contenido. */
+function Casilla({ casilla, resaltada }: { casilla: CasillaPantalla; resaltada: boolean }) {
+  const ocupada = Boolean(casilla.codigo)
+
+  return (
+    <div
+      className={`flex min-h-0 flex-col overflow-hidden rounded-2xl border-4 transition-colors duration-500 ${
+        ocupada
+          ? resaltada
+            ? 'border-emerald-400 bg-white motion-safe:animate-[pulse_1s_ease-in-out_2]'
+            : 'border-brand-200 bg-white'
+          : 'border-slate-200 bg-slate-50'
+      }`}
+    >
+      <div
+        className={`shrink-0 truncate px-4 py-2 text-center text-[clamp(0.85rem,1.6vw,1.15rem)] font-black uppercase tracking-wide ${
+          ocupada ? 'bg-brand-700 text-white' : 'bg-slate-200 text-slate-500'
+        }`}
+      >
+        {casilla.moduloNombre}
+        {casilla.profesionalNombre ? ` · ${casilla.profesionalNombre}` : ''}
+      </div>
+
+      {ocupada ? (
+        <>
+          <div className="grid min-h-0 flex-1 place-items-center bg-brand-50 px-3 py-4">
+            <span className="truncate text-[clamp(2.25rem,7vw,5.5rem)] font-black leading-none tracking-[-0.03em] text-brand-800">
+              {casilla.codigo}
+            </span>
+          </div>
+          <div className="shrink-0 bg-brand-800 px-3 py-2 text-center text-white">
+            <p className="truncate text-[clamp(1rem,2.1vw,1.4rem)] font-black leading-tight">
+              {casilla.pacienteVisible ?? casilla.servicioNombre}
+            </p>
+            {casilla.pacienteVisible ? (
+              <p className="truncate text-xs font-bold uppercase tracking-wide text-brand-200">
+                {casilla.servicioNombre}
+              </p>
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <div className="grid min-h-0 flex-1 place-items-center px-3 py-6">
+          <span className="text-[clamp(1rem,2vw,1.35rem)] font-black uppercase tracking-wide text-slate-400">
+            Libre
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function PantallaPublicaPage() {
   const [activo, setActivo] = useState(false)
   const [conectado, setConectado] = useState(false)
@@ -82,14 +147,18 @@ export default function PantallaPublicaPage() {
   const [voz, setVoz] = useState<SpeechSynthesisVoice | null>(null)
 
   const [configuracion, setConfiguracion] = useState<ConfiguracionPantalla>(CONFIGURACION_POR_DEFECTO)
-  const [ultimos, setUltimos] = useState<CasillaPantalla[]>([])
-  const [colaVisual, setColaVisual] = useState<CasillaPantalla[]>([])
+  // Una entrada por modulo activo, en el mismo orden que entrega el servidor.
+  // Nunca se reordena ni se quita por tiempo: solo cambia el contenido de la
+  // casilla cuyo modulo llamo o se libero.
+  const [casillas, setCasillas] = useState<CasillaPantalla[]>([])
+  const [resaltados, setResaltados] = useState<Set<string>>(new Set())
 
   // Inicializacion perezosa: una sola cola por montaje, sin recrearla en cada render.
   const [cola] = useState(() => new ColaDeAnuncios(locutorNavegador))
   const sonidoRef = useRef(sonidoActivo)
   const vozRef = useRef(voz)
   const configuracionRef = useRef(configuracion)
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   useEffect(() => {
     sonidoRef.current = sonidoActivo
@@ -107,7 +176,7 @@ export default function PantallaPublicaPage() {
     fetch('/api/turnos/pantalla')
       .then((r) => r.json())
       .then((data) => {
-        setUltimos(data.ultimos ?? [])
+        setCasillas(data.casillas ?? [])
         if (data.configuracion) setConfiguracion(data.configuracion)
       })
       .catch(() => {})
@@ -117,28 +186,63 @@ export default function PantallaPublicaPage() {
     cargarEstado()
   }, [cargarEstado])
 
-  const manejarEvento = useCallback((evento: EventoTurno) => {
-    if (evento.tipo !== 'turno.llamado') return
+  /** Prende el resalte de un modulo y programa que se apague solo. */
+  const resaltar = useCallback((moduloId: string) => {
+    setResaltados((previos) => new Set(previos).add(moduloId))
 
-    const { casilla } = evento
+    const timerPrevio = timersRef.current.get(moduloId)
+    if (timerPrevio) clearTimeout(timerPrevio)
 
-    // La lista lateral se actualiza de inmediato: no espera a la cola visual.
-    setUltimos((previos) => [
-      casilla,
-      ...previos.filter((c) => c.turnoId !== casilla.turnoId),
-    ].slice(0, configuracionRef.current.ultimosVisibles))
-
-    setColaVisual((previos) => [...previos, casilla])
-
-    if (sonidoRef.current && configuracionRef.current.audioActivo) {
-      sonarCampana(configuracionRef.current.volumen)
-      cola.encolar(textoAnuncio(casilla), {
-        voz: vozRef.current,
-        repeticiones: configuracionRef.current.repeticionesAudio,
-        volumen: configuracionRef.current.volumen,
+    const timer = setTimeout(() => {
+      setResaltados((previos) => {
+        const copia = new Set(previos)
+        copia.delete(moduloId)
+        return copia
       })
+      timersRef.current.delete(moduloId)
+    }, MS_RESALTE)
+    timersRef.current.set(moduloId, timer)
+  }, [])
+
+  useEffect(() => {
+    const timers = timersRef.current
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer)
     }
-  }, [cola])
+  }, [])
+
+  const manejarEvento = useCallback((evento: EventoTurno) => {
+    if (evento.tipo === 'turno.llamado') {
+      const { casilla } = evento
+
+      // Solo se reemplaza la casilla de ESE modulo; las demas quedan intactas.
+      setCasillas((previas) =>
+        previas.map((c) => (c.moduloId === casilla.moduloId ? casilla : c)),
+      )
+      resaltar(casilla.moduloId)
+
+      if (sonidoRef.current && configuracionRef.current.audioActivo) {
+        // La campana suena SIEMPRE que el audio este activo, tenga o no voz.
+        sonarCampana(configuracionRef.current.volumen)
+
+        // Voz: solo español (se prefiere Colombia). Nunca se lee con voz inglesa;
+        // si el equipo no tiene voz en español, queda solo la campana y el aviso.
+        cola.encolar(textoAnuncio(casilla), {
+          voz: vozRef.current,
+          repeticiones: configuracionRef.current.repeticionesAudio,
+          volumen: configuracionRef.current.volumen,
+        })
+      }
+      return
+    }
+
+    if (evento.tipo === 'modulo.liberado') {
+      const { moduloId } = evento
+      setCasillas((previas) =>
+        previas.map((c) => (c.moduloId === moduloId ? casillaLibreDesde(c) : c)),
+      )
+    }
+  }, [cola, resaltar])
 
   useEffect(() => {
     if (!activo) return
@@ -161,21 +265,21 @@ export default function PantallaPublicaPage() {
     return () => es.close()
   }, [activo, manejarEvento, cargarEstado])
 
-  // Drena la cola visual: el ultimo llamado se queda fijo en el panel.
-  useEffect(() => {
-    if (colaVisual.length <= 1) return
-    const id = setTimeout(() => setColaVisual((previos) => previos.slice(1)), MS_EN_PANTALLA)
-    return () => clearTimeout(id)
-  }, [colaVisual])
-
   function activarPantalla() {
     setActivo(true)
     // Gesto del usuario: desbloquea el autoplay de audio en el navegador.
     sonarCampana(1)
   }
 
-  const destacado = colaVisual[0] ?? ultimos[0] ?? null
-  const enEspera = Math.max(0, colaVisual.length - 1)
+  /** Deja oir como sonara un llamado, antes de dejar la pantalla en el televisor. */
+  function probarSonido() {
+    sonarCampana(configuracion.volumen)
+    cola.encolar('Turno de prueba. Por favor dirigirse a Consultorio uno.', {
+      voz,
+      repeticiones: 1,
+      volumen: configuracion.volumen,
+    })
+  }
 
   if (!activo) {
     const vozColombiana = esVozColombiana(voz)
@@ -195,6 +299,13 @@ export default function PantallaPublicaPage() {
             Activar pantalla
           </button>
 
+          <button
+            onClick={probarSonido}
+            className="mx-auto block text-sm font-bold text-brand-200 underline underline-offset-4 transition hover:text-white"
+          >
+            Probar sonido
+          </button>
+
           {voz ? (
             <p className={`text-sm ${vozColombiana ? 'text-brand-200/80' : 'text-amber-300'}`}>
               {vozColombiana ? 'Voz del llamado: ' : 'Voz del llamado (no es colombiana): '}
@@ -204,9 +315,10 @@ export default function PantallaPublicaPage() {
             <div className="mx-auto flex max-w-md items-start gap-3 rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-left text-sm text-amber-200">
               <WarningCircle size={22} weight="fill" className="mt-0.5 shrink-0" />
               <span>
-                Este equipo no tiene voces en español. El llamado saldra sin audio para no leerlo con
-                voz extranjera. Instala la voz de español (Colombia) en Windows, o abre esta pantalla
-                en Microsoft Edge.
+                Este equipo no tiene voz en español, asi que el llamado sonara solo con la campana (nunca
+                con voz inglesa). Para que hable en español de Colombia: abre esta pantalla en Microsoft
+                Edge, o instala la voz ejecutando el archivo{' '}
+                <span className="font-mono font-bold">scripts/instalar-voz-colombia.ps1</span>.
               </span>
             </div>
           )}
@@ -248,144 +360,26 @@ export default function PantallaPublicaPage() {
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,34fr)_minmax(0,66fr)] gap-4 p-4">
-        {/* Columna izquierda: llamados recientes, con su modulo. */}
-        <section className="flex min-h-0 flex-col gap-2">
-          <div className="grid shrink-0 grid-cols-2 overflow-hidden rounded-lg text-center text-lg font-black uppercase tracking-wide text-white">
-            <span className="bg-brand-500 py-2">Turno</span>
-            <span className="bg-brand-700 py-2">Modulo</span>
+      {/*
+        Cuadricula fija: una casilla por modulo activo, todas visibles a la
+        vez. `auto-fit` reparte el espacio disponible solo con 1, con 4 o con
+        10+ casillas, sin que el operador tenga que ajustar nada.
+      */}
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        {casillas.length === 0 ? (
+          <div className="grid h-full place-items-center">
+            <p className="text-2xl font-bold text-slate-400">Aun no hay consultorios ni ventanillas activos.</p>
           </div>
-
-          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
-            {ultimos.length === 0 ? (
-              <p className="py-8 text-center text-xl font-bold text-slate-400">Aun no hay llamados.</p>
-            ) : (
-              ultimos.map((casilla, indice) => {
-                const esActual = destacado?.turnoId === casilla.turnoId
-                return (
-                  <div
-                    key={`${casilla.turnoId}-${casilla.vecesLlamado}`}
-                    className={`shrink-0 overflow-hidden rounded-lg border transition-colors ${
-                      esActual ? 'border-brand-500 bg-brand-500' : 'border-slate-200 bg-white'
-                    }`}
-                  >
-                    <div className="grid grid-cols-2 text-center">
-                      <span
-                        className={`truncate py-2 text-2xl font-black ${
-                          esActual ? 'text-white' : 'text-brand-800'
-                        }`}
-                      >
-                        {casilla.codigo}
-                      </span>
-                      <span
-                        className={`truncate border-l py-2 text-2xl font-black ${
-                          esActual ? 'border-white/25 text-white' : 'border-slate-200 text-brand-800'
-                        }`}
-                      >
-                        {casilla.moduloNombre}
-                      </span>
-                    </div>
-                    {/*
-                      El servicio va junto al paciente porque el hospital puede
-                      tener muchos (consulta externa, pediatria, odontologia,
-                      laboratorio...) y sin el, dos filas con el mismo numero de
-                      consultorio serian indistinguibles.
-                    */}
-                    <div
-                      className={`flex items-baseline justify-between gap-2 px-3 py-1.5 ${
-                        esActual
-                          ? 'bg-brand-600 text-white'
-                          : indice === 0
-                            ? 'bg-brand-100 text-brand-800'
-                            : 'bg-slate-50 text-slate-600'
-                      }`}
-                    >
-                      <span className="truncate text-xl font-bold">
-                        {casilla.pacienteVisible ?? casilla.servicioNombre}
-                      </span>
-                      {casilla.pacienteVisible ? (
-                        <span
-                          className={`shrink-0 truncate text-xs font-black uppercase tracking-wide ${
-                            esActual ? 'text-brand-100' : 'text-slate-400'
-                          }`}
-                        >
-                          {casilla.servicioNombre}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                )
-              })
-            )}
+        ) : (
+          <div
+            className="grid h-full auto-rows-fr gap-4"
+            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))' }}
+          >
+            {casillas.map((casilla) => (
+              <Casilla key={casilla.moduloId} casilla={casilla} resaltada={resaltados.has(casilla.moduloId)} />
+            ))}
           </div>
-        </section>
-
-        {/* Panel principal: el llamado que se esta anunciando. */}
-        <section className="flex min-h-0 flex-col gap-3">
-          <div className="grid shrink-0 grid-cols-2 overflow-hidden rounded-lg text-center text-xl font-black uppercase tracking-wide text-white">
-            <span className="bg-brand-500 py-2">Turno</span>
-            <span className="bg-brand-700 py-2">Modulo</span>
-          </div>
-
-          {destacado?.codigo ? (
-            <>
-              <div
-                key={`${destacado.turnoId}-${destacado.vecesLlamado}`}
-                className="grid min-h-0 flex-1 grid-cols-2 overflow-hidden rounded-lg motion-safe:animate-[pulse_1.1s_ease-in-out_1]"
-              >
-                <div className="grid min-w-0 place-items-center bg-brand-700 px-4">
-                  <span className="truncate text-[clamp(2.5rem,9vw,9rem)] font-black leading-none tracking-[-0.04em] text-white">
-                    {destacado.codigo}
-                  </span>
-                </div>
-                {/*
-                  El nombre del modulo es libre y puede ser largo ("Consultorio de
-                  odontologia 2"), asi que la tipografia es mas pequena que la del
-                  codigo y el texto puede partirse en varias lineas antes que
-                  desbordarse fuera del bloque.
-                */}
-                <div className="grid min-w-0 place-items-center bg-brand-600 px-4">
-                  <span className="w-full break-words text-center text-[clamp(1.5rem,4.5vw,4rem)] font-black leading-[1.05] tracking-[-0.02em] text-white">
-                    {destacado.moduloNombre}
-                  </span>
-                </div>
-              </div>
-
-              {/*
-                Los turnos de ventanilla no tienen paciente asociado, asi que en
-                esos casos el servicio ocupa la linea grande en lugar de
-                repetirse arriba y abajo.
-              */}
-              <div className="shrink-0 rounded-lg bg-brand-800 px-6 py-4 text-center text-white">
-                {destacado.pacienteVisible ? (
-                  <>
-                    <p className="truncate text-[clamp(1.75rem,4.5vw,3.5rem)] font-black leading-tight">
-                      {destacado.pacienteVisible}
-                    </p>
-                    <p className="truncate text-lg font-semibold text-brand-100">
-                      {destacado.servicioNombre}
-                      {destacado.profesionalNombre ? ` · ${destacado.profesionalNombre}` : ''}
-                    </p>
-                  </>
-                ) : (
-                  <p className="truncate text-[clamp(1.75rem,4.5vw,3.5rem)] font-black leading-tight">
-                    {destacado.servicioNombre}
-                  </p>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="grid min-h-0 flex-1 place-items-center rounded-lg bg-white">
-              <p className="text-3xl font-bold text-slate-400">Esperando el proximo llamado...</p>
-            </div>
-          )}
-
-          {enEspera > 0 ? (
-            <p className="shrink-0 text-center text-sm font-bold uppercase tracking-wide text-slate-500">
-              {enEspera} {enEspera === 1 ? 'llamado mas en cola' : 'llamados mas en cola'}
-            </p>
-          ) : null}
-        </section>
+        )}
       </div>
 
       {configuracion.mensajePie ? (

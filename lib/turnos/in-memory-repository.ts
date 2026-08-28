@@ -23,7 +23,9 @@ import type {
   ConfiguracionPantalla,
   EstadisticasDia,
   EstadisticasServicio,
+  EstadoAgendaItem,
   FiltroHistorico,
+  ItemAgendaProfesional,
   Modulo,
   Profesional,
   Servicio,
@@ -64,6 +66,7 @@ const CONFIGURACION_INICIAL: ConfiguracionPantalla = {
   volumen: 1,
   ultimosVisibles: 5,
   mensajePie: 'Bienvenido a la ESE Hospital San Rafael de Chinu. Por favor espere a ser llamado.',
+  maxCitasPorProfesional: 20,
 }
 
 function crearId() {
@@ -72,6 +75,19 @@ function crearId() {
 
 function ahoraISO() {
   return new Date().toISOString()
+}
+
+/**
+ * Dia (AAAA-MM-DD) de un instante ISO, en hora de Colombia.
+ *
+ * Las fechas se guardan en UTC (`toISOString()`), pero el hospital y la UI
+ * razonan en hora local (America/Bogota, UTC-5). Recortar el ISO directamente
+ * daria el dia UTC: despues de las 7 p. m. en Colombia el dia UTC ya es el
+ * siguiente, y el historico/estadisticas de "hoy" saldrian en cero. Comparar
+ * por este dia local evita ese desfase.
+ */
+function diaColombia(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(new Date(iso))
 }
 
 function horaDeHoy(hora: number, minuto: number) {
@@ -152,7 +168,7 @@ function hashToken(token: string) {
  * quedaria incompleto y reventaria en tiempo de ejecucion. La version fuerza a
  * volver a sembrar cuando eso pasa: subela al cambiar la estructura.
  */
-const VERSION_ESTADO = 4
+const VERSION_ESTADO = 6
 
 declare global {
   var __turnosMemoria: (EstadoMemoria & { version: number }) | undefined
@@ -220,6 +236,46 @@ function casillaDeTurno(turno: Turno): CasillaPantalla {
   }
 }
 
+/**
+ * Traduce el estado del TURNO (si existe) al estado que ve el doctor en su
+ * agenda. Sin turno, la cita sigue PROGRAMADA: es la señal de "aun no ha
+ * llegado", no un error.
+ */
+function estadoAgendaDe(turno: Turno | undefined): EstadoAgendaItem {
+  if (!turno) return 'PROGRAMADA'
+  switch (turno.estado) {
+    case 'EN_ESPERA':
+      return 'EN_ESPERA'
+    case 'LLAMADO':
+      return 'LLAMADO'
+    case 'EN_ATENCION':
+      return 'EN_ATENCION'
+    case 'ATENDIDO':
+      return 'ATENDIDA'
+    case 'AUSENTE':
+      return 'AUSENTE'
+    case 'CANCELADO':
+      // No deberia pasar (un turno cancelado no tiene flujo hoy), pero si
+      // pasara, es mas honesto mostrarlo como ausente que como "programada".
+      return 'AUSENTE'
+    default:
+      return 'PROGRAMADA'
+  }
+}
+
+function itemAgenda(cita: Cita, turno: Turno | undefined): ItemAgendaProfesional {
+  return {
+    citaId: cita.id,
+    turnoId: turno?.id ?? null,
+    documentoPaciente: cita.documentoPaciente,
+    nombrePaciente: cita.nombrePaciente,
+    horaCita: cita.horaCita,
+    estado: estadoAgendaDe(turno),
+    codigo: turno?.codigo ?? null,
+    vecesLlamado: turno?.vecesLlamado ?? 0,
+  }
+}
+
 export class InMemoryTurnoRepository implements TurnoRepository {
   // --- Catalogos ---
 
@@ -239,6 +295,75 @@ export class InMemoryTurnoRepository implements TurnoRepository {
 
   async profesionalDeUsuario(usuarioId: string): Promise<Profesional | null> {
     return estado.profesionales.find((p) => p.activo && p.usuarioId === usuarioId) ?? null
+  }
+
+  // --- Agenda de citas ---
+  //
+  // TEMPORAL: en produccion las citas las trae la API del hospital. Estos
+  // metodos existen para poder cargar citas a mano durante el demo y las
+  // pruebas, mientras esa API no exista.
+
+  async listarCitas(filtro: { fecha?: string; profesionalId?: string } = {}): Promise<Cita[]> {
+    return estado.citas
+      .filter((c) => {
+        if (c.estado === 'CANCELADA') return false
+        if (filtro.profesionalId && c.profesionalId !== filtro.profesionalId) return false
+        if (filtro.fecha && diaColombia(c.horaCita) !== filtro.fecha) return false
+        return true
+      })
+      .sort((a, b) => new Date(a.horaCita).getTime() - new Date(b.horaCita).getTime())
+  }
+
+  async crearCita(datos: {
+    documentoPaciente: string
+    nombrePaciente: string
+    profesionalId: string
+    horaCita: string
+  }): Promise<Cita> {
+    const profesional = estado.profesionales.find((p) => p.id === datos.profesionalId)
+    if (!profesional) errorDeNegocio('El profesional indicado no existe.')
+    if (!profesional.activo) errorDeNegocio('El profesional esta inactivo.')
+
+    const documento = datos.documentoPaciente.trim()
+    const nombre = datos.nombrePaciente.trim()
+    if (!documento) errorDeNegocio('Ingresa el documento del paciente.')
+    if (!nombre) errorDeNegocio('Ingresa el nombre del paciente.')
+    if (Number.isNaN(new Date(datos.horaCita).getTime())) errorDeNegocio('La hora de la cita no es valida.')
+
+    // Tope de citas por profesional en el dia de la cita (lo fija el
+    // administrador). 0 = sin limite.
+    const tope = estado.configuracion.maxCitasPorProfesional
+    if (tope > 0) {
+      const dia = diaColombia(datos.horaCita)
+      const agendadas = estado.citas.filter(
+        (c) => c.profesionalId === profesional.id && c.estado !== 'CANCELADA' && diaColombia(c.horaCita) === dia,
+      ).length
+      if (agendadas >= tope) {
+        errorDeNegocio(`${profesional.nombre} ya tiene el maximo de ${tope} citas para ese dia.`)
+      }
+    }
+
+    const cita: Cita = {
+      id: crearId(),
+      documentoPaciente: documento,
+      nombrePaciente: nombre,
+      profesionalId: profesional.id,
+      servicioId: profesional.servicioId,
+      horaCita: datos.horaCita,
+      estado: 'PROGRAMADA',
+    }
+
+    estado.citas.push(cita)
+    return cita
+  }
+
+  async cancelarCita(citaId: string): Promise<Cita> {
+    const cita = estado.citas.find((c) => c.id === citaId)
+    if (!cita) errorDeNegocio('La cita indicada no existe.')
+    // Si el paciente ya llego, cancelarla dejaria un turno huerfano en la fila.
+    if (cita.estado === 'PRESENTADO') errorDeNegocio('El paciente ya registro su llegada; no se puede cancelar.')
+    cita.estado = 'CANCELADA'
+    return cita
   }
 
   // --- Admisiones ---
@@ -305,6 +430,24 @@ export class InMemoryTurnoRepository implements TurnoRepository {
 
     estado.turnos.push(turno)
     return turno
+  }
+
+  /**
+   * Agenda del dia de un profesional (trazabilidad de punta a punta: seccion
+   * "flujo del turno"). Parte de las CITAS (no de los turnos) para que una
+   * cita que aun no genero turno (el paciente no ha llegado) siga siendo
+   * visible para el doctor, en vez de desaparecer.
+   */
+  async agendaProfesional(profesionalId: string, fecha: string): Promise<ItemAgendaProfesional[]> {
+    buscarProfesional(profesionalId)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) errorDeNegocio('La fecha no es valida.')
+
+    return estado.citas
+      .filter(
+        (c) => c.profesionalId === profesionalId && c.estado !== 'CANCELADA' && diaColombia(c.horaCita) === fecha,
+      )
+      .map((cita) => itemAgenda(cita, estado.turnos.find((t) => t.citaId === cita.id)))
+      .sort((a, b) => new Date(a.horaCita).getTime() - new Date(b.horaCita).getTime())
   }
 
   // --- Operacion ---
@@ -446,14 +589,14 @@ export class InMemoryTurnoRepository implements TurnoRepository {
         if (filtro.moduloId && t.moduloId !== filtro.moduloId) return false
         if (filtro.funcionarioId && t.funcionarioId !== filtro.funcionarioId) return false
         if (filtro.profesionalId && t.profesionalId !== filtro.profesionalId) return false
-        if (filtro.fecha && t.fechaGeneracion.slice(0, 10) !== filtro.fecha) return false
+        if (filtro.fecha && diaColombia(t.fechaGeneracion) !== filtro.fecha) return false
         return true
       })
       .sort((a, b) => new Date(b.fechaGeneracion).getTime() - new Date(a.fechaGeneracion).getTime())
   }
 
   async estadisticas(fecha: string): Promise<EstadisticasDia> {
-    const delDia = estado.turnos.filter((t) => t.fechaGeneracion.slice(0, 10) === fecha)
+    const delDia = estado.turnos.filter((t) => diaColombia(t.fechaGeneracion) === fecha)
 
     const porFuncionario = new Map<string, number>()
     for (const turno of delDia) {

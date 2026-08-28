@@ -5,6 +5,7 @@ import type {
   ConfiguracionPantalla,
   EstadisticasDia,
   FiltroHistorico,
+  ItemAgendaProfesional,
   Modulo,
   Profesional,
   Servicio,
@@ -35,6 +36,18 @@ export interface TurnoRepository {
   profesionalDeUsuario(usuarioId: string): Promise<Profesional | null>
 
   // --- Admisiones: de la cita al turno ---
+  // --- Agenda de citas ---
+  // TEMPORAL: en produccion las citas las trae la API del hospital. Estos
+  // metodos permiten cargarlas a mano durante el demo.
+  listarCitas(filtro?: { fecha?: string; profesionalId?: string }): Promise<Cita[]>
+  crearCita(datos: {
+    documentoPaciente: string
+    nombrePaciente: string
+    profesionalId: string
+    horaCita: string
+  }): Promise<Cita>
+  cancelarCita(citaId: string): Promise<Cita>
+
   /**
    * Busca las citas del dia por documento del paciente, para que admisiones
    * registre su llegada. Origen real: API del hospital [PENDIENTE].
@@ -47,6 +60,14 @@ export interface TurnoRepository {
   registrarLlegada(citaId: string): Promise<Turno>
   /** Turnos sin cita, para los servicios de ventanilla (fila compartida). */
   generarTurnoDeVentanilla(servicioId: string): Promise<Turno>
+  /**
+   * Agenda completa de un profesional para un dia (formato AAAA-MM-DD): TODAS
+   * sus citas de ese dia, hayan generado turno o no. A diferencia de
+   * `listarPendientes` (solo EN_ESPERA), esto le permite al doctor ver por
+   * que un paciente todavia no aparece para llamar: porque no ha registrado
+   * su llegada en admisiones.
+   */
+  agendaProfesional(profesionalId: string, fecha: string): Promise<ItemAgendaProfesional[]>
 
   // --- Operacion (secciones 9, 12 y 13) ---
   /**

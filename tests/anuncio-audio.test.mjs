@@ -55,6 +55,10 @@ test('sin voces en español devuelve null, para no leer con voz extranjera', () 
   assert.equal(esVozColombiana(null), false)
 })
 
+test('aunque solo haya voz inglesa, no se elige: mejor mudo que acento gringo', () => {
+  assert.equal(elegirVoz([INGLESA, { name: 'Microsoft Mark', lang: 'en-GB' }]), null)
+})
+
 test('el selector lista solo las voces en español, de mejor a peor', () => {
   const lista = vocesEnEspanol([INGLESA, ESPANOLA_NATURAL, COLOMBIANA, MEXICANA])
   assert.deepEqual(

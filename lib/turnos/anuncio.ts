@@ -99,6 +99,7 @@ export function esVozColombiana(voz: SpeechSynthesisVoice | null): boolean {
   return Boolean(voz?.lang.toLowerCase().replace('_', '-').startsWith('es-co'))
 }
 
+
 /**
  * Las voces se cargan de forma asincrona: en el primer render la lista suele
  * venir vacia y el navegador dispara `voiceschanged` cuando ya estan listas.
@@ -227,7 +228,10 @@ export const locutorNavegador: Locutor = (texto, opciones) =>
 
     const mensaje = new SpeechSynthesisUtterance(texto)
     mensaje.voice = opciones.voz
-    mensaje.lang = opciones.voz.lang
+    // Forzamos siempre el acento colombiano. Si la voz es de otra variante del
+    // español (ej. es-MX), fijar es-CO empuja al motor hacia una pronunciacion
+    // mas cercana; el texto ya viene en español, nunca se pasa una voz inglesa.
+    mensaje.lang = 'es-CO'
     mensaje.volume = opciones.volumen
     // Un poco mas lento que el habla normal: se entiende mejor de lejos.
     mensaje.rate = 0.92

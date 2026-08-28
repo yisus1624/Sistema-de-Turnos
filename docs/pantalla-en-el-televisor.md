@@ -58,13 +58,22 @@ computador tumba la pantalla, y la duplicacion suele cortar el audio.
 
 ## La voz
 
-El sistema **prefiere siempre la voz de español de Colombia**. Si no la
-encuentra, busca otra latinoamericana, luego una de España. Y si el equipo no
-tiene **ninguna** voz en español, **no habla**: es preferible el silencio a que
-una voz inglesa lea los turnos.
+El sistema **solo habla en español** y prefiere la voz de Colombia. Si no hay
+voz colombiana, usa otra en español (México, España...). Y si el equipo no
+tiene **ninguna** voz en español, **no habla con voz inglesa**: deja solo la
+campana. Nunca se lee un turno con acento extranjero.
 
-La pantalla dice cual voz esta usando antes de activarse. Si avisa que no hay
-voces en español, siga el paso 1 de la opcion 1.
+La pantalla dice cual voz esta usando antes de activarse. Para asegurar la voz
+colombiana en el equipo del televisor hay dos caminos:
+
+1. **Instalar la voz (recomendado para el equipo fijo).** En el proyecto hay un
+   instalador: `scripts/instalar-voz-colombia.ps1`. Clic derecho →
+   "Ejecutar con PowerShell", aceptar los permisos, y reiniciar el equipo. Deja
+   la voz de Español (Colombia) disponible sin depender de internet.
+
+2. **Abrir la pantalla en Microsoft Edge.** Edge trae voces colombianas "en
+   linea" (Salome, Gonzalo) que suenan naturales; la primera vez necesitan
+   internet y luego quedan en cache.
 
 ## Prueba de aceptacion antes del montaje
 

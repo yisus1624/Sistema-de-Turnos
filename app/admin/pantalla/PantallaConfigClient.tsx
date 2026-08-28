@@ -119,11 +119,12 @@ export default function PantallaConfigClient() {
             </div>
 
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-              <strong className="font-black">Sobre la voz:</strong> la pantalla usa las voces instaladas en el
-              computador del televisor y prefiere siempre la de español de Colombia. Si ese equipo no tiene
-              ninguna voz en español, el llamado sale sin audio en lugar de leerse con acento extranjero. Para
-              conseguir una voz colombiana natural, abre la pantalla en Microsoft Edge o instala la voz de
-              español (Colombia) desde Configuracion de Windows.
+              <strong className="font-black">Sobre la voz:</strong> el llamado se lee siempre en español,
+              prefiriendo la voz de Colombia; nunca se usa una voz inglesa. Si el televisor no tiene voz en
+              español, solo suena la campana. Para asegurar la voz colombiana en ese equipo: abre la pantalla
+              en Microsoft Edge, o ejecuta una vez el archivo{' '}
+              <span className="font-mono font-bold">scripts/instalar-voz-colombia.ps1</span> del proyecto. La
+              campana suena siempre que el audio este activo, tenga o no voz.
             </div>
           </CardContent>
         </Card>
@@ -152,6 +153,27 @@ export default function PantallaConfigClient() {
                 onChange={(e) => cambiar('mensajePie', e.target.value)}
                 maxLength={200}
                 placeholder="Bienvenido a la ESE Hospital San Rafael de Chinu."
+              />
+            </Campo>
+          </CardContent>
+        </Card>
+
+        <Card padded={false} className="mt-6">
+          <CardHeader>
+            <CardTitle>Citas</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Campo
+              etiqueta="Maximo de citas por profesional al dia"
+              ayuda="Tope de citas que el operador puede agendarle a un mismo doctor en un dia (su turno). 0 = sin limite."
+            >
+              <Entrada
+                type="number"
+                min={0}
+                max={200}
+                value={String(configuracion.maxCitasPorProfesional)}
+                onChange={(e) => cambiar('maxCitasPorProfesional', Math.max(0, Number(e.target.value) || 0))}
+                className="max-w-[140px]"
               />
             </Campo>
           </CardContent>
