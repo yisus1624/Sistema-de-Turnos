@@ -43,6 +43,7 @@ function crearRegistro(params: {
   rol: RolUsuario
   area: string | null
   password: string
+  secciones?: string[] | null
 }): RegistroUsuario {
   return {
     id: crearId(),
@@ -53,6 +54,7 @@ function crearRegistro(params: {
     activo: true,
     fechaCreacion: new Date().toISOString(),
     passwordHash: bcrypt.hashSync(params.password, 10),
+    secciones: params.secciones ?? null,
   }
 }
 
@@ -120,6 +122,7 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
       rol: datos.rol,
       area: datos.area ?? null,
       password: datos.password,
+      secciones: datos.secciones,
     })
     usuarios.push(registro)
     return sinPassword(registro)
@@ -140,6 +143,9 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
     if (datos.area !== undefined) registro.area = datos.area ?? null
     if (datos.activo !== undefined) registro.activo = datos.activo
     if (datos.password) registro.passwordHash = bcrypt.hashSync(datos.password, 10)
+    if (datos.secciones !== undefined) registro.secciones = datos.secciones
+    // Un administrador siempre ve todo; el campo solo aplica a OPERADOR.
+    if (registro.rol === 'ADMINISTRADOR') registro.secciones = null
 
     return sinPassword(registro)
   }

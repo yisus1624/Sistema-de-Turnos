@@ -7,6 +7,7 @@ export default function OperadorPage() {
   return (
     <RoleShell
       rol="OPERADOR"
+      seccion="/operador"
       title="Llamado de turnos"
       description="Selecciona el servicio y el modulo desde el que atiendes, llama el siguiente turno y registra el resultado de la atencion."
     >

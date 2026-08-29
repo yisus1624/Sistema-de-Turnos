@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 
 // 15 minutos a 72 horas: mismo rango que valida el repositorio. Se repite
@@ -27,7 +27,7 @@ const vigenciaSchema = z.object({
  */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const session = await requireRol(['ADMINISTRADOR'])
+    const session = await requireSeccion('/admin/profesionales')
 
     const body = await request.json().catch(() => null)
     const parsed = vigenciaSchema.safeParse(body)

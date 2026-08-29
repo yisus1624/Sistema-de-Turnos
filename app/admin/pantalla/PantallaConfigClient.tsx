@@ -10,6 +10,7 @@ import { ArrowSquareOut, MonitorPlay } from '@phosphor-icons/react/dist/ssr'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Skeleton } from '@/components/ui/Loader'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
@@ -45,7 +46,25 @@ export default function PantallaConfigClient() {
   }
 
   if (!configuracion) {
-    return <p className="py-10 text-center text-sm text-slate-500">Cargando configuracion...</p>
+    return (
+      <div className="max-w-2xl space-y-6" aria-busy="true" aria-label="Cargando configuracion">
+        {[3, 4, 1].map((campos, tarjeta) => (
+          <Card key={tarjeta} padded={false}>
+            <CardHeader>
+              <Skeleton className="h-5 w-40" />
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {Array.from({ length: campos }).map((_, campo) => (
+                <div key={campo}>
+                  <Skeleton className="h-3 w-32" />
+                  <Skeleton className="mt-2 h-11 w-full" />
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    )
   }
 
   return (

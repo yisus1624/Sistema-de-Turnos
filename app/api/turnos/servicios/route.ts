@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
 
 // Publico a proposito: la pantalla de la sala de espera agrupa por servicio.
 export async function GET() {
@@ -23,7 +23,7 @@ const servicioSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireRol(['ADMINISTRADOR'])
+    await requireSeccion('/admin/servicios')
 
     const body = await request.json().catch(() => null)
     const parsed = servicioSchema.safeParse(body)

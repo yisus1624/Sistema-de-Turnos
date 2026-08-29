@@ -19,6 +19,8 @@
     "@phosphor-icons/react": "^2.1.10",
     "bcryptjs": "^2.4.3",
     "geist": "^1.7.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "next": "16.2.12",
     "next-auth": "5.0.0-beta.32",
     "react": "19.2.7",

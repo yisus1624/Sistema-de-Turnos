@@ -15,9 +15,11 @@ import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Interruptor, Seleccion, Tabla } from '@/components/admin/Campos'
+import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { Modulo, Servicio } from '@/lib/turnos/types'
+
+const COLUMNAS = ['Modulo', 'Servicio', 'Estado']
 
 type Formulario = { nombre: string; servicioId: string }
 
@@ -111,7 +113,7 @@ export default function ModulosClient() {
         </CardHeader>
         <CardContent padded={false}>
           {cargando ? (
-            <p className="px-5 py-10 text-center text-sm text-slate-500">Cargando modulos...</p>
+            <TablaSkeleton columnas={COLUMNAS} />
           ) : modulos.length === 0 ? (
             <div className="p-5">
               <EmptyState
@@ -121,12 +123,16 @@ export default function ModulosClient() {
               />
             </div>
           ) : (
-            <Tabla columnas={['Modulo', 'Servicio', 'Estado', '']}>
+            <Tabla columnas={COLUMNAS}>
               {modulos.map((modulo) => (
-                <tr key={modulo.id} className="hover:bg-slate-50">
+                <tr
+                  key={modulo.id}
+                  onClick={() => abrirEdicion(modulo)}
+                  className="cursor-pointer hover:bg-slate-50"
+                >
                   <td className="px-4 py-3 font-black text-brand-950">{modulo.nombre}</td>
                   <td className="px-4 py-3 text-slate-600">{nombreServicio(modulo.servicioId)}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-3">
                       <Interruptor
                         activo={modulo.activo}
@@ -137,11 +143,6 @@ export default function ModulosClient() {
                         {modulo.activo ? 'Activo' : 'Inactivo'}
                       </Badge>
                     </div>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <Button size="sm" variant="secondary" onClick={() => abrirEdicion(modulo)}>
-                      Editar
-                    </Button>
                   </td>
                 </tr>
               ))}

@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { usuarioRepository } from '@/lib/usuarios/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 
 export async function GET() {
   try {
-    await requireRol(['ADMINISTRADOR'])
+    await requireSeccion('/admin/usuarios')
     const usuarios = await usuarioRepository.listar()
     return NextResponse.json({ usuarios })
   } catch (error) {
@@ -25,16 +25,30 @@ const usuarioSchema = z.object({
   rol: z.enum(['ADMINISTRADOR', 'OPERADOR']),
   area: z.string().trim().max(60).nullable().optional(),
   password: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.'),
+  secciones: z.array(z.string()).nullable().optional(),
 })
 
 export async function POST(request: Request) {
   try {
-    const session = await requireRol(['ADMINISTRADOR'])
+    const session = await requireSeccion('/admin/usuarios')
 
     const body = await request.json().catch(() => null)
     const parsed = usuarioSchema.safeParse(body)
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos invalidos.' }, { status: 400 })
+    }
+
+    // Ver la nota del PATCH: repartir el rol de administrador es potestad de un
+    // administrador, no de un operador con la seccion de usuarios.
+    if (parsed.data.rol === 'ADMINISTRADOR' && session.user.rol !== 'ADMINISTRADOR') {
+      return NextResponse.json(
+        { error: 'Solo un administrador puede crear otro administrador.' },
+        { status: 403 },
+      )
+    }
+
+    if (parsed.data.rol === 'OPERADOR' && parsed.data.secciones && parsed.data.secciones.length === 0) {
+      return NextResponse.json({ error: 'Selecciona al menos una seccion para el operador.' }, { status: 400 })
     }
 
     const usuario = await usuarioRepository.crear(parsed.data)

@@ -7,6 +7,7 @@ export default function AgendaPage() {
   return (
     <RoleShell
       rol="OPERADOR"
+      seccion="/operador/agenda"
       title="Agenda de citas"
       description="Registra al paciente y asignale un profesional. La cita se convierte en turno cuando el paciente llega."
     >

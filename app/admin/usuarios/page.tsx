@@ -11,7 +11,7 @@ export default async function UsuariosPage() {
 
   return (
     <RoleShell
-      rol="ADMINISTRADOR"
+      rol="ADMINISTRADOR" seccion="/admin/usuarios"
       title="Usuarios"
       description="Funcionarios que usan el sistema. Las cuentas no se borran: se desactivan, para no perder el rastro de quien llamo cada turno."
     >

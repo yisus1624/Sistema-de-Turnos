@@ -1,25 +1,24 @@
 'use client'
 
 /**
- * Historico de turnos (requerimiento seccion 18).
+ * Reportes de turnos: filtra por rango de fechas y descarga un PDF con el
+ * logo institucional, pensado para entregar al hospital como constancia.
  *
- * La misma pantalla sirve al administrador y al operador: el backend decide que
- * puede ver cada uno (el operador solo lo que el mismo llamo), asi que aqui
- * solo se ocultan los filtros que no le corresponden.
- *
- * No hay boton de buscar: al mover un filtro la tabla se recarga sola (con un
- * retraso corto, ver `useValorConRetraso`).
+ * No hay boton de buscar: al mover cualquier filtro la tabla se recarga sola
+ * (con un retraso corto, ver `useValorConRetraso`).
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { ClockCounterClockwise } from '@phosphor-icons/react/dist/ssr'
+import { DownloadSimple, FileText } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
 import { useValorConRetraso } from '@/lib/hooks'
+import { generarReportePdf } from '@/lib/reportes/pdf'
 import type { EstadoTurno, Modulo, Servicio, Turno } from '@/lib/turnos/types'
 
 const COLUMNAS = ['Turno', 'Servicio', 'Modulo', 'Generado', 'Llamado', 'Cierre', 'Llamadas', 'Estado']
@@ -34,25 +33,24 @@ const etiquetaEstado: Record<EstadoTurno, { texto: string; tono: 'blue' | 'green
 }
 
 type Filtros = {
-  fecha: string
+  fechaDesde: string
+  fechaHasta: string
   servicioId: string
-  moduloId: string
   estado: string
-  codigo: string
 }
 
-export default function HistoricoTurnos({ completo }: { completo: boolean }) {
-  const [filtros, setFiltros] = useState<Filtros>({
-    fecha: hoyEnColombia(),
-    servicioId: '',
-    moduloId: '',
-    estado: '',
-    codigo: '',
+export default function ReportesClient() {
+  const [filtros, setFiltros] = useState<Filtros>(() => {
+    const hoy = hoyEnColombia()
+    return { fechaDesde: hoy, fechaHasta: hoy, servicioId: '', estado: '' }
   })
   const [turnos, setTurnos] = useState<Turno[]>([])
   const [servicios, setServicios] = useState<Servicio[]>([])
   const [modulos, setModulos] = useState<Modulo[]>([])
   const [buscando, setBuscando] = useState(true)
+  const [generando, setGenerando] = useState(false)
+
+  const rangoValido = filtros.fechaDesde <= filtros.fechaHasta
 
   useEffect(() => {
     Promise.all([
@@ -77,30 +75,66 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
       const { turnos: lista } = await pedir<{ turnos: Turno[] }>(`/api/turnos/historico?${params}`)
       setTurnos(lista)
     } catch (error) {
-      toast.error('No se pudo consultar el historico', mensajeDeError(error))
+      toast.error('No se pudo consultar los turnos', mensajeDeError(error))
     } finally {
       setBuscando(false)
     }
   }, [])
 
-  // El retraso evita lanzar una consulta con cada tecla del campo de turno.
+  // Buscar solo cuando el usuario deja de teclear, y nunca con un rango al
+  // reves: mientras corrige la fecha no tiene sentido consultar.
   const filtrosDiferidos = useValorConRetraso(filtros)
   useEffect(() => {
+    if (filtrosDiferidos.fechaDesde > filtrosDiferidos.fechaHasta) return
     buscar(filtrosDiferidos)
   }, [buscar, filtrosDiferidos])
 
   const nombre = (lista: Array<{ id: string; nombre: string }>, id?: string | null) =>
-    id ? (lista.find((x) => x.id === id)?.nombre ?? '—') : '—'
+    id ? (lista.find((x) => x.id === id)?.nombre ?? '—') : 'Ventanilla general'
+
+  async function descargar() {
+    if (turnos.length === 0) {
+      toast.error('Nada para descargar', 'No hay turnos en el rango seleccionado.')
+      return
+    }
+
+    setGenerando(true)
+    try {
+      await generarReportePdf({
+        filas: turnos.map((turno) => ({
+          turno,
+          servicioNombre: nombre(servicios, turno.servicioId),
+          moduloNombre: nombre(modulos, turno.moduloId),
+        })),
+        fechaDesde: filtros.fechaDesde,
+        fechaHasta: filtros.fechaHasta,
+      })
+    } catch (error) {
+      toast.error('No se pudo generar el PDF', mensajeDeError(error))
+    } finally {
+      setGenerando(false)
+    }
+  }
 
   return (
     <div className="space-y-5">
       <Card>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <Campo etiqueta="Fecha">
+          <Campo etiqueta="Desde">
             <Entrada
               type="date"
-              value={filtros.fecha}
-              onChange={(e) => setFiltros((f) => ({ ...f, fecha: e.target.value }))}
+              value={filtros.fechaDesde}
+              max={filtros.fechaHasta}
+              onChange={(e) => setFiltros((f) => ({ ...f, fechaDesde: e.target.value }))}
+            />
+          </Campo>
+
+          <Campo etiqueta="Hasta">
+            <Entrada
+              type="date"
+              value={filtros.fechaHasta}
+              min={filtros.fechaDesde}
+              onChange={(e) => setFiltros((f) => ({ ...f, fechaHasta: e.target.value }))}
             />
           </Campo>
 
@@ -118,22 +152,6 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
             </Seleccion>
           </Campo>
 
-          {completo ? (
-            <Campo etiqueta="Modulo">
-              <Seleccion
-                value={filtros.moduloId}
-                onChange={(e) => setFiltros((f) => ({ ...f, moduloId: e.target.value }))}
-              >
-                <option value="">Todos</option>
-                {modulos.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.nombre}
-                  </option>
-                ))}
-              </Seleccion>
-            </Campo>
-          ) : null}
-
           <Campo etiqueta="Estado">
             <Seleccion
               value={filtros.estado}
@@ -148,14 +166,25 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
             </Seleccion>
           </Campo>
 
-          <Campo etiqueta="Turno">
-            <Entrada
-              value={filtros.codigo}
-              onChange={(e) => setFiltros((f) => ({ ...f, codigo: e.target.value.toUpperCase() }))}
-              placeholder="A-025"
-            />
-          </Campo>
+          <div className="flex items-end">
+            <Button
+              type="button"
+              onClick={descargar}
+              loading={generando}
+              disabled={buscando || turnos.length === 0}
+              className="mb-0 w-full"
+            >
+              <DownloadSimple size={17} weight="bold" />
+              Descargar PDF
+            </Button>
+          </div>
         </div>
+
+        {rangoValido ? null : (
+          <p className="mt-3 text-sm font-semibold text-red-600">
+            La fecha inicial no puede ser posterior a la final.
+          </p>
+        )}
       </Card>
 
       <Card padded={false}>
@@ -168,9 +197,9 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
           ) : turnos.length === 0 ? (
             <div className="p-5">
               <EmptyState
-                icon={ClockCounterClockwise}
+                icon={FileText}
                 title="Sin turnos"
-                description="No hay turnos que coincidan con los filtros seleccionados."
+                description="No hay turnos en el rango de fechas seleccionado."
               />
             </div>
           ) : (

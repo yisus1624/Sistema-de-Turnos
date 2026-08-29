@@ -7,7 +7,7 @@ import { CaretLeft, CaretRight, List, SignOut } from '@phosphor-icons/react'
 import { logoutAction } from '@/app/actions/auth'
 import { Isotipo, Logotipo } from '@/components/brand/Marca'
 import type { RolUsuario } from '@/lib/usuarios/types'
-import { rolLabels, rolNav } from './navigation'
+import { navDelUsuario, rolLabels } from './navigation'
 import { cn } from '@/lib/ui'
 
 type AppShellProps = {
@@ -16,6 +16,8 @@ type AppShellProps = {
   area?: string | null
   title: string
   description: string
+  /** Secciones permitidas del usuario; `null` = las propias de su rol. */
+  secciones?: string[] | null
   children: React.ReactNode
 }
 
@@ -31,6 +33,7 @@ export default function AppShell({
   area,
   title,
   description,
+  secciones,
   children,
 }: AppShellProps) {
   const pathname = usePathname()
@@ -81,18 +84,21 @@ export default function AppShell({
 
   const navegacion = (
     <>
-      {rolNav[rol].map((seccion) => (
-        <div key={seccion.label}>
+      {navDelUsuario(rol, secciones).map((seccionNav) => {
+        const items = seccionNav.items
+
+        return (
+        <div key={seccionNav.label}>
           <p
             className={cn(
               'px-3 text-[11px] font-black uppercase tracking-[0.09em] text-brand-200/60',
               sidebarColapsado && 'lg:sr-only',
             )}
           >
-            {seccion.label}
+            {seccionNav.label}
           </p>
           <div className={cn('mt-2 space-y-1', sidebarColapsado && 'lg:mt-0 lg:flex lg:flex-col lg:items-center lg:gap-2 lg:space-y-0')}>
-            {seccion.items.map((item) => {
+            {items.map((item) => {
               const activa = esActiva(pathname, item.href)
               return (
                 <Link
@@ -112,7 +118,8 @@ export default function AppShell({
             })}
           </div>
         </div>
-      ))}
+        )
+      })}
     </>
   )
 

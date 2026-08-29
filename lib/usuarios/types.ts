@@ -23,6 +23,12 @@ export interface Usuario {
   area: string | null
   activo: boolean
   fechaCreacion: string
+  /**
+   * Secciones del menu (hrefs) a las que puede entrar un OPERADOR. `null` o
+   * `undefined` significa acceso a todas las secciones de su rol. Se ignora
+   * para ADMINISTRADOR, que siempre ve todo.
+   */
+  secciones?: string[] | null
 }
 
 /** Datos para crear o editar un usuario desde la administracion. */
@@ -34,4 +40,5 @@ export interface DatosUsuario {
   activo?: boolean
   /** Solo al crear o al cambiar la contrasena. */
   password?: string
+  secciones?: string[] | null
 }

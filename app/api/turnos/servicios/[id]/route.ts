@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
 
 const cambioSchema = z.object({
   nombre: z.string().trim().min(3).max(60).optional(),
@@ -18,7 +18,7 @@ const cambioSchema = z.object({
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    await requireRol(['ADMINISTRADOR'])
+    await requireSeccion('/admin/servicios')
 
     const { id } = await context.params
     const body = await request.json().catch(() => null)

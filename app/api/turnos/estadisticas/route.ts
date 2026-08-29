@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
 
 /** Fecha de hoy en Colombia, en formato AAAA-MM-DD. */
 function hoyEnColombia() {
@@ -9,7 +9,7 @@ function hoyEnColombia() {
 
 export async function GET(request: Request) {
   try {
-    await requireRol(['ADMINISTRADOR'])
+    await requireSeccion('/admin/estadisticas')
 
     const { searchParams } = new URL(request.url)
     const fecha = searchParams.get('fecha') || hoyEnColombia()

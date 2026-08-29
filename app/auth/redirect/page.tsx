@@ -4,5 +4,5 @@ import { rutaInicialPorRol } from '@/lib/auth-routing'
 
 export default async function AuthRedirectPage() {
   const session = await auth()
-  redirect(rutaInicialPorRol(session?.user?.rol))
+  redirect(rutaInicialPorRol(session?.user?.rol, session?.user?.secciones))
 }

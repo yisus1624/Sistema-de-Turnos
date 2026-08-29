@@ -20,9 +20,11 @@ import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Seleccion, Tabla } from '@/components/admin/Campos'
+import { Campo, Entrada, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { Cita, Profesional, Servicio } from '@/lib/turnos/types'
+
+const COLUMNAS = ['Hora', 'Paciente', 'Documento', 'Profesional', 'Servicio', 'Estado', '']
 
 type Formulario = {
   documentoPaciente: string
@@ -153,7 +155,7 @@ export default function AgendaClient() {
         </CardHeader>
         <CardContent padded={false}>
           {cargando ? (
-            <p className="px-5 py-10 text-center text-sm text-slate-500">Cargando agenda...</p>
+            <TablaSkeleton columnas={COLUMNAS} />
           ) : citas.length === 0 ? (
             <div className="p-5">
               <EmptyState
@@ -163,7 +165,7 @@ export default function AgendaClient() {
               />
             </div>
           ) : (
-            <Tabla columnas={['Hora', 'Paciente', 'Documento', 'Profesional', 'Servicio', 'Estado', '']}>
+            <Tabla columnas={COLUMNAS}>
               {citas.map((cita) => {
                 const estado = etiquetaEstado[cita.estado]
                 return (

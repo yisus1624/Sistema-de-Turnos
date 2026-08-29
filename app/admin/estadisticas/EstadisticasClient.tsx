@@ -7,12 +7,50 @@ import { ChartBar } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Tabla } from '@/components/admin/Campos'
+import { Campo, Entrada, Tabla, TablaSkeleton } from '@/components/admin/Campos'
+import { Skeleton } from '@/components/ui/Loader'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { EstadisticasDia, EstadisticasServicio } from '@/lib/turnos/types'
 
+const COLUMNAS_SERVICIO = ['Servicio', 'Generados', 'Atendidos', 'Ausentes', 'Pendientes', 'Espera', 'Atencion']
+
 function minutos(valor: number | null) {
   return valor === null ? '—' : `${valor} min`
+}
+
+/** Un indicador mientras se calcula: mismo alto, para que nada salte al llegar. */
+function IndicadorSkeleton() {
+  return (
+    <Card className="text-center">
+      <Skeleton className="mx-auto h-3 w-24" />
+      <Skeleton className="mx-auto mt-2 h-8 w-16" />
+    </Card>
+  )
+}
+
+function EstadisticasSkeleton() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-label="Calculando indicadores">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <IndicadorSkeleton key={i} />
+        ))}
+      </div>
+      <div className="grid gap-4 sm:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <IndicadorSkeleton key={i} />
+        ))}
+      </div>
+      <Card padded={false}>
+        <CardHeader>
+          <CardTitle>Por servicio</CardTitle>
+        </CardHeader>
+        <CardContent padded={false}>
+          <TablaSkeleton columnas={COLUMNAS_SERVICIO} filas={4} />
+        </CardContent>
+      </Card>
+    </div>
+  )
 }
 
 function Indicador({ titulo, valor, tono = 'text-brand-800' }: { titulo: string; valor: string; tono?: string }) {
@@ -65,7 +103,7 @@ export default function EstadisticasClient() {
       </Card>
 
       {cargando ? (
-        <p className="py-10 text-center text-sm text-slate-500">Calculando indicadores...</p>
+        <EstadisticasSkeleton />
       ) : !datos || datos.total.generados === 0 ? (
         <EmptyState
           icon={ChartBar}
@@ -92,9 +130,7 @@ export default function EstadisticasClient() {
               <CardTitle>Por servicio</CardTitle>
             </CardHeader>
             <CardContent padded={false}>
-              <Tabla
-                columnas={['Servicio', 'Generados', 'Atendidos', 'Ausentes', 'Pendientes', 'Espera', 'Atencion']}
-              >
+              <Tabla columnas={COLUMNAS_SERVICIO}>
                 {conMovimiento.map((servicio) => (
                   <tr key={servicio.servicioId} className="hover:bg-slate-50">
                     <td className="px-4 py-3 font-black text-brand-950">{servicio.servicioNombre}</td>

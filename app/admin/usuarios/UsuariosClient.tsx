@@ -15,8 +15,9 @@ import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Interruptor, Seleccion, Tabla } from '@/components/admin/Campos'
+import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
+import { secciones as catalogoSecciones, seccionesDelRol } from '@/lib/permissions/rutas'
 import type { RolUsuario, Usuario } from '@/lib/usuarios/types'
 
 type Formulario = {
@@ -25,9 +26,31 @@ type Formulario = {
   rol: RolUsuario
   area: string
   password: string
+  /** `null` = acceso a todas las secciones de operador. */
+  secciones: string[] | null
 }
 
-const FORMULARIO_VACIO: Formulario = { nombre: '', usuario: '', rol: 'OPERADOR', area: '', password: '' }
+const FORMULARIO_VACIO: Formulario = {
+  nombre: '',
+  usuario: '',
+  rol: 'OPERADOR',
+  area: '',
+  password: '',
+  secciones: null,
+}
+
+/** Secciones marcables, agrupadas como en el menu. */
+const gruposDePermisos = catalogoSecciones.reduce<Array<{ grupo: string; items: typeof catalogoSecciones }>>(
+  (grupos, seccion) => {
+    const existente = grupos.find((g) => g.grupo === seccion.grupo)
+    if (existente) existente.items.push(seccion)
+    else grupos.push({ grupo: seccion.grupo, items: [seccion] })
+    return grupos
+  },
+  [],
+)
+
+const COLUMNAS = ['Nombre', 'Usuario', 'Rol', 'Area', 'Creado', 'Estado']
 
 const etiquetaRol: Record<RolUsuario, string> = {
   ADMINISTRADOR: 'Administrador',
@@ -77,21 +100,31 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
       rol: usuario.rol,
       area: usuario.area ?? '',
       password: '',
+      secciones: usuario.secciones ?? null,
     })
     setAbierto(true)
   }
 
   async function guardar(evento: React.FormEvent) {
     evento.preventDefault()
+
+    if (formulario.rol === 'OPERADOR' && formulario.secciones && formulario.secciones.length === 0) {
+      toast.error('Selecciona al menos una seccion', 'El operador necesita acceso a algo para poder trabajar.')
+      return
+    }
+
     setGuardando(true)
 
     try {
+      const secciones = formulario.rol === 'OPERADOR' ? formulario.secciones : null
+
       if (editando) {
         const cuerpo: Record<string, unknown> = {
           nombre: formulario.nombre,
           usuario: formulario.usuario,
           rol: formulario.rol,
           area: formulario.area || null,
+          secciones,
         }
         // La contrasena solo se envia si el administrador escribio una nueva.
         if (formulario.password) cuerpo.password = formulario.password
@@ -101,7 +134,7 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
       } else {
         await pedir('/api/usuarios', {
           method: 'POST',
-          body: JSON.stringify({ ...formulario, area: formulario.area || null }),
+          body: JSON.stringify({ ...formulario, area: formulario.area || null, secciones }),
         })
         toast.success('Usuario creado', `${formulario.nombre} ya puede iniciar sesion.`)
       }
@@ -136,17 +169,21 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
         </CardHeader>
         <CardContent padded={false}>
           {cargando ? (
-            <p className="px-5 py-10 text-center text-sm text-slate-500">Cargando usuarios...</p>
+            <TablaSkeleton columnas={COLUMNAS} filas={4} />
           ) : usuarios.length === 0 ? (
             <div className="p-5">
               <EmptyState icon={UsersThree} title="Sin usuarios" description="Crea las cuentas de los funcionarios." />
             </div>
           ) : (
-            <Tabla columnas={['Nombre', 'Usuario', 'Rol', 'Area', 'Creado', 'Estado', '']}>
+            <Tabla columnas={COLUMNAS}>
               {usuarios.map((usuario) => {
                 const esYo = usuario.id === usuarioActualId
                 return (
-                  <tr key={usuario.id} className="hover:bg-slate-50">
+                  <tr
+                    key={usuario.id}
+                    onClick={() => abrirEdicion(usuario)}
+                    className="cursor-pointer hover:bg-slate-50"
+                  >
                     <td className="px-4 py-3 font-black text-brand-950">
                       {usuario.nombre}
                       {esYo ? <span className="ml-2 text-xs font-bold text-slate-400">(tu cuenta)</span> : null}
@@ -159,7 +196,7 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
                     </td>
                     <td className="px-4 py-3 text-slate-600">{usuario.area ?? '—'}</td>
                     <td className="px-4 py-3 text-slate-500">{fechaCorta(usuario.fechaCreacion)}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-3">
                         <Interruptor
                           activo={usuario.activo}
@@ -171,11 +208,6 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
                           {usuario.activo ? 'Activo' : 'Inactivo'}
                         </Badge>
                       </div>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <Button size="sm" variant="secondary" onClick={() => abrirEdicion(usuario)}>
-                        Editar
-                      </Button>
                     </td>
                   </tr>
                 )
@@ -233,6 +265,76 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
               placeholder="Facturacion"
             />
           </Campo>
+
+          {formulario.rol === 'OPERADOR' ? (
+            <div className="rounded-xl border border-slate-200 p-3.5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-wide text-slate-600">Secciones que puede usar</p>
+                  <p className="mt-0.5 text-xs font-medium text-slate-400">
+                    Deja el interruptor encendido para darle solo las secciones de operador, o apagalo para
+                    elegir a mano, incluidas las de administracion.
+                  </p>
+                </div>
+                <Interruptor
+                  activo={formulario.secciones === null}
+                  onChange={(valor) =>
+                    setFormulario((f) => ({
+                      ...f,
+                      // Al pasar a manual, se parte de las secciones propias de
+                      // su rol: quitarle todo de golpe seria un mal comienzo.
+                      secciones: valor ? null : seccionesDelRol('OPERADOR').map((s) => s.href),
+                    }))
+                  }
+                  etiqueta="Secciones de operador por defecto"
+                />
+              </div>
+
+              {formulario.secciones === null ? (
+                <p className="mt-3 text-sm font-semibold text-brand-700">
+                  Acceso a todas las secciones de operador.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {gruposDePermisos.map(({ grupo, items }) => (
+                    <div key={grupo}>
+                      <p className="mb-1.5 text-[11px] font-black uppercase tracking-wide text-slate-400">
+                        {grupo}
+                        {items[0].rol === 'ADMINISTRADOR' ? ' · administracion' : ''}
+                      </p>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {items.map((item) => {
+                          const marcado = formulario.secciones?.includes(item.href) ?? false
+                          return (
+                            <label
+                              key={item.href}
+                              className="flex items-center gap-2.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 has-[:checked]:border-brand-500 has-[:checked]:bg-brand-50"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={marcado}
+                                onChange={(e) =>
+                                  setFormulario((f) => {
+                                    const actuales = f.secciones ?? []
+                                    const siguientes = e.target.checked
+                                      ? [...actuales, item.href]
+                                      : actuales.filter((href) => href !== item.href)
+                                    return { ...f, secciones: siguientes }
+                                  })
+                                }
+                                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                              />
+                              {item.label}
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
 
           <Campo
             etiqueta={editando ? 'Nueva contrasena' : 'Contrasena'}

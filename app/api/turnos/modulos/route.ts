@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { apiError, requireRol, requireSeccion } from '@/lib/permissions/session'
 
 export async function GET(request: Request) {
   try {
@@ -24,7 +24,7 @@ const moduloSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireRol(['ADMINISTRADOR'])
+    await requireSeccion('/admin/modulos')
 
     const body = await request.json().catch(() => null)
     const parsed = moduloSchema.safeParse(body)

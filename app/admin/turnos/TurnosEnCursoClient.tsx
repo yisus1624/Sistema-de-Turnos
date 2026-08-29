@@ -13,6 +13,7 @@ import { Ticket } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
+import { Skeleton } from '@/components/ui/Loader'
 import { horaCorta, pedir } from '@/lib/api/cliente'
 import type { CasillaPantalla, Servicio, Turno } from '@/lib/turnos/types'
 
@@ -78,7 +79,54 @@ export default function TurnosEnCursoClient() {
   const ocupados = casillas.filter((c) => c.codigo)
 
   if (cargando) {
-    return <p className="py-10 text-center text-sm text-slate-500">Cargando la operacion del dia...</p>
+    return (
+      <div className="space-y-6" aria-busy="true" aria-label="Cargando la operacion del dia">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i} className="text-center">
+              <Skeleton className="mx-auto h-3 w-24" />
+              <Skeleton className="mx-auto mt-2 h-9 w-14" />
+            </Card>
+          ))}
+        </div>
+
+        <Card padded={false}>
+          <CardHeader>
+            <CardTitle>Puntos de atencion</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <Skeleton className="h-3 w-32" />
+                  <Skeleton className="mt-2 h-8 w-24" />
+                  <Skeleton className="mt-2 h-3 w-40 max-w-full" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card padded={false}>
+          <CardHeader>
+            <CardTitle>En espera por servicio</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3"
+                >
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-6 w-8" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (

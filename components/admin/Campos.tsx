@@ -72,6 +72,38 @@ export function Interruptor({
   )
 }
 
+/**
+ * Tabla en carga: la misma cabecera con filas grises que laten.
+ *
+ * Se dibuja con las columnas reales para que la fila no salte de ancho cuando
+ * llegan los datos.
+ */
+export function TablaSkeleton({ columnas, filas = 6 }: { columnas: string[]; filas?: number }) {
+  // Anchos variados: una tabla de barras identicas no se lee como una tabla.
+  const anchos = ['w-24', 'w-36', 'w-28', 'w-20', 'w-32', 'w-16']
+
+  return (
+    <div aria-busy="true" aria-label="Cargando informacion">
+      <Tabla columnas={columnas}>
+        {Array.from({ length: filas }).map((_, fila) => (
+          <tr key={fila}>
+            {columnas.map((_columna, columna) => (
+              <td key={columna} className="px-4 py-3.5">
+                <span
+                  className={cn(
+                    'block h-4 animate-pulse rounded-md bg-slate-200/80',
+                    anchos[(fila + columna) % anchos.length],
+                  )}
+                />
+              </td>
+            ))}
+          </tr>
+        ))}
+      </Tabla>
+    </div>
+  )
+}
+
 /** Tabla con scroll horizontal y cabecera consistente. */
 export function Tabla({ columnas, children }: { columnas: string[]; children: React.ReactNode }) {
   return (

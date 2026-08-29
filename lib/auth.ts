@@ -72,6 +72,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           usuario: encontrado.usuario,
           rol: encontrado.rol,
           area: encontrado.area,
+          secciones: encontrado.secciones ?? null,
         }
       },
     }),
@@ -90,6 +91,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.usuario = actual.usuario
         token.rol = actual.rol
         token.area = actual.area
+        token.secciones = actual.secciones ?? null
       }
 
       return token
@@ -100,6 +102,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       session.user.usuario = token.usuario as string
       session.user.rol = token.rol as RolUsuario
       session.user.area = token.area as string | null
+      session.user.secciones = (token.secciones as string[] | null) ?? null
       return session
     },
   },

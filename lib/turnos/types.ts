@@ -200,6 +200,9 @@ export interface ItemAgendaProfesional {
 /** Filtros para consultar el historico (requerimiento seccion 18). */
 export interface FiltroHistorico {
   fecha?: string
+  /** Rango de fechas (inclusive), alternativo a `fecha`. Usado en reportes. */
+  fechaDesde?: string
+  fechaHasta?: string
   servicioId?: string
   codigo?: string
   estado?: EstadoTurno

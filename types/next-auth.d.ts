@@ -8,6 +8,8 @@ declare module 'next-auth' {
       usuario: string
       rol: RolUsuario
       area: string | null
+      /** Secciones del menu permitidas para OPERADOR; `null` = todas. */
+      secciones: string[] | null
     } & DefaultSession['user']
   }
 
@@ -15,6 +17,7 @@ declare module 'next-auth' {
     usuario: string
     rol: RolUsuario
     area: string | null
+    secciones?: string[] | null
   }
 }
 
@@ -23,5 +26,6 @@ declare module 'next-auth/jwt' {
     usuario: string
     rol: RolUsuario
     area: string | null
+    secciones?: string[] | null
   }
 }

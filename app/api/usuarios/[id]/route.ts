@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { usuarioRepository } from '@/lib/usuarios/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 
 const cambioSchema = z.object({
@@ -17,11 +17,12 @@ const cambioSchema = z.object({
   area: z.string().trim().max(60).nullable().optional(),
   activo: z.boolean().optional(),
   password: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.').optional(),
+  secciones: z.array(z.string()).nullable().optional(),
 })
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const session = await requireRol(['ADMINISTRADOR'])
+    const session = await requireSeccion('/admin/usuarios')
     const { id } = await context.params
 
     const body = await request.json().catch(() => null)
@@ -37,6 +38,28 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         { error: 'No puedes quitarte a ti mismo el acceso de administrador.' },
         { status: 400 },
       )
+    }
+
+    // Solo un administrador reparte roles y permisos. Un operador al que le
+    // dieron la seccion de usuarios administra cuentas, pero no puede
+    // ascenderse a si mismo ni ampliarse los permisos.
+    if (session.user.rol !== 'ADMINISTRADOR') {
+      if (parsed.data.rol === 'ADMINISTRADOR') {
+        return NextResponse.json(
+          { error: 'Solo un administrador puede asignar el rol de administrador.' },
+          { status: 403 },
+        )
+      }
+      if (id === session.user.id && (parsed.data.secciones !== undefined || parsed.data.rol !== undefined)) {
+        return NextResponse.json(
+          { error: 'No puedes cambiar tu propio rol ni tus propios permisos.' },
+          { status: 403 },
+        )
+      }
+    }
+
+    if (parsed.data.rol === 'OPERADOR' && parsed.data.secciones && parsed.data.secciones.length === 0) {
+      return NextResponse.json({ error: 'Selecciona al menos una seccion para el operador.' }, { status: 400 })
     }
 
     const usuario = await usuarioRepository.actualizar(id, parsed.data)

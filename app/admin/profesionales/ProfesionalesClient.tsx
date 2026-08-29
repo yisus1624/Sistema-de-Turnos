@@ -16,9 +16,11 @@ import Modal from '@/components/ui/Modal'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Tabla } from '@/components/admin/Campos'
+import { Campo, Entrada, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { AccesoProfesional, Modulo, Profesional, Servicio } from '@/lib/turnos/types'
+
+const COLUMNAS = ['Profesional', 'Servicio', 'Consultorio', 'Enlace', '']
 
 type EstadoAcceso = 'vigente' | 'vencido' | 'revocado' | 'sin_enlace'
 
@@ -268,7 +270,7 @@ export default function ProfesionalesClient() {
         </CardHeader>
         <CardContent padded={false}>
           {cargando ? (
-            <p className="px-5 py-10 text-center text-sm text-slate-500">Cargando profesionales...</p>
+            <TablaSkeleton columnas={COLUMNAS} />
           ) : profesionales.length === 0 ? (
             <div className="p-5">
               <EmptyState
@@ -278,7 +280,7 @@ export default function ProfesionalesClient() {
               />
             </div>
           ) : (
-            <Tabla columnas={['Profesional', 'Servicio', 'Consultorio', 'Enlace', '']}>
+            <Tabla columnas={COLUMNAS}>
               {profesionales.map((profesional) => {
                 const acceso = ultimoAccesoDe(profesional.id)
                 const estado = estadoDelAcceso(acceso)

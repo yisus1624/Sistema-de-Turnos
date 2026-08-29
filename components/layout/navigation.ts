@@ -3,6 +3,7 @@ import {
   CalendarPlus,
   ChartBar,
   ClockCounterClockwise,
+  FileText,
   Flask,
   Gear,
   Megaphone,
@@ -13,14 +14,10 @@ import {
   UserFocus,
   UsersThree,
 } from '@phosphor-icons/react'
+import { puedeVerSeccion, secciones, type SeccionSistema } from '@/lib/permissions/rutas'
 import type { RolUsuario } from '@/lib/usuarios/types'
 
-export type NavItem = {
-  label: string
-  href: string
-  icon: Icon
-  badge?: string
-}
+export type NavItem = SeccionSistema & { icon: Icon }
 
 export type NavSection = {
   label: string
@@ -33,49 +30,48 @@ export const rolLabels: Record<RolUsuario, string> = {
 }
 
 /**
- * Menu por rol segun el requerimiento:
- *   - Administrador (seccion 6.1): usuarios, servicios, modulos, prefijos,
- *     historico, estadisticas y parametros generales.
- *   - Operador (seccion 6.2): llamar turnos y consultar los ya llamados.
+ * Icono de cada seccion. El catalogo (href, etiqueta, grupo, rol) vive en
+ * `lib/permissions/rutas.ts`; aqui solo se le pone la cara, porque los iconos
+ * no se pueden importar desde el servidor.
  */
-export const rolNav: Record<RolUsuario, NavSection[]> = {
-  ADMINISTRADOR: [
-    {
-      label: 'Operacion',
-      items: [
-        { label: 'Turnos en curso', href: '/admin/turnos', icon: Ticket },
-        { label: 'Historico', href: '/admin/historico', icon: ClockCounterClockwise },
-        { label: 'Estadisticas', href: '/admin/estadisticas', icon: ChartBar },
-      ],
-    },
-    {
-      label: 'Configuracion',
-      items: [
-        { label: 'Servicios', href: '/admin/servicios', icon: Stack },
-        { label: 'Modulos y ventanillas', href: '/admin/modulos', icon: Gear },
-        { label: 'Profesionales', href: '/admin/profesionales', icon: Stethoscope },
-        { label: 'Usuarios', href: '/admin/usuarios', icon: UsersThree },
-        { label: 'Pantalla y audio', href: '/admin/pantalla', icon: MonitorPlay },
-      ],
-    },
-    {
-      label: 'Pruebas',
-      items: [{ label: 'Simulacion de carga', href: '/admin/pruebas', icon: Flask }],
-    },
-  ],
-  OPERADOR: [
-    {
-      label: 'Atencion',
-      items: [
-        { label: 'Agenda de citas', href: '/operador/agenda', icon: CalendarPlus },
-        { label: 'Registro de llegada', href: '/operador/admisiones', icon: UserFocus },
-        { label: 'Llamado de turnos', href: '/operador', icon: Megaphone },
-        { label: 'Historico', href: '/operador/historico', icon: ClockCounterClockwise },
-      ],
-    },
-  ],
+const iconos: Record<string, Icon> = {
+  '/admin/turnos': Ticket,
+  '/admin/historico': ClockCounterClockwise,
+  '/admin/estadisticas': ChartBar,
+  '/admin/reportes': FileText,
+  '/admin/servicios': Stack,
+  '/admin/modulos': Gear,
+  '/admin/profesionales': Stethoscope,
+  '/admin/usuarios': UsersThree,
+  '/admin/pantalla': MonitorPlay,
+  '/admin/pruebas': Flask,
+  '/operador/agenda': CalendarPlus,
+  '/operador/admisiones': UserFocus,
+  '/operador': Megaphone,
+  '/operador/historico': ClockCounterClockwise,
 }
 
-export function rutasDelRol(rol: RolUsuario) {
-  return rolNav[rol].flatMap((section) => section.items)
+/** Icono de respaldo: una seccion sin icono no debe romper el menu. */
+const ICONO_POR_DEFECTO: Icon = Ticket
+
+/**
+ * Menu que le corresponde a un usuario, agrupado como en el catalogo.
+ *
+ * Se recorren TODAS las secciones (no solo las del rol) porque a un operador se
+ * le puede haber dado una seccion de administracion; `puedeVerSeccion` decide
+ * cual entra. Los grupos que quedan vacios no se devuelven.
+ */
+export function navDelUsuario(rol: RolUsuario, seccionesDelUsuario?: string[] | null): NavSection[] {
+  const grupos: NavSection[] = []
+
+  for (const seccion of secciones) {
+    if (!puedeVerSeccion(rol, seccionesDelUsuario, seccion.href)) continue
+
+    const item: NavItem = { ...seccion, icon: iconos[seccion.href] ?? ICONO_POR_DEFECTO }
+    const grupo = grupos.find((g) => g.label === seccion.grupo)
+    if (grupo) grupo.items.push(item)
+    else grupos.push({ label: seccion.grupo, items: [item] })
+  }
+
+  return grupos
 }

@@ -16,9 +16,11 @@ import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Interruptor, Seleccion, Tabla } from '@/components/admin/Campos'
+import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { ModoFila, Servicio } from '@/lib/turnos/types'
+
+const COLUMNAS = ['Servicio', 'Prefijo', 'Modo de fila', 'Estado']
 
 type Formulario = {
   nombre: string
@@ -119,7 +121,7 @@ export default function ServiciosClient() {
         </CardHeader>
         <CardContent padded={false}>
           {cargando ? (
-            <p className="px-5 py-10 text-center text-sm text-slate-500">Cargando servicios...</p>
+            <TablaSkeleton columnas={COLUMNAS} />
           ) : servicios.length === 0 ? (
             <div className="p-5">
               <EmptyState
@@ -129,9 +131,13 @@ export default function ServiciosClient() {
               />
             </div>
           ) : (
-            <Tabla columnas={['Servicio', 'Prefijo', 'Modo de fila', 'Estado', '']}>
+            <Tabla columnas={COLUMNAS}>
               {servicios.map((servicio) => (
-                <tr key={servicio.id} className="hover:bg-slate-50">
+                <tr
+                  key={servicio.id}
+                  onClick={() => abrirEdicion(servicio)}
+                  className="cursor-pointer hover:bg-slate-50"
+                >
                   <td className="px-4 py-3 font-black text-brand-950">{servicio.nombre}</td>
                   <td className="px-4 py-3">
                     <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-black text-slate-700">
@@ -139,7 +145,7 @@ export default function ServiciosClient() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-slate-600">{etiquetaModo[servicio.modoFila]}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-3">
                       <Interruptor
                         activo={servicio.activo}
@@ -150,11 +156,6 @@ export default function ServiciosClient() {
                         {servicio.activo ? 'Activo' : 'Inactivo'}
                       </Badge>
                     </div>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <Button size="sm" variant="secondary" onClick={() => abrirEdicion(servicio)}>
-                      Editar
-                    </Button>
                   </td>
                 </tr>
               ))}

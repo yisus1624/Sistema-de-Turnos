@@ -5,7 +5,7 @@ export const metadata = { title: 'Historico de turnos' }
 
 export default function Pagina() {
   return (
-    <RoleShell rol="ADMINISTRADOR" title="Historico de turnos" description="Consulta de turnos generados y atendidos, con filtros por fecha, servicio, modulo, estado y codigo.">
+    <RoleShell rol="ADMINISTRADOR" seccion="/admin/historico" title="Historico de turnos" description="Consulta de turnos generados y atendidos, con filtros por fecha, servicio, modulo, estado y codigo.">
       <HistoricoTurnos completo />
     </RoleShell>
   )

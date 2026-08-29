@@ -7,6 +7,7 @@ export default function AdmisionesPage() {
   return (
     <RoleShell
       rol="OPERADOR"
+      seccion="/operador/admisiones"
       title="Registro de llegada"
       description="Busca al paciente por su documento y confirma que llego. Desde ese momento aparece en la fila de su profesional."
     >

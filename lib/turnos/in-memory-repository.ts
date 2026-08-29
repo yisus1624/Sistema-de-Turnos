@@ -616,6 +616,8 @@ export class InMemoryTurnoRepository implements TurnoRepository {
         if (filtro.funcionarioId && t.funcionarioId !== filtro.funcionarioId) return false
         if (filtro.profesionalId && t.profesionalId !== filtro.profesionalId) return false
         if (filtro.fecha && diaColombia(t.fechaGeneracion) !== filtro.fecha) return false
+        if (filtro.fechaDesde && diaColombia(t.fechaGeneracion) < filtro.fechaDesde) return false
+        if (filtro.fechaHasta && diaColombia(t.fechaGeneracion) > filtro.fechaHasta) return false
         return true
       })
       .sort((a, b) => new Date(b.fechaGeneracion).getTime() - new Date(a.fechaGeneracion).getTime())
