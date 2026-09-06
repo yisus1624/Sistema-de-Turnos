@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import { errorConsultorio, requireProfesionalPorToken } from '@/lib/turnos/acceso-consultorio'
 
 const bodySchema = z.object({

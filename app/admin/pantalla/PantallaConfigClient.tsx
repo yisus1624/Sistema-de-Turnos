@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { ArrowSquareOut, MonitorPlay } from '@phosphor-icons/react/dist/ssr'
+import { ArrowSquareOut, MonitorPlay, SpeakerHigh } from '@phosphor-icons/react/dist/ssr'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -14,14 +14,15 @@ import { Skeleton } from '@/components/ui/Loader'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
-import type { ConfiguracionPantalla } from '@/lib/turnos/types'
+import { sonarCampana } from '@/lib/turnos/anuncio'
+import type { ConfiguracionSistema } from '@/lib/turnos/types'
 
 export default function PantallaConfigClient() {
-  const [configuracion, setConfiguracion] = useState<ConfiguracionPantalla | null>(null)
+  const [configuracion, setConfiguracion] = useState<ConfiguracionSistema | null>(null)
   const [guardando, setGuardando] = useState(false)
 
   useEffect(() => {
-    pedir<{ configuracion: ConfiguracionPantalla }>('/api/turnos/configuracion')
+    pedir<{ configuracion: ConfiguracionSistema }>('/api/turnos/configuracion')
       .then((data) => setConfiguracion(data.configuracion))
       .catch((error) => toast.error('No se pudo cargar la configuracion', mensajeDeError(error)))
   }, [])
@@ -41,8 +42,27 @@ export default function PantallaConfigClient() {
     }
   }
 
-  function cambiar<C extends keyof ConfiguracionPantalla>(clave: C, valor: ConfiguracionPantalla[C]) {
+  function cambiar<C extends keyof ConfiguracionSistema>(clave: C, valor: ConfiguracionSistema[C]) {
     setConfiguracion((previa) => (previa ? { ...previa, [clave]: valor } : previa))
+  }
+
+  /**
+   * Cuantas consultas caben en una jornada, con la misma regla que usa el
+   * servidor: la ultima tiene que terminar antes del cierre. Es solo una vista
+   * previa para que el administrador vea el efecto de lo que esta cambiando
+   * antes de guardar; la parrilla real la arma `horarioDelDia`.
+   */
+  function cuposDe(desde: string, hasta: string, duracion: number) {
+    const minutos = (hora: string) => {
+      const partes = /^(\d{1,2}):(\d{2})$/.exec(hora ?? '')
+      return partes ? Number(partes[1]) * 60 + Number(partes[2]) : Number.NaN
+    }
+
+    const inicio = minutos(desde)
+    const fin = minutos(hasta)
+    if (!Number.isFinite(inicio) || !Number.isFinite(fin) || duracion < 1) return 0
+
+    return Math.max(0, Math.floor((fin - inicio) / duracion))
   }
 
   if (!configuracion) {
@@ -66,6 +86,18 @@ export default function PantallaConfigClient() {
       </div>
     )
   }
+
+  const cuposManana = cuposDe(
+    configuracion.jornadaMananaInicio,
+    configuracion.jornadaMananaFin,
+    configuracion.duracionCitaMinutos,
+  )
+  const cuposTarde = cuposDe(
+    configuracion.jornadaTardeInicio,
+    configuracion.jornadaTardeFin,
+    configuracion.duracionCitaMinutos,
+  )
+  const cupos = cuposManana + cuposTarde
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -92,12 +124,12 @@ export default function PantallaConfigClient() {
       <form onSubmit={guardar}>
         <Card padded={false}>
           <CardHeader>
-            <CardTitle>Llamado por audio</CardTitle>
+            <CardTitle>Sonido del llamado</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <p className="text-sm font-black text-slate-800">Anunciar por voz</p>
+                <p className="text-sm font-black text-slate-800">Sonar en cada llamado</p>
                 <p className="text-xs text-slate-500">
                   Si se apaga, la pantalla sigue mostrando los turnos pero en silencio.
                 </p>
@@ -105,45 +137,43 @@ export default function PantallaConfigClient() {
               <Interruptor
                 activo={configuracion.audioActivo}
                 onChange={(valor) => cambiar('audioActivo', valor)}
-                etiqueta="Anunciar por voz"
+                etiqueta="Sonar en cada llamado"
               />
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Campo etiqueta="Repeticiones" ayuda="Cuantas veces se repite cada anuncio.">
-                <Seleccion
-                  value={String(configuracion.repeticionesAudio)}
-                  onChange={(e) => cambiar('repeticionesAudio', Number(e.target.value))}
-                  disabled={!configuracion.audioActivo}
-                >
-                  <option value="1">Una vez</option>
-                  <option value="2">Dos veces</option>
-                  <option value="3">Tres veces</option>
-                </Seleccion>
-              </Campo>
+            <Campo etiqueta={`Volumen (${Math.round(configuracion.volumen * 100)}%)`}>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={Math.round(configuracion.volumen * 100)}
+                onChange={(e) => cambiar('volumen', Number(e.target.value) / 100)}
+                disabled={!configuracion.audioActivo}
+                className="h-11 w-full accent-brand-600"
+                aria-label="Volumen del llamado"
+              />
+            </Campo>
 
-              <Campo etiqueta={`Volumen (${Math.round(configuracion.volumen * 100)}%)`}>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={5}
-                  value={Math.round(configuracion.volumen * 100)}
-                  onChange={(e) => cambiar('volumen', Number(e.target.value) / 100)}
-                  disabled={!configuracion.audioActivo}
-                  className="h-11 w-full accent-brand-600"
-                  aria-label="Volumen del llamado"
-                />
-              </Campo>
+            <div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => sonarCampana(configuracion.volumen)}
+                disabled={!configuracion.audioActivo}
+              >
+                <SpeakerHigh size={17} weight="bold" />
+                Probar sonido
+              </Button>
             </div>
 
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-              <strong className="font-black">Sobre la voz:</strong> el llamado se lee siempre en español,
-              prefiriendo la voz de Colombia; nunca se usa una voz inglesa. Si el televisor no tiene voz en
-              español, solo suena la campana. Para asegurar la voz colombiana en ese equipo: abre la pantalla
-              en Microsoft Edge, o ejecuta una vez el archivo{' '}
-              <span className="font-mono font-bold">scripts/instalar-voz-colombia.ps1</span> del proyecto. La
-              campana suena siempre que el audio este activo, tenga o no voz.
+            <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+              Cada vez que un doctor o una ventanilla pasa al siguiente paciente suena una campanita corta,
+              igual para todos. No se lee el turno en voz alta: la voz tardaba varios segundos por llamado y,
+              cuando varios consultorios pasaban paciente casi al tiempo, el audio se quedaba atras de lo que
+              ya mostraba la pantalla. El turno y el consultorio se leen en la pantalla, que es donde
+              siempre estuvo la informacion completa.
             </div>
           </CardContent>
         </Card>
@@ -153,19 +183,14 @@ export default function PantallaConfigClient() {
             <CardTitle>Pantalla</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Campo etiqueta="Llamados recientes visibles" ayuda="Cuantos turnos se listan en la columna izquierda.">
-              <Seleccion
-                value={String(configuracion.ultimosVisibles)}
-                onChange={(e) => cambiar('ultimosVisibles', Number(e.target.value))}
-              >
-                {[3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </Seleccion>
-            </Campo>
-
+            {/*
+              Aqui habia un ajuste de "llamados recientes visibles", para una
+              columna lateral que el rediseño de la pantalla quito: se podia
+              cambiar y no hacia absolutamente nada. Un control que no mueve
+              nada es peor que no tenerlo, porque el administrador cree haber
+              configurado algo. El parametro sigue en el sistema por si esa
+              lista vuelve; lo que se quita es la promesa falsa.
+            */}
             <Campo etiqueta="Mensaje al pie" ayuda="Texto institucional que se muestra abajo. Dejalo vacio para ocultarlo.">
               <Entrada
                 value={configuracion.mensajePie}
@@ -179,22 +204,87 @@ export default function PantallaConfigClient() {
 
         <Card padded={false} className="mt-6">
           <CardHeader>
-            <CardTitle>Citas</CardTitle>
+            <CardTitle>Agenda y horarios</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-5">
             <Campo
-              etiqueta="Maximo de citas por profesional al dia"
-              ayuda="Tope de citas que el operador puede agendarle a un mismo doctor en un dia (su turno). 0 = sin limite."
+              etiqueta="Duracion de cada consulta"
+              ayuda="Es el alto de cada franja del horario. De aqui sale cuantos pacientes caben por doctor."
             >
-              <Entrada
-                type="number"
-                min={0}
-                max={200}
-                value={String(configuracion.maxCitasPorProfesional)}
-                onChange={(e) => cambiar('maxCitasPorProfesional', Math.max(0, Number(e.target.value) || 0))}
-                className="max-w-[140px]"
-              />
+              <Seleccion
+                value={String(configuracion.duracionCitaMinutos)}
+                onChange={(e) => cambiar('duracionCitaMinutos', Number(e.target.value))}
+                className="max-w-[220px]"
+              >
+                {[10, 15, 20, 30, 45, 60].map((minutos) => (
+                  <option key={minutos} value={minutos}>
+                    {minutos} minutos
+                  </option>
+                ))}
+              </Seleccion>
             </Campo>
+
+            <div>
+              <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-600">
+                Jornada de la mañana
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Campo etiqueta="Desde">
+                  <Entrada
+                    type="time"
+                    value={configuracion.jornadaMananaInicio}
+                    onChange={(e) => cambiar('jornadaMananaInicio', e.target.value)}
+                  />
+                </Campo>
+                <Campo etiqueta="Hasta">
+                  <Entrada
+                    type="time"
+                    value={configuracion.jornadaMananaFin}
+                    onChange={(e) => cambiar('jornadaMananaFin', e.target.value)}
+                  />
+                </Campo>
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-600">
+                Jornada de la tarde
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Campo etiqueta="Desde">
+                  <Entrada
+                    type="time"
+                    value={configuracion.jornadaTardeInicio}
+                    onChange={(e) => cambiar('jornadaTardeInicio', e.target.value)}
+                  />
+                </Campo>
+                <Campo etiqueta="Hasta">
+                  <Entrada
+                    type="time"
+                    value={configuracion.jornadaTardeFin}
+                    onChange={(e) => cambiar('jornadaTardeFin', e.target.value)}
+                  />
+                </Campo>
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+              {cupos > 0 ? (
+                <>
+                  Con esta configuracion, un doctor de jornada completa tiene{' '}
+                  <strong className="font-black text-brand-800">{cupos} cupos</strong> al dia:{' '}
+                  {cuposManana} en la mañana y {cuposTarde} en la tarde. Ese es el tope de citas por doctor;
+                  no hay que fijarlo aparte, la ultima cita de cada jornada es la que alcanza a terminar
+                  antes del cierre. En que jornada trabaja cada doctor se define en{' '}
+                  <strong className="font-black">Profesionales</strong>.
+                </>
+              ) : (
+                <span className="font-bold text-red-600">
+                  Con estas horas no cabe ninguna consulta. Revisa que cada jornada termine despues de
+                  empezar y que dure al menos lo que dura una consulta.
+                </span>
+              )}
+            </div>
           </CardContent>
         </Card>
 

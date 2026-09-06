@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { signIn } from 'next-auth/react'
 import { useForm } from 'react-hook-form'
 import { Eye, EyeSlash, LockKey, User } from '@phosphor-icons/react'
@@ -11,6 +11,11 @@ import { loginSchema, type LoginInput } from '@/lib/validators/auth'
 
 export default function LoginPage() {
   const router = useRouter()
+  const parametros = useSearchParams()
+  // Llega asi cuando una pantalla recibio un 401 (ver `lib/api/cliente.ts`):
+  // hay que decirle al funcionario por que esta aqui de vuelta, o va a creer
+  // que el sistema se rompio.
+  const sesionExpirada = parametros.get('sesion') === 'expirada'
   const [error, setError] = useState('')
   const [verPassword, setVerPassword] = useState(false)
   const [cargando, setCargando] = useState(false)
@@ -41,7 +46,13 @@ export default function LoginPage() {
       return
     }
 
-    router.replace('/auth/redirect')
+    // Se vuelve a la pantalla donde le caduco la sesion, si venia de una. Solo
+    // rutas internas: un `volverA` con una direccion completa dejaria que un
+    // enlace preparado mandara al funcionario a otro sitio despues de entrar.
+    const volverA = parametros.get('volverA')
+    const destino = volverA && volverA.startsWith('/') && !volverA.startsWith('//') ? volverA : '/auth/redirect'
+
+    router.replace(destino)
     router.refresh()
   }
 
@@ -55,6 +66,15 @@ export default function LoginPage() {
             Acceso para funcionarios del {NOMBRE_INSTITUCION}.
           </p>
         </div>
+
+        {sesionExpirada && !error ? (
+          <div
+            role="status"
+            className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm font-semibold text-amber-800"
+          >
+            Tu sesion se cerro por seguridad. Vuelve a entrar para seguir trabajando.
+          </div>
+        ) : null}
 
         {error ? (
           <div role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm font-semibold text-red-700">

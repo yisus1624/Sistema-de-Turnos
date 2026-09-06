@@ -15,31 +15,57 @@
  * libre o vuelve a llamar.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Clock, CornersIn, CornersOut, SpeakerHigh, SpeakerX, WarningCircle } from '@phosphor-icons/react/dist/ssr'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Clock, CornersIn, CornersOut, SpeakerHigh, SpeakerX } from '@phosphor-icons/react/dist/ssr'
 import type { EventoTurno } from '@/lib/realtime/hub'
-import type { CasillaPantalla, ConfiguracionPantalla } from '@/lib/turnos/types'
-import {
-  ColaDeAnuncios,
-  alCargarVoces,
-  elegirVoz,
-  esVozColombiana,
-  locutorNavegador,
-  sonarCampana,
-  textoAnuncio,
-} from '@/lib/turnos/anuncio'
+import type { CasillaPantalla, ConfiguracionSistema } from '@/lib/turnos/types'
+import { CampanaDeLlamado, sonarCampana } from '@/lib/turnos/anuncio'
 import { Isotipo, NOMBRE_INSTITUCION, NOMBRE_SISTEMA } from '@/components/brand/Marca'
 
 /** Cuanto dura el resalte visual de la casilla recien llamada, en milisegundos. */
 const MS_RESALTE = 8000
 
-const CONFIGURACION_POR_DEFECTO: ConfiguracionPantalla = {
+/**
+ * Cada cuanto se vuelve a pedir el estado completo (casillas y configuracion).
+ *
+ * Un minuto: lo bastante seguido para que un consultorio nuevo o un cambio de
+ * configuracion entren solos, y lo bastante espaciado para no hacerle nada al
+ * servidor. Los llamados siguen llegando al instante por SSE; esto solo repone
+ * lo que los eventos no traen.
+ */
+const MS_RESINCRONIZAR = 60000
+
+const CONFIGURACION_POR_DEFECTO: ConfiguracionSistema = {
   audioActivo: true,
-  repeticionesAudio: 2,
   volumen: 1,
   ultimosVisibles: 5,
   mensajePie: '',
-  maxCitasPorProfesional: 20,
+  // La pantalla no usa los parametros de agenda, pero el tipo es el de la
+  // configuracion completa: se dejan los mismos valores iniciales del servidor.
+  duracionCitaMinutos: 15,
+  jornadaMananaInicio: '07:00',
+  jornadaMananaFin: '12:00',
+  jornadaTardeInicio: '13:00',
+  jornadaTardeFin: '17:00',
+}
+
+/** Ancho minimo comodo de una tarjeta, en pixeles, para que se lea de lejos. */
+const ANCHO_MINIMO_TARJETA = 240
+
+/**
+ * Reparte N tarjetas en una cuadricula lo mas cuadrada posible.
+ *
+ * Se calculan las columnas en vez de dejarselo a `auto-fill` porque el
+ * navegador llena la primera fila hasta el tope y deja la ultima coja: ocho
+ * consultorios en una pantalla que admite seis columnas quedan 6 + 2, con
+ * cuatro huecos enormes. Repartidos a cuatro por fila quedan 4 + 4 y no sobra
+ * espacio, que es lo que se ve bien en un televisor.
+ */
+function distribucionEquilibrada(total: number, maxColumnas: number) {
+  if (total <= 0) return { filas: 1, columnas: 1 }
+
+  const filas = Math.max(1, Math.ceil(total / maxColumnas))
+  return { filas, columnas: Math.ceil(total / filas) }
 }
 
 /** Una casilla "libre" (sin turno) para reponer un modulo cuando se libera. */
@@ -48,7 +74,6 @@ function casillaLibreDesde(casilla: CasillaPantalla): CasillaPantalla {
     ...casilla,
     turnoId: null,
     codigo: null,
-    pacienteVisible: null,
     horaLlamado: null,
     vecesLlamado: 0,
   }
@@ -88,78 +113,80 @@ function Reloj() {
   )
 }
 
-/** Una casilla de la cuadricula: fija en su lugar, solo cambia su contenido. */
-function Casilla({ casilla, resaltada }: { casilla: CasillaPantalla; resaltada: boolean }) {
+/**
+ * Una casilla de la cuadricula: un consultorio o ventanilla, fijo en su lugar.
+ *
+ * La tarjeta responde a las dos unicas preguntas del paciente: QUE TURNO va
+ * (el codigo, enorme, que es ademas lo que suena) y A DONDE ENTRA (el nombre
+ * del consultorio, que es lo que esta escrito en la puerta). El doctor va al
+ * pie, como referencia; nada del paciente aparece aqui.
+ *
+ * Memorizada: cada llamado cambia UNA casilla, pero sin esto se volvian a
+ * dibujar las veinte. En un televisor barato, con animaciones de por medio y la
+ * pagina abierta dias enteros, ese trabajo de mas se nota.
+ */
+const Casilla = memo(function Casilla({ casilla, resaltada }: { casilla: CasillaPantalla; resaltada: boolean }) {
   const ocupada = Boolean(casilla.codigo)
-
-  // Numero suelto del consultorio ("Consultorio 5" -> "5"), para el bloque
-  // secundario de la tarjeta: de un vistazo, sin tener que leer el nombre.
-  const numeroModulo = casilla.moduloNombre.match(/\d+\s*$/)?.[0]?.trim()
 
   return (
     <div
-      className={`flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_10px_rgba(10,38,52,.08)] ring-1 transition-all duration-500 ${
-        ocupada
-          ? resaltada
-            ? 'ring-2 ring-emerald-400 motion-safe:animate-[pulse_1s_ease-in-out_2]'
-            : 'ring-slate-200'
+      className={`flex h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_10px_rgba(10,38,52,.08)] ring-1 transition-all duration-500 ${
+        ocupada && resaltada
+          ? 'ring-2 ring-emerald-400 motion-safe:animate-[pulse_1s_ease-in-out_2]'
           : 'ring-slate-200'
       }`}
     >
+      {/*
+        El nombre del consultorio es lo que orienta al paciente: en el hospital
+        la especialidad esta en el rotulo de la puerta ("CONS 03 - P y M"), asi
+        que se muestra completo y no un numero suelto. Se deja envolver en dos
+        lineas antes que recortarlo.
+      */}
       <div
-        className={`shrink-0 truncate px-3 py-1.5 text-center text-[clamp(0.65rem,calc(1.6vmin*var(--escala)),1rem)] font-black uppercase tracking-wide ${
-          ocupada ? 'bg-slate-100 text-brand-900' : 'bg-slate-100 text-slate-400'
+        className={`shrink-0 px-3 py-2.5 text-center text-[clamp(0.85rem,calc(2.7vmin*var(--escala)),2.1rem)] font-black uppercase leading-tight tracking-wide ${
+          ocupada ? 'bg-brand-100 text-brand-900' : 'bg-slate-100 text-slate-400'
         }`}
       >
-        {/* El numero del consultorio ya se ve grande abajo; aqui basta con
-            quien atiende (o el nombre del modulo si es una ventanilla). */}
-        {casilla.profesionalNombre ?? casilla.moduloNombre}
+        <span className="line-clamp-2 text-balance">{casilla.moduloNombre}</span>
       </div>
 
       {ocupada ? (
         <>
-          {/* Franja partida en dos tonos, al estilo de un letrero digital: el
-              turno en el bloque oscuro (lo que se anuncia), el numero del
-              consultorio en el bloque claro (a donde dirigirse). */}
-          <div className="grid grid-cols-[1.7fr_1fr]">
-            <div className="grid place-items-center bg-brand-950 px-2 py-[clamp(0.4rem,calc(1.6vmin*var(--escala)),1rem)]">
-              <span className="text-[clamp(1.4rem,calc(7vmin*var(--escala)),3.5rem)] font-black leading-none tracking-[-0.03em] text-white">
-                {casilla.codigo}
-              </span>
-            </div>
-            <div className="grid place-items-center bg-brand-600 px-2 py-[clamp(0.4rem,calc(1.6vmin*var(--escala)),1rem)]">
-              <span className="text-[clamp(1.2rem,calc(6vmin*var(--escala)),3rem)] font-black leading-none text-white">
-                {numeroModulo ?? '—'}
-              </span>
-            </div>
+          <div className="grid min-h-0 flex-1 place-items-center bg-brand-950 px-2 py-[clamp(0.5rem,calc(2vmin*var(--escala)),1.4rem)]">
+            <span className="text-[clamp(1.6rem,calc(9vmin*var(--escala)),6rem)] font-black leading-none tracking-[-0.03em] text-white">
+              {casilla.codigo}
+            </span>
           </div>
-          {/* El servicio ya se anuncia en el titulo de la columna, asi que
-              aqui solo va el paciente: menos ruido, letra mas grande. */}
-          <div className="shrink-0 bg-brand-900 px-3 py-2 text-center text-white">
-            <p className="text-balance text-[clamp(0.85rem,calc(2.4vmin*var(--escala)),1.5rem)] font-black leading-tight">
-              {casilla.pacienteVisible ?? casilla.servicioNombre}
-            </p>
-          </div>
+          {casilla.profesionalNombre ? (
+            <div className="shrink-0 bg-brand-900 px-3 py-2 text-center text-white">
+              <p className="truncate text-[clamp(0.8rem,calc(2.7vmin*var(--escala)),2rem)] font-black leading-tight">
+                {casilla.profesionalNombre}
+              </p>
+            </div>
+          ) : null}
         </>
       ) : (
-        <div className="grid place-items-center bg-slate-50 px-3 py-[clamp(0.9rem,calc(3.5vmin*var(--escala)),2rem)]">
-          <span className="text-[clamp(0.75rem,calc(2vmin*var(--escala)),1.15rem)] font-black uppercase tracking-wide text-slate-400">
+        <div className="grid min-h-0 flex-1 place-items-center bg-slate-50 px-3 py-[clamp(1rem,calc(4vmin*var(--escala)),2.4rem)]">
+          <span className="text-[clamp(0.85rem,calc(2.8vmin*var(--escala)),2rem)] font-black uppercase tracking-wide text-slate-400">
             Libre
           </span>
         </div>
       )}
     </div>
   )
-}
+})
 
 export default function PantallaPublicaPage() {
   const [activo, setActivo] = useState(false)
   const [conectado, setConectado] = useState(false)
   const [sonidoActivo, setSonidoActivo] = useState(true)
-  const [voz, setVoz] = useState<SpeechSynthesisVoice | null>(null)
   const [pantallaCompleta, setPantallaCompleta] = useState(false)
+  // Ancho real de la pantalla donde esta puesta, para repartir las tarjetas.
+  // Arranca en un valor de televisor y se corrige al montar: en el servidor no
+  // hay ventana que medir.
+  const [anchoVentana, setAnchoVentana] = useState(1920)
 
-  const [configuracion, setConfiguracion] = useState<ConfiguracionPantalla>(CONFIGURACION_POR_DEFECTO)
+  const [configuracion, setConfiguracion] = useState<ConfiguracionSistema>(CONFIGURACION_POR_DEFECTO)
   // Una entrada por modulo activo, en el mismo orden que entrega el servidor.
   // Nunca se reordena ni se quita por tiempo: solo cambia el contenido de la
   // casilla cuyo modulo llamo o se libero.
@@ -168,31 +195,63 @@ export default function PantallaPublicaPage() {
   // no se queda pegado en el anterior mientras ya se esta llamando a otro.
   const [resaltado, setResaltado] = useState<string | null>(null)
 
-  // Inicializacion perezosa: una sola cola por montaje, sin recrearla en cada render.
-  const [cola] = useState(() => new ColaDeAnuncios(locutorNavegador))
+  // Inicializacion perezosa: una sola campana por montaje, sin recrearla en
+  // cada render. Ella misma reparte la rafaga: si varios consultorios llaman
+  // casi al tiempo, suena una campanada por cada uno, separadas un segundo para
+  // que no se pisen (ver `MS_SEPARACION`).
+  const [campana] = useState(() => new CampanaDeLlamado(sonarCampana))
   const sonidoRef = useRef(sonidoActivo)
-  const vozRef = useRef(voz)
   const configuracionRef = useRef(configuracion)
   const timerResalteRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Cuantos eventos en vivo se han aplicado. Sirve para saber si una
+  // resincronizacion que ya venia de camino quedo obsoleta (ver `cargarEstado`).
+  const eventosAplicadosRef = useRef(0)
+  // Que modulos tiene pintados la pantalla ahora mismo. Sirve para detectar un
+  // llamado de un consultorio que todavia no esta en la cuadricula (ver
+  // `manejarEvento`); se lee desde el manejador de eventos, que no puede
+  // depender del estado sin volver a suscribirse al SSE en cada llamado.
+  const modulosRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     sonidoRef.current = sonidoActivo
-  }, [sonidoActivo])
+    // Al silenciar hay que vaciar la cola: si no, las campanadas que ya estaban
+    // esperando su segundo salen igual despues de pulsar el boton de mudo.
+    if (!sonidoActivo) campana.reiniciar()
+  }, [sonidoActivo, campana])
+
+  // Al cerrar la pantalla no puede quedar ningun temporizador de campana vivo.
   useEffect(() => {
-    vozRef.current = voz
-  }, [voz])
+    return () => campana.reiniciar()
+  }, [campana])
   useEffect(() => {
     configuracionRef.current = configuracion
   }, [configuracion])
+  useEffect(() => {
+    modulosRef.current = new Set(casillas.map((c) => c.moduloId))
+  }, [casillas])
 
-  useEffect(() => alCargarVoces((voces) => setVoz(elegirVoz(voces))), [])
-
+  /**
+   * Resincronizacion completa, sin pisar lo que acaba de pasar.
+   *
+   * La respuesta de esta consulta es una foto del momento en que el servidor la
+   * respondio. Si mientras viajaba llega un llamado por SSE, aplicar la foto
+   * despues BORRA ese llamado de la pantalla: el paciente al que acaban de
+   * llamar desaparece del televisor y no vuelve hasta el siguiente evento de
+   * ese mismo consultorio, que puede tardar toda la consulta. Por eso se cuenta
+   * cuantos eventos se han aplicado: si cambio durante el viaje, las casillas
+   * de la foto se descartan (las de los eventos son mas nuevas) y solo se toma
+   * la configuracion, que ningun evento trae.
+   */
   const cargarEstado = useCallback(() => {
+    const eventosAlPedir = eventosAplicadosRef.current
+
     fetch('/api/turnos/pantalla')
       .then((r) => r.json())
       .then((data) => {
-        setCasillas(data.casillas ?? [])
         if (data.configuracion) setConfiguracion(data.configuracion)
+        if (eventosAplicadosRef.current !== eventosAlPedir) return
+
+        setCasillas(data.casillas ?? [])
       })
       .catch(() => {})
   }, [])
@@ -224,8 +283,23 @@ export default function PantallaPublicaPage() {
   }, [])
 
   const manejarEvento = useCallback((evento: EventoTurno) => {
+    // Se cuenta ANTES de aplicar nada: cualquier resincronizacion que este de
+    // camino trae una foto anterior a este evento y no debe pisarlo.
+    eventosAplicadosRef.current += 1
+
     if (evento.tipo === 'turno.llamado') {
       const { casilla } = evento
+
+      // Un llamado de un modulo que no esta en la cuadricula.
+      //
+      // La cuadricula se arma con los modulos ACTIVOS del momento en que se
+      // pidio el estado. Si el administrador activa un consultorio despues, su
+      // casilla no existe aqui todavia: el `map` de abajo no encuentra a quien
+      // reemplazar, asi que sonaba la campana y en la pantalla no aparecia
+      // nada. El paciente oye que pasa un turno, mira, y no ve su numero por
+      // ningun lado hasta la siguiente resincronizacion, que puede tardar un
+      // minuto. Pedir el estado completo trae la casilla nueva de inmediato.
+      if (!modulosRef.current.has(casilla.moduloId)) cargarEstado()
 
       // Solo se reemplaza la casilla de ESE modulo; las demas quedan intactas.
       setCasillas((previas) =>
@@ -233,17 +307,16 @@ export default function PantallaPublicaPage() {
       )
       resaltar(casilla.moduloId)
 
+      // UNA campanita POR LLAMADO, no una por tanda.
+      //
+      // Si dos o tres consultorios pasan paciente casi al tiempo, sus eventos
+      // llegan aqui con milisegundos de diferencia. La campana se encarga de
+      // separarlos un segundo entre si (ver `MS_SEPARACION`): asi la sala
+      // cuenta de oido cuantos turnos pasaron, en vez de oir las tres campanadas
+      // solapadas como un solo sonido. Que turno es y a que consultorio va lo
+      // sigue diciendo la pantalla.
       if (sonidoRef.current && configuracionRef.current.audioActivo) {
-        // La campana suena SIEMPRE que el audio este activo, tenga o no voz.
-        sonarCampana(configuracionRef.current.volumen)
-
-        // Voz: solo español (se prefiere Colombia). Nunca se lee con voz inglesa;
-        // si el equipo no tiene voz en español, queda solo la campana y el aviso.
-        cola.encolar(textoAnuncio(casilla), {
-          voz: vozRef.current,
-          repeticiones: configuracionRef.current.repeticionesAudio,
-          volumen: configuracionRef.current.volumen,
-        })
+        campana.anunciar(configuracionRef.current.volumen)
       }
       return
     }
@@ -254,7 +327,7 @@ export default function PantallaPublicaPage() {
         previas.map((c) => (c.moduloId === moduloId ? casillaLibreDesde(c) : c)),
       )
     }
-  }, [cola, resaltar])
+  }, [campana, resaltar, cargarEstado])
 
   useEffect(() => {
     if (!activo) return
@@ -278,6 +351,24 @@ export default function PantallaPublicaPage() {
   }, [activo, manejarEvento, cargarEstado])
 
   /**
+   * Resincronizacion periodica.
+   *
+   * Los eventos en vivo solo traen la casilla que cambio, asi que sin esto la
+   * pantalla se quedaba clavada con el estado del momento en que se encendio:
+   * un consultorio nuevo no aparecia nunca, el mensaje al pie y el volumen que
+   * el administrador acababa de guardar no llegaban, y pasada la medianoche
+   * seguian pintadas las casillas del dia anterior. Este televisor lleva dias
+   * encendido sin que nadie lo recargue, que es justo el caso que hay que
+   * cuidar.
+   */
+  useEffect(() => {
+    if (!activo) return
+
+    const id = setInterval(cargarEstado, MS_RESINCRONIZAR)
+    return () => clearInterval(id)
+  }, [activo, cargarEstado])
+
+  /**
    * Pantalla completa real (sin barra de direcciones ni pestañas), que es
    * como debe quedar en el televisor de la sala de espera. El navegador solo
    * la concede dentro de un gesto del usuario, por eso se pide desde un
@@ -299,6 +390,16 @@ export default function PantallaPublicaPage() {
     return () => document.removeEventListener('fullscreenchange', alCambiar)
   }, [])
 
+  // El reparto de las tarjetas depende del ancho: hay que recalcularlo cuando
+  // la pantalla entra o sale de pantalla completa, o si se conecta a un
+  // televisor de otra resolucion.
+  useEffect(() => {
+    const medir = () => setAnchoVentana(window.innerWidth)
+    medir()
+    window.addEventListener('resize', medir)
+    return () => window.removeEventListener('resize', medir)
+  }, [])
+
   function activarPantalla() {
     setActivo(true)
     // Gesto del usuario: desbloquea el autoplay de audio en el navegador y,
@@ -310,11 +411,6 @@ export default function PantallaPublicaPage() {
   /** Deja oir como sonara un llamado, antes de dejar la pantalla en el televisor. */
   function probarSonido() {
     sonarCampana(configuracion.volumen)
-    cola.encolar('Turno de prueba. Por favor dirigirse a Consultorio uno.', {
-      voz,
-      repeticiones: 1,
-      volumen: configuracion.volumen,
-    })
   }
 
   // Agrupadas por servicio (Consulta externa, Odontologia...) para que el
@@ -333,9 +429,39 @@ export default function PantallaPublicaPage() {
     return Array.from(mapa.values())
   }, [casillas])
 
-  if (!activo) {
-    const vozColombiana = esVozColombiana(voz)
+  // Cuantas mas casillas haya, mas angostas y con menos letra, para que
+  // quepan todas sin desbordar la pantalla del televisor. Los limites estan
+  // puestos para que cuatro consultorios se vean grandes y veinte sigan
+  // siendo legibles de lejos.
+  // Cuantas tarjetas caben de ancho, segun el televisor donde este puesta.
+  //
+  // Con tope de seis aunque quepan mas: pasadas seis columnas, las tarjetas se
+  // vuelven tiras finas y bajas que se leen peor de lejos, y ademas la ultima
+  // fila de un bloque pequeño deja muchas celdas libres. Con menos columnas y
+  // mas filas, las tarjetas salen mas grandes y sobra menos sitio.
+  const maxColumnas = Math.min(6, Math.max(1, Math.floor(anchoVentana / ANCHO_MINIMO_TARJETA)))
 
+  // UNA sola cantidad de columnas para todos los bloques, calculada a partir
+  // del bloque mas grande. Si cada bloque eligiera las suyas, un bloque de dos
+  // consultorios repartiria el ancho entre dos y sus tarjetas saldrian del
+  // doble de grandes que las de al lado; con la misma reja para todos, todas
+  // las tarjetas miden igual y solo quedan libres las celdas del final.
+  const columnas = distribucionEquilibrada(
+    Math.max(1, ...grupos.map((g) => g.casillas.length)),
+    maxColumnas,
+  ).columnas
+
+  // Cuantas filas ocupa cada bloque con esa reja, para darle a cada uno el
+  // alto que le corresponde.
+  const filasPorGrupo = grupos.map((grupo) => Math.max(1, Math.ceil(grupo.casillas.length / columnas)))
+  const filasTotales = filasPorGrupo.reduce((suma, filas) => suma + filas, 0) || 1
+
+  // La letra encoge segun cuantas FILAS hay que apilar, no segun cuantas
+  // tarjetas: con las tarjetas estirandose para llenar el alto, lo que aprieta
+  // es el numero de filas.
+  const escala = Math.max(0.55, Math.min(1, 2.5 / filasTotales))
+
+  if (!activo) {
     return (
       <main className="grid min-h-screen place-items-center bg-[var(--turnos-sidebar)] px-6 text-center text-white">
         <div className="max-w-xl space-y-6">
@@ -343,7 +469,8 @@ export default function PantallaPublicaPage() {
           <h1 className="text-3xl font-black tracking-[-0.02em]">Pantalla de turnos</h1>
           <p className="text-brand-100">
             {NOMBRE_INSTITUCION}. Pulsa el boton para activar la pantalla completa y el sonido de los
-            llamados.
+            llamados. En cada turno que pase suena una campanita; el turno y el consultorio se leen en la
+            pantalla.
           </p>
           <button
             onClick={activarPantalla}
@@ -358,23 +485,6 @@ export default function PantallaPublicaPage() {
           >
             Probar sonido
           </button>
-
-          {voz ? (
-            <p className={`text-sm ${vozColombiana ? 'text-brand-200/80' : 'text-amber-300'}`}>
-              {vozColombiana ? 'Voz del llamado: ' : 'Voz del llamado (no es colombiana): '}
-              {voz.name}
-            </p>
-          ) : (
-            <div className="mx-auto flex max-w-md items-start gap-3 rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-left text-sm text-amber-200">
-              <WarningCircle size={22} weight="fill" className="mt-0.5 shrink-0" />
-              <span>
-                Este equipo no tiene voz en español, asi que el llamado sonara solo con la campana (nunca
-                con voz inglesa). Para que hable en español de Colombia: abre esta pantalla en Microsoft
-                Edge, o instala la voz ejecutando el archivo{' '}
-                <span className="font-mono font-bold">scripts/instalar-voz-colombia.ps1</span>.
-              </span>
-            </div>
-          )}
         </div>
       </main>
     )
@@ -422,53 +532,69 @@ export default function PantallaPublicaPage() {
       </header>
 
       {/*
-        Una COLUMNA por servicio (Consulta externa, Odontologia...), para que
-        el paciente busque directo en la columna de su especialidad. TODOS
-        los consultorios activos se muestran siempre, sin esconder ninguno:
-        `--escala` (calculada de la columna mas llena) encoge la letra de
-        cada tarjeta a medida que hay mas, para que sigan cabiendo todas
-        legibles en vez de desbordar la pantalla.
-        Si hay tantos servicios que las columnas no caben en el ancho de la
-        pantalla, se pueden desplazar de lado (nunca se recorta ni desaparece
-        nada): a proposito esta pantalla no rota nada por tiempo (ver
-        comentario del archivo), asi que el desplazamiento manual es la
-        salida segura.
+        UNA SECCION POR SERVICIO, y dentro las tarjetas de sus consultorios
+        fluyendo en cuadricula.
+
+        Antes cada servicio era una COLUMNA, con sus consultorios apilados. Eso
+        se cae con la forma real del hospital: casi todo cuelga de consulta
+        externa, asi que quedaba una sola columna angosta con diez consultorios
+        en fila india y media pantalla vacia. Con `auto-fit` las tarjetas
+        reparten el ancho disponible: diez consultorios de un mismo servicio se
+        ven en dos o tres filas, y si mañana crean otro servicio aparece como
+        una seccion mas, sin tocar codigo.
+
+        TODOS los consultorios activos se muestran siempre, sin esconder
+        ninguno ni rotar por tiempo (ver el comentario de cabecera): `--escala`
+        encoge la letra a medida que hay mas, para que sigan cabiendo legibles
+        en vez de desbordar.
       */}
-      <div className="min-h-0 flex-1 overflow-auto p-4">
+      <div className="min-h-0 flex-1 overflow-hidden p-4">
         {casillas.length === 0 ? (
           <div className="grid h-full place-items-center">
             <p className="text-2xl font-bold text-slate-400">Aun no hay consultorios ni ventanillas activos.</p>
           </div>
         ) : (
-          <div
-            className="grid min-h-full items-start gap-4"
-            style={
-              {
-                gridTemplateColumns: `repeat(${grupos.length}, minmax(220px, 1fr))`,
-                '--escala': Math.max(0.45, Math.min(1, 4 / Math.max(1, ...grupos.map((g) => g.casillas.length)))),
-              } as React.CSSProperties
-            }
-          >
-            {grupos.map((grupo) => (
-              <section key={grupo.clave} className="flex flex-col gap-2">
-                {/* El nombre del servicio es lo PRIMERO que busca el paciente
-                    ("¿donde esta pediatria?"), asi que va centrado y grande. */}
-                <h2 className="shrink-0 rounded-lg bg-brand-100 px-3 py-1.5 text-center text-[clamp(1rem,2.2vmin,1.6rem)] font-black uppercase leading-tight tracking-[0.04em] text-brand-900">
-                  {grupo.nombre}
-                </h2>
-                {/* Rotulos de las dos mitades de cada tarjeta, para que se
-                    entienda que numero es el turno y cual el consultorio. */}
-                <div className="grid shrink-0 grid-cols-[1.7fr_1fr] overflow-hidden rounded-lg text-center text-[clamp(0.8rem,1.7vmin,1.25rem)] font-black uppercase tracking-wide text-white">
-                  <span className="truncate bg-brand-950 px-2 py-1.5">Turno</span>
-                  <span className="truncate bg-brand-600 px-2 py-1.5">Consultorio</span>
-                </div>
-                <div className="flex flex-col gap-2">
-                  {grupo.casillas.map((casilla) => (
-                    <Casilla key={casilla.moduloId} casilla={casilla} resaltada={resaltado === casilla.moduloId} />
-                  ))}
-                </div>
-              </section>
-            ))}
+          <div className="flex h-full flex-col gap-4" style={{ '--escala': escala } as React.CSSProperties}>
+            {grupos.map((grupo, indice) => {
+              const filas = filasPorGrupo[indice]
+
+              return (
+                <section
+                  key={grupo.clave}
+                  className="flex min-h-0 flex-col gap-2"
+                  // Cada bloque se queda con el alto proporcional a las filas
+                  // que ocupa, para que entre todos llenen la pantalla: un
+                  // bloque de ocho consultorios recibe el doble de alto que uno
+                  // de dos, en vez de que todos queden pegados arriba y sobre
+                  // media pantalla vacia.
+                  style={{ flex: `${filas} 1 0%` }}
+                >
+                  {/* El nombre del servicio encabeza su bloque; lo que de verdad
+                      guia al paciente es el consultorio de cada tarjeta. */}
+                  <h2 className="shrink-0 rounded-lg bg-brand-100 px-4 py-2 text-[clamp(1.15rem,3vmin,2.6rem)] font-black uppercase leading-tight tracking-[0.04em] text-brand-900">
+                    {grupo.nombre}
+                  </h2>
+                  <div
+                    className="grid min-h-0 flex-1 gap-3"
+                    style={{
+                      // Numero de columnas FIJO y calculado (ver
+                      // `distribucionEquilibrada`), no `auto-fill`: con ocho
+                      // consultorios y seis columnas, `auto-fill` deja una fila
+                      // de seis y otra de dos, con cuatro huecos. Repartidos en
+                      // cuatro por fila se llena todo.
+                      gridTemplateColumns: `repeat(${columnas}, minmax(0, 1fr))`,
+                      // Filas del mismo alto: las tarjetas se estiran para
+                      // ocupar lo que les toca en vez de quedarse pequeñas.
+                      gridAutoRows: 'minmax(0, 1fr)',
+                    }}
+                  >
+                    {grupo.casillas.map((casilla) => (
+                      <Casilla key={casilla.moduloId} casilla={casilla} resaltada={resaltado === casilla.moduloId} />
+                    ))}
+                  </div>
+                </section>
+              )
+            })}
           </div>
         )}
       </div>

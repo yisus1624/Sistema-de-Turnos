@@ -54,7 +54,12 @@ function crearRegistro(params: {
     activo: true,
     fechaCreacion: new Date().toISOString(),
     passwordHash: bcrypt.hashSync(params.password, 10),
-    secciones: params.secciones ?? null,
+    // Un administrador siempre ve todo, igual que en `actualizar`: el campo
+    // solo aplica a OPERADOR. Sin esto se podia crear por API un administrador
+    // con una lista recortada (o vacia), y ese usuario quedaba sin una sola
+    // pantalla a la que entrar: el guarda lo devolvia al login y el login lo
+    // mandaba de vuelta, en bucle.
+    secciones: params.rol === 'ADMINISTRADOR' ? null : (params.secciones ?? null),
   }
 }
 
@@ -83,9 +88,12 @@ declare global {
 
 const usuarios: RegistroUsuario[] = globalThis.__turnosUsuarios ?? sembrar()
 
-if (process.env.NODE_ENV !== 'production') {
-  globalThis.__turnosUsuarios = usuarios
-}
+// Se guarda SIEMPRE, tambien en produccion. Antes solo se hacia en desarrollo
+// (para el HMR): fuera de ahi, cada contexto donde Next evaluaba este modulo
+// arrancaba con los usuarios recien sembrados, asi que los permisos que el
+// administrador le acababa de dar a un operador se perdian en silencio y el
+// operador seguia viendo el menu de antes.
+globalThis.__turnosUsuarios = usuarios
 
 function buscarRegistro(id: string): RegistroUsuario {
   const registro = usuarios.find((u) => u.id === id)

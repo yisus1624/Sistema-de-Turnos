@@ -1,209 +1,100 @@
 /**
- * Llamado por audio de la pantalla de la sala de espera (requerimiento
+ * Sonido del llamado en la pantalla de la sala de espera (requerimiento
  * seccion 11).
  *
- * Dos problemas que resuelve este modulo:
+ * POR QUE UN SONIDO Y NO UNA VOZ. Antes esto leia el turno en voz alta con
+ * `speechSynthesis`. Se quito a peticion del hospital: cuando varios
+ * consultorios pasan paciente casi al tiempo, cada locucion dura varios
+ * segundos y hay que decirlas una tras otra para que no se pisen, asi que la
+ * cola se va llenando y el audio termina anunciando turnos que en la pantalla
+ * ya cambiaron. Ademas la voz dependia de que el equipo tuviera instalada una
+ * voz en español, y donde no la habia el llamado quedaba mudo.
  *
- * 1. LA VOZ. `speechSynthesis` usa las voces instaladas en el equipo. Si no hay
- *    ninguna en español, el navegador NO avisa: lee el texto español con la voz
- *    inglesa por defecto y suena a extranjero. Por eso `elegirVoz` prioriza
- *    ANTES QUE NADA el pais (Colombia primero) y devuelve `null` si no hay
- *    ninguna voz en español, para callar en vez de sonar mal.
+ * Una campanita corta e igual para todos resuelve las dos cosas: dura menos de
+ * un segundo, suena en cualquier equipo y hace lo unico que se necesita del
+ * audio, que es levantar la vista hacia la pantalla. QUE turno es y a que
+ * consultorio va lo dice la pantalla, que es donde ya estaba la informacion
+ * completa.
  *
- * 2. LOS LLAMADOS SIMULTANEOS. Si cuatro consultorios pulsan "siguiente" casi
- *    al tiempo, hablar de inmediato haria que cada anuncio cortara al anterior
- *    y solo se oiria el ultimo. `ColaDeAnuncios` los encola y los dice uno tras
- *    otro, completos.
+ * El nombre del paciente nunca se emite por el altavoz. Con la voz eso era una
+ * regla que habia que sostener a mano; con la campana es imposible por
+ * construccion.
  */
-import type { CasillaPantalla } from './types'
-
-const DIGITOS = ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve']
 
 /**
- * Deletrea el codigo para que se entienda en una sala ruidosa:
- * "A-014" -> "A, cero uno cuatro".
- */
-export function deletrearCodigo(codigo: string): string {
-  const partes = codigo.split('').map((caracter) => {
-    if (caracter >= '0' && caracter <= '9') return DIGITOS[Number(caracter)]
-    if (caracter === '-' || caracter === ' ') return ','
-    return caracter.toLocaleUpperCase('es')
-  })
-
-  return partes.join(' ').replace(/\s+,/g, ',').replace(/\s+/g, ' ').trim()
-}
-
-/**
- * Texto que se lee en voz alta: SOLO el codigo del turno y a donde dirigirse.
+ * Cuanto dura la campanita, en milisegundos.
  *
- * El nombre del paciente aparece en la pantalla pero NO se dice por el
- * altavoz. Un nombre leido en voz alta se oye en toda la sala y en el pasillo,
- * mientras que el de la pantalla solo lo ve quien mira; ademas el anuncio
- * queda mas corto, que es lo que importa cuando hay varios en cola.
+ * Son los dos tonos de `sonarCampana`: el segundo arranca a los 0.18 s y se
+ * apaga 0.34 s despues. De aqui sale la separacion minima entre campanadas: si
+ * dos se pisan, la sala oye un ruido en vez de dos avisos.
  */
-export function textoAnuncio(casilla: CasillaPantalla): string {
-  return `Turno ${deletrearCodigo(casilla.codigo ?? '')}. Por favor dirigirse a ${casilla.moduloNombre}.`
-}
+export const MS_CAMPANA = 520
 
 /**
- * Puntaje de una voz. El PAIS pesa mucho mas que la naturalidad: preferimos una
- * voz colombiana aunque sea sintetica antes que una voz neuronal de España,
- * porque el acento y el "usted/ustedes" cambian como suena el llamado.
- */
-function puntuarVoz(voz: SpeechSynthesisVoice): number {
-  const idioma = voz.lang.toLowerCase().replace('_', '-')
-  if (!idioma.startsWith('es')) return -1
-
-  let puntos: number
-  if (idioma.startsWith('es-co')) puntos = 1000
-  else if (/^es-(419|mx|ve|ec|pe|pa|cr|do|gt|hn|ni|sv|bo|py|uy|cl|ar)/.test(idioma)) puntos = 600
-  else if (idioma.startsWith('es-us')) puntos = 400
-  else if (idioma.startsWith('es-es')) puntos = 200
-  else puntos = 300
-
-  // A igualdad de pais, la voz neuronal suena mucho mejor que la local.
-  const nombre = voz.name.toLowerCase()
-  if (nombre.includes('natural') || nombre.includes('neural')) puntos += 60
-  if (nombre.includes('online')) puntos += 30
-  if (nombre.includes('google')) puntos += 20
-
-  return puntos
-}
-
-/**
- * Mejor voz en español disponible.
+ * Cuanto se espera entre una campanada y la siguiente, en milisegundos.
  *
- * Devuelve `null` si el equipo no tiene ninguna: en ese caso NO se debe hablar,
- * porque el navegador usaria una voz de otro idioma.
+ * Un segundo: la anterior ya termino (dura `MS_CAMPANA`) y todavia queda casi
+ * medio segundo de silencio, que es lo que hace que se oigan como DOS avisos y
+ * no como uno solo arrastrado. Si dos consultorios pasan paciente al tiempo, la
+ * sala oye "ding ... ding" y mira la pantalla las dos veces.
  */
-export function elegirVoz(voces: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
-  const candidatas = voces
-    .map((voz) => ({ voz, puntos: puntuarVoz(voz) }))
-    .filter((c) => c.puntos >= 0)
-    .sort((a, b) => b.puntos - a.puntos)
-
-  return candidatas[0]?.voz ?? null
-}
-
-/** Todas las voces en español del equipo, de mejor a peor, para el selector. */
-export function vocesEnEspanol(voces: SpeechSynthesisVoice[]): SpeechSynthesisVoice[] {
-  return voces
-    .map((voz) => ({ voz, puntos: puntuarVoz(voz) }))
-    .filter((c) => c.puntos >= 0)
-    .sort((a, b) => b.puntos - a.puntos)
-    .map((c) => c.voz)
-}
-
-/** `true` si la voz es de Colombia; la pantalla lo usa para avisar al operador. */
-export function esVozColombiana(voz: SpeechSynthesisVoice | null): boolean {
-  return Boolean(voz?.lang.toLowerCase().replace('_', '-').startsWith('es-co'))
-}
-
+export const MS_SEPARACION = 1000
 
 /**
- * Las voces se cargan de forma asincrona: en el primer render la lista suele
- * venir vacia y el navegador dispara `voiceschanged` cuando ya estan listas.
+ * Cuantas campanadas pueden quedar esperando su turno.
+ *
+ * La cola existe para no perder ningun aviso cuando varios consultorios pasan
+ * paciente casi al tiempo; lo normal es que sean dos o tres. Pero el tope hace
+ * falta: con diez consultorios llamando en la misma tanda, sonar las diez son
+ * diez segundos de campanadas seguidas, y eso la sala ya no lo oye como avisos
+ * sino como una alarma.
+ *
+ * Cinco en espera (seis campanadas contando la que ya sono, unos cinco
+ * segundos) cubre de sobra la rafaga real y le pone techo al caso extremo. Lo
+ * que se descarta pasado el tope no se pierde del todo: la pantalla ya tiene
+ * pintadas todas las casillas que cambiaron, y la sala ya levanto la vista.
  */
-export function alCargarVoces(callback: (voces: SpeechSynthesisVoice[]) => void): () => void {
-  if (typeof window === 'undefined' || !window.speechSynthesis) return () => {}
-
-  const sintesis = window.speechSynthesis
-  const emitir = () => callback(sintesis.getVoices())
-
-  emitir()
-  sintesis.addEventListener('voiceschanged', emitir)
-  return () => sintesis.removeEventListener('voiceschanged', emitir)
-}
-
-export interface OpcionesAnuncio {
-  voz: SpeechSynthesisVoice | null
-  repeticiones: number
-  volumen: number
-}
-
-/** Lo que la cola necesita para hablar. Se inyecta para poder probarla. */
-export type Locutor = (texto: string, opciones: OpcionesAnuncio) => Promise<void>
+export const MAX_EN_COLA = 5
 
 /**
- * Cola de anuncios: garantiza que dos llamados simultaneos se escuchen
- * completos y en orden, en vez de pisarse.
+ * Un unico AudioContext para toda la pantalla.
+ *
+ * Crear uno por llamado (como se hacia antes) es caro y ademas los navegadores
+ * limitan cuantos puede tener una pagina: en una rafaga de llamados los
+ * ultimos se quedaban sin sonar. La pantalla del televisor queda abierta dias
+ * enteros, asi que este es justo el caso que hay que cuidar.
  */
-/** Pausa por defecto entre repeticiones del mismo turno. */
-export const MS_ENTRE_REPETICIONES = 2000
+let contextoCompartido: AudioContext | null = null
 
-export class ColaDeAnuncios {
-  private pendientes: Array<{ texto: string; opciones: OpcionesAnuncio }> = []
-  private hablando = false
-  private locutor: Locutor
-  private pausaMs: number
+function obtenerContexto(): AudioContext | null {
+  if (typeof window === 'undefined') return null
 
-  constructor(locutor: Locutor, pausaMs: number = MS_ENTRE_REPETICIONES) {
-    this.locutor = locutor
-    this.pausaMs = pausaMs
+  const Contexto =
+    window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!Contexto) return null
+
+  contextoCompartido ??= new Contexto()
+
+  // El navegador suspende el audio hasta que el usuario interactua con la
+  // pagina (por eso la pantalla arranca con el boton "Activar pantalla"), y
+  // tambien puede suspenderlo si la pestaña queda mucho rato en segundo plano.
+  if (contextoCompartido.state === 'suspended') {
+    void contextoCompartido.resume().catch(() => {})
   }
 
-  /** Cuantos anuncios esperan turno para sonar. */
-  get pendiente(): number {
-    return this.pendientes.length
-  }
-
-  encolar(texto: string, opciones: OpcionesAnuncio) {
-    // Sin voz en español no se anuncia nada: es preferible el silencio a que
-    // una voz inglesa lea el nombre del paciente.
-    if (!opciones.voz || opciones.volumen <= 0) return
-
-    this.pendientes.push({ texto, opciones })
-    if (!this.hablando) void this.procesar()
-  }
-
-  vaciar() {
-    this.pendientes = []
-  }
-
-  private async procesar() {
-    this.hablando = true
-
-    while (this.pendientes.length > 0) {
-      const siguiente = this.pendientes.shift()!
-      const veces = Math.max(1, Math.min(3, siguiente.opciones.repeticiones))
-
-      for (let i = 0; i < veces; i++) {
-        try {
-          await this.locutor(siguiente.texto, siguiente.opciones)
-        } catch {
-          // Si una locucion falla, seguimos con la siguiente: un error de audio
-          // no puede dejar la cola trancada.
-        }
-
-        // Si ya hay otro turno esperando, no repetimos este: se dice una sola
-        // vez y se pasa al siguiente, para no hacer esperar a los demas
-        // consultorios detras de una racha de llamados. Solo se repite el
-        // turno que quedo solo en la cola (nadie esperando detras).
-        if (this.pendientes.length > 0) break
-
-        // Pausa entre repeticiones del MISMO turno, para que el paciente
-        // alcance a reaccionar antes de volver a oirlo. Entre turnos distintos
-        // no hace falta: ya cambian el codigo y el consultorio.
-        if (i < veces - 1) await this.esperar(this.pausaMs)
-      }
-    }
-
-    this.hablando = false
-  }
-
-  private esperar(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms))
-  }
+  return contextoCompartido
 }
 
-/** Campanita de dos tonos antes del anuncio, para que la gente levante la vista. */
+/**
+ * Campanita de dos tonos del llamado: la misma para todos los consultorios,
+ * para que se reconozca de inmediato como "paso un turno".
+ */
 export function sonarCampana(volumen: number) {
-  if (typeof window === 'undefined') return
+  if (volumen <= 0) return
 
-  const Contexto = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-  if (!Contexto) return
+  const contexto = obtenerContexto()
+  if (!contexto) return
 
-  const contexto = new Contexto()
   const ahora = contexto.currentTime
 
   for (const [indice, frecuencia] of [880, 1174.66].entries()) {
@@ -220,43 +111,148 @@ export function sonarCampana(volumen: number) {
     oscilador.start(ahora + indice * 0.18)
     oscilador.stop(ahora + indice * 0.18 + 0.34)
   }
-
-  setTimeout(() => void contexto.close(), 1200)
 }
 
-/** Locutor real, sobre `speechSynthesis`. Resuelve cuando termina de hablar. */
-export const locutorNavegador: Locutor = (texto, opciones) =>
-  new Promise((resolve) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis || !opciones.voz) {
-      resolve()
-      return
+/** Lo que la campana necesita para sonar. Se inyecta para poder probarla. */
+export type Reproductor = (volumen: number) => void
+
+/**
+ * Programa una accion para dentro de `ms` y devuelve como cancelarla.
+ *
+ * Se inyecta para que las pruebas puedan mover el tiempo a mano en vez de
+ * esperar segundos de verdad.
+ */
+export type Programador = (accion: () => void, ms: number) => () => void
+
+const programadorReal: Programador = (accion, ms) => {
+  const id = setTimeout(accion, ms)
+  return () => clearTimeout(id)
+}
+
+/** Que paso con un llamado que se le entrego a la campana. */
+export type ResultadoAnuncio =
+  /** Sono en el acto. */
+  | 'sono'
+  /** Quedo en cola: sonara en cuanto termine la campanada anterior. */
+  | 'en-cola'
+  /** No suena: pantalla muda, cola llena o el navegador no pudo reproducir. */
+  | 'descartado'
+
+/**
+ * Campana del llamado: UNA CAMPANADA POR LLAMADO, separadas un segundo.
+ *
+ * EL BUG QUE RESUELVE. Cuando dos o tres consultorios pasan paciente casi al
+ * mismo tiempo, los eventos llegan con milisegundos de diferencia. Si cada uno
+ * dispara su campanita en el acto, las tres se solapan nota con nota y la sala
+ * oye UN SOLO sonido; y si para evitarlo se deja sonar solo la primera y se
+ * callan las demas, los otros dos llamados se quedan sin aviso. Las dos cosas
+ * acaban igual: pasaron tres pacientes y la sala conto uno.
+ *
+ * Por eso hay cola: la primera suena de inmediato y cada siguiente espera
+ * `MS_SEPARACION` desde la anterior. La campanada dura `MS_CAMPANA`, asi que
+ * nunca se pisan y entre una y otra queda silencio de verdad: se cuentan de
+ * oido.
+ *
+ * El tope de `MAX_EN_COLA` cuida el otro extremo: con diez consultorios
+ * llamando en la misma tanda, una ristra larga de campanadas se oye como una
+ * alarma y no como avisos.
+ *
+ * La campana nunca dice QUE turno paso ni a que consultorio ir: eso esta en la
+ * pantalla, donde se ven a la vez todas las casillas que cambiaron. El nombre
+ * del paciente no sale por el altavoz nunca.
+ */
+export class CampanaDeLlamado {
+  private reproductor: Reproductor
+  private separacionMs: number
+  private programar: Programador
+  /** Volumenes esperando su campanada, en orden de llegada. */
+  private cola: number[] = []
+  /**
+   * Como cancelar la espera en curso. Que NO sea null significa que acaba de
+   * sonar una campanada y todavia no se cumplio la separacion: lo que llegue
+   * ahora va a la cola en vez de pisarla.
+   */
+  private cancelarEspera: (() => void) | null = null
+
+  constructor(
+    reproductor: Reproductor,
+    separacionMs: number = MS_SEPARACION,
+    programar: Programador = programadorReal,
+  ) {
+    this.reproductor = reproductor
+    this.separacionMs = separacionMs
+    this.programar = programar
+  }
+
+  /** Cuantas campanadas quedan esperando. Se comprueba en las pruebas. */
+  get pendientes(): number {
+    return this.cola.length
+  }
+
+  /**
+   * Anuncia un llamado.
+   *
+   * Con el volumen en cero no suena nada y tampoco arranca la espera: la
+   * pantalla muda no tiene por que acordarse de nada.
+   */
+  anunciar(volumen: number): ResultadoAnuncio {
+    if (volumen <= 0) return 'descartado'
+
+    // Hay una campanada sonando o recien sonada: esta va detras, no encima.
+    if (this.cancelarEspera !== null) {
+      if (this.cola.length >= MAX_EN_COLA) return 'descartado'
+
+      this.cola.push(volumen)
+      return 'en-cola'
     }
 
-    const mensaje = new SpeechSynthesisUtterance(texto)
-    mensaje.voice = opciones.voz
-    // Forzamos siempre el acento colombiano. Si la voz es de otra variante del
-    // español (ej. es-MX), fijar es-CO empuja al motor hacia una pronunciacion
-    // mas cercana; el texto ya viene en español, nunca se pasa una voz inglesa.
-    mensaje.lang = 'es-CO'
-    mensaje.volume = opciones.volumen
-    // Un poco mas lento que el habla normal: se entiende mejor de lejos.
-    mensaje.rate = 0.92
-    mensaje.pitch = 1
+    const sono = this.reproducir(volumen)
+    // La espera arranca aunque el audio falle: si el navegador no puede sonar,
+    // machacarlo con una campanada por evento no lo va a arreglar.
+    this.esperarYSeguir()
 
-    let terminado = false
-    const finalizar = () => {
-      if (terminado) return
-      terminado = true
-      resolve()
+    return sono ? 'sono' : 'descartado'
+  }
+
+  /**
+   * Corta el aviso: olvida lo que quedaba en cola y la espera en curso.
+   *
+   * Se usa al apagar el sonido y al desmontar la pantalla. Sin esto, quitar el
+   * volumen dejaba salir igual las campanadas ya encoladas, y cerrar la
+   * pantalla dejaba temporizadores vivos.
+   */
+  reiniciar() {
+    this.cola = []
+    if (this.cancelarEspera) {
+      this.cancelarEspera()
+      this.cancelarEspera = null
     }
+  }
 
-    mensaje.onend = finalizar
-    mensaje.onerror = finalizar
+  /** Reproduce sin dejar que un fallo de audio tumbe la pantalla. */
+  private reproducir(volumen: number): boolean {
+    try {
+      this.reproductor(volumen)
+      return true
+    } catch {
+      return false
+    }
+  }
 
-    // Red de seguridad: algunos navegadores no disparan `onend` si la pestaña
-    // pasa a segundo plano, y la cola quedaria trancada para siempre.
-    const limite = Math.max(4000, texto.length * 120)
-    setTimeout(finalizar, limite)
+  /**
+   * Deja pasar la separacion y, al cumplirse, suelta la siguiente campanada de
+   * la cola (y vuelve a esperar). Con la cola vacia queda libre, para que el
+   * proximo llamado suene en el acto.
+   */
+  private esperarYSeguir() {
+    this.cancelarEspera = this.programar(() => {
+      this.cancelarEspera = null
 
-    window.speechSynthesis.speak(mensaje)
-  })
+      const siguiente = this.cola.shift()
+      if (siguiente === undefined) return
+
+      this.reproducir(siguiente)
+      this.esperarYSeguir()
+    }, this.separacionMs)
+  }
+}

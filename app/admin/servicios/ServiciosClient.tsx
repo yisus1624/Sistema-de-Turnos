@@ -9,18 +9,19 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Plus, Stack } from '@phosphor-icons/react/dist/ssr'
+import { Plus, Stack, Trash } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { ModoFila, Servicio } from '@/lib/turnos/types'
 
-const COLUMNAS = ['Servicio', 'Prefijo', 'Modo de fila', 'Estado']
+const COLUMNAS = ['Servicio', 'Prefijo', 'Modo de fila', 'Estado', '']
 
 type Formulario = {
   nombre: string
@@ -42,10 +43,12 @@ export default function ServiciosClient() {
   const [editando, setEditando] = useState<Servicio | null>(null)
   const [formulario, setFormulario] = useState<Formulario>(FORMULARIO_VACIO)
   const [guardando, setGuardando] = useState(false)
+  const [aEliminar, setAEliminar] = useState<Servicio | null>(null)
+  const [eliminando, setEliminando] = useState(false)
 
   const cargar = useCallback(async () => {
     try {
-      const { servicios: lista } = await pedir<{ servicios: Servicio[] }>('/api/turnos/servicios')
+      const { servicios: lista } = await pedir<{ servicios: Servicio[] }>('/api/turnos/servicios?todos=1')
       setServicios(lista)
     } catch (error) {
       toast.error('No se pudieron cargar los servicios', mensajeDeError(error))
@@ -93,6 +96,28 @@ export default function ServiciosClient() {
       toast.error('No se pudo guardar', mensajeDeError(error))
     } finally {
       setGuardando(false)
+    }
+  }
+
+  /**
+   * Borra el servicio del catalogo.
+   *
+   * El servidor lo rechaza si el servicio ya opero (tiene turnos, citas o
+   * profesionales) y explica por que; ese mensaje se muestra tal cual, porque
+   * dice exactamente que hacer: desactivarlo en vez de borrarlo.
+   */
+  async function confirmarEliminar() {
+    if (!aEliminar) return
+    setEliminando(true)
+    try {
+      await pedir(`/api/turnos/servicios/${aEliminar.id}`, { method: 'DELETE' })
+      toast.success('Servicio eliminado', aEliminar.nombre)
+      setAEliminar(null)
+      await cargar()
+    } catch (error) {
+      toast.error('No se pudo eliminar', mensajeDeError(error))
+    } finally {
+      setEliminando(false)
     }
   }
 
@@ -157,6 +182,12 @@ export default function ServiciosClient() {
                       </Badge>
                     </div>
                   </td>
+                  <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <Button size="sm" variant="ghost" onClick={() => setAEliminar(servicio)}>
+                      <Trash size={16} />
+                      Eliminar
+                    </Button>
+                  </td>
                 </tr>
               ))}
             </Tabla>
@@ -214,6 +245,17 @@ export default function ServiciosClient() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmModal
+        open={!!aEliminar}
+        onClose={() => setAEliminar(null)}
+        onConfirm={confirmarEliminar}
+        loading={eliminando}
+        title={`Eliminar ${aEliminar?.nombre ?? ''}`}
+        description="Se borra del catalogo y deja de aparecer al crear modulos, profesionales y citas. Si el servicio ya genero turnos no se puede borrar: en ese caso desactivalo, asi deja de usarse sin perder el historico."
+        confirmLabel="Eliminar"
+        danger
+      />
     </>
   )
 }

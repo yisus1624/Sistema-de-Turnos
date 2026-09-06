@@ -9,7 +9,7 @@
  * aqui (es el medico tratante, no la pantalla publica).
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowClockwise,
   CheckCircle,
@@ -25,12 +25,23 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada } from '@/components/admin/Campos'
+import { Campo, Entrada, Seleccion } from '@/components/admin/Campos'
 import { hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
 import { Isotipo, NOMBRE_INSTITUCION } from '@/components/brand/Marca'
 import type { EstadoAgendaItem, ItemAgendaProfesional, Modulo, Profesional, Turno } from '@/lib/turnos/types'
 
 type Accion = 'llamar' | 'repetir' | 'atendido' | 'ausente' | null
+
+/**
+ * Esta pantalla no entra con sesion sino con un enlace temporal, asi que un 401
+ * significa "el enlace vencio", no "vuelve a entrar". Mandar al doctor a un
+ * login donde no tiene cuenta lo dejaria atascado; el aviso de enlace no valido
+ * que ya muestra abajo es lo correcto.
+ */
+const SIN_LOGIN = { sinRedirigirAlLogin: true } as const
+
+/** Cada cuanto se refresca sola la pantalla del doctor, en milisegundos. */
+const MS_REFRESCO = 15000
 
 /** Como se ve cada estado de la agenda para el doctor: color y texto humano. */
 const ETIQUETA_AGENDA: Record<EstadoAgendaItem, { texto: string; tone: 'blue' | 'green' | 'amber' | 'red' | 'slate' }> = {
@@ -57,6 +68,13 @@ export default function ConsultorioClient({ token }: { token: string }) {
   // sale de los turnos EN_ESPERA de HOY, via `pendientes`).
   const [fecha, setFecha] = useState(hoyEnColombia())
   const [accion, setAccion] = useState<Accion>(null)
+  // El refresco automatico lee la accion en curso desde una ref: si dependiera
+  // del estado, el intervalo se recrearia en cada clic.
+  const accionRef = useRef<Accion>(null)
+
+  useEffect(() => {
+    accionRef.current = accion
+  }, [accion])
 
   const cargarEstado = useCallback(async () => {
     try {
@@ -66,7 +84,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
         pendientes: Turno[]
         turnoActual: Turno | null
         agenda: ItemAgendaProfesional[]
-      }>(`/api/consultorio/${token}?fecha=${fecha}`)
+      }>(`/api/consultorio/${token}?fecha=${fecha}`, SIN_LOGIN)
 
       setProfesional(data.profesional)
       setModulos(data.modulos)
@@ -74,7 +92,14 @@ export default function ConsultorioClient({ token }: { token: string }) {
       setTurnoActual(data.turnoActual)
       setAgenda(data.agenda)
       // El consultorio habitual del doctor queda preseleccionado.
-      setModuloId((actual) => actual || data.profesional.moduloId || data.modulos[0]?.id || '')
+      //
+      // Y SOLO ESE. Antes, si el doctor no tenia consultorio asignado, se caia
+      // al primero de la lista de su servicio, que es el de OTRO doctor: sin
+      // decir nada, llamaba a sus pacientes a la puerta equivocada y le cerraba
+      // como atendido al paciente que ese colega tuviera adentro. Sin
+      // consultorio asignado no se elige ninguno: el doctor lo escoge a mano y
+      // el servidor comprueba que pueda usarlo.
+      setModuloId((actual) => actual || data.profesional.moduloId || '')
       setTokenInvalido(false)
     } catch {
       setTokenInvalido(true)
@@ -86,6 +111,26 @@ export default function ConsultorioClient({ token }: { token: string }) {
   useEffect(() => {
     cargarEstado()
   }, [cargarEstado])
+
+  /**
+   * Refresco automatico.
+   *
+   * Esta pantalla no se enteraba de nada hasta que el doctor pulsaba un boton:
+   * el paciente registraba su llegada en admisiones y el aviso seguia diciendo
+   * "aparecera cuando registre su llegada" indefinidamente. Como el doctor la
+   * deja abierta toda la jornada, tiene que refrescarse sola.
+   */
+  useEffect(() => {
+    if (tokenInvalido) return
+
+    const id = setInterval(() => {
+      // No mientras el doctor esta ejecutando una accion: pisarle el estado a
+      // media operacion lo unico que hace es parpadear la pantalla.
+      if (accionRef.current === null) void cargarEstado()
+    }, MS_REFRESCO)
+
+    return () => clearInterval(id)
+  }, [cargarEstado, tokenInvalido])
 
   async function ejecutar(nombre: Accion, tarea: () => Promise<void>) {
     setAccion(nombre)
@@ -101,7 +146,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
   const llamarSiguiente = () =>
     ejecutar('llamar', async () => {
       const { turno } = await pedir<{ turno: Turno }>(`/api/consultorio/${token}/llamar-siguiente`, {
-        method: 'POST',
+        method: 'POST', ...SIN_LOGIN,
         body: JSON.stringify({ moduloId }),
       })
       setTurnoActual(turno)
@@ -113,7 +158,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
     ejecutar('repetir', async () => {
       if (!turnoActual) return
       const { turno } = await pedir<{ turno: Turno }>(`/api/consultorio/${token}/${turnoActual.id}/repetir`, {
-        method: 'POST',
+        method: 'POST', ...SIN_LOGIN,
       })
       setTurnoActual(turno)
       toast.info('Llamado repetido', turno.nombrePaciente ?? turno.codigo)
@@ -122,7 +167,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
   const cerrarTurno = (tipo: 'atendido' | 'ausente') =>
     ejecutar(tipo, async () => {
       if (!turnoActual) return
-      await pedir(`/api/consultorio/${token}/${turnoActual.id}/${tipo}`, { method: 'POST' })
+      await pedir(`/api/consultorio/${token}/${turnoActual.id}/${tipo}`, { method: 'POST', ...SIN_LOGIN })
       toast[tipo === 'atendido' ? 'success' : 'warning'](
         tipo === 'atendido' ? 'Atencion finalizada' : 'Paciente ausente',
         turnoActual.nombrePaciente ?? turnoActual.codigo,
@@ -136,7 +181,10 @@ export default function ConsultorioClient({ token }: { token: string }) {
   // llegada en admisiones); los que aun no llegan solo generan el aviso de
   // arriba, para no llenarle la agenda de citas con las que no puede hacer nada.
   const agendaConfirmada = agenda.filter((item) => item.estado !== 'PROGRAMADA')
-  const consultorioActual = modulos.find((m) => m.id === moduloId)
+  const esHoy = fecha === hoyEnColombia()
+  // Sin pacientes en espera no hay a quien llamar: el boton se apaga en vez de
+  // dejar que el doctor lo pulse y reciba un error.
+  const puedeLlamar = Boolean(moduloId) && pendientes.length > 0
 
   if (cargando) {
     return (
@@ -176,12 +224,28 @@ export default function ConsultorioClient({ token }: { token: string }) {
               <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{NOMBRE_INSTITUCION}</p>
             </div>
           </div>
-          {consultorioActual ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-100 bg-brand-50 px-3 py-1.5 text-sm font-bold text-brand-700">
-              <MapPin size={16} weight="bold" />
-              {consultorioActual.nombre}
-            </span>
-          ) : null}
+          {/*
+            El consultorio se puede cambiar: el doctor a veces atiende en otra
+            puerta, y si no tiene uno asignado esta es la unica forma de que
+            pueda trabajar. La lista solo trae los de su servicio, y el
+            servidor vuelve a comprobarlo antes de llamar.
+          */}
+          <div className="flex items-center gap-2">
+            <MapPin size={18} weight="bold" className="shrink-0 text-brand-600" />
+            <Seleccion
+              value={moduloId}
+              onChange={(e) => setModuloId(e.target.value)}
+              aria-label="Consultorio desde el que llamas"
+              className="max-w-[14rem]"
+            >
+              <option value="">Elige tu consultorio</option>
+              {modulos.map((modulo) => (
+                <option key={modulo.id} value={modulo.id}>
+                  {modulo.nombre}
+                </option>
+              ))}
+            </Seleccion>
+          </div>
         </header>
 
         <Card>
@@ -216,7 +280,17 @@ export default function ConsultorioClient({ token }: { token: string }) {
               ve el boton apagado y cree que el sistema esta roto. El aviso
               explica que falta el paso de admisiones (registrar la llegada).
             */}
-            {!turnoActual && pendientes.length === 0 && fecha === hoyEnColombia() && programadosHoy > 0 ? (
+            {!moduloId ? (
+              <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                <WarningCircle size={20} weight="fill" className="mt-0.5 shrink-0" />
+                <span>
+                  No tienes consultorio asignado. Elige arriba desde cual estas atendiendo: es el numero
+                  que va a ver el paciente en la pantalla de la sala de espera.
+                </span>
+              </div>
+            ) : null}
+
+            {!turnoActual && pendientes.length === 0 && esHoy && programadosHoy > 0 ? (
               <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 <Info size={20} weight="fill" className="mt-0.5 shrink-0" />
                 <span>
@@ -230,7 +304,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
             <Button
               onClick={llamarSiguiente}
               loading={accion === 'llamar'}
-              disabled={!moduloId || (!!turnoActual && pendientes.length === 0)}
+              disabled={!puedeLlamar}
               className="h-16 w-full text-lg"
             >
               <Megaphone size={22} weight="bold" />
@@ -293,7 +367,13 @@ export default function ConsultorioClient({ token }: { token: string }) {
             ) : (
               <ol className="space-y-2">
                 {agendaConfirmada.map((item) => {
-                  const etiqueta = ETIQUETA_AGENDA[item.estado]
+                  // Un turno que se cerro solo (al pasar al siguiente sin
+                  // cerrar al anterior) se veia igual que uno atendido de
+                  // verdad. Se marca aparte para que el doctor pueda notarlo.
+                  const etiqueta =
+                    item.estado === 'ATENDIDA' && item.cierreAutomatico
+                      ? { texto: 'Cerrado al pasar al siguiente', tone: 'slate' as const }
+                      : ETIQUETA_AGENDA[item.estado]
                   return (
                     <li
                       key={item.citaId}

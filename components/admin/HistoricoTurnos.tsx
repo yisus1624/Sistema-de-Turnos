@@ -11,7 +11,7 @@
  * retraso corto, ver `useValorConRetraso`).
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ClockCounterClockwise } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -66,6 +66,9 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
       .catch(() => {})
   }, [])
 
+  /** Filtros de la consulta que esta vigente ahora mismo (ver `buscar`). */
+  const consultaVigenteRef = useRef('')
+
   const buscar = useCallback(async (activos: Filtros) => {
     setBuscando(true)
     const params = new URLSearchParams()
@@ -73,13 +76,21 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
       if (valor) params.set(clave, valor)
     }
 
+    // Descarta la respuesta de una consulta que los filtros ya reemplazaron:
+    // la mas lenta llegaba la ultima y ganaba, asi que la tabla podia quedar
+    // mostrando el resultado de un filtro anterior al que marca la pantalla.
+    const consulta = params.toString()
+    consultaVigenteRef.current = consulta
+
     try {
       const { turnos: lista } = await pedir<{ turnos: Turno[] }>(`/api/turnos/historico?${params}`)
+      if (consultaVigenteRef.current !== consulta) return
       setTurnos(lista)
     } catch (error) {
+      if (consultaVigenteRef.current !== consulta) return
       toast.error('No se pudo consultar el historico', mensajeDeError(error))
     } finally {
-      setBuscando(false)
+      if (consultaVigenteRef.current === consulta) setBuscando(false)
     }
   }, [])
 

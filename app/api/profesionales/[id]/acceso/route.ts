@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 
@@ -27,7 +27,7 @@ const vigenciaSchema = z.object({
  */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const session = await requireSeccion('/admin/profesionales')
+    const session = await requireSeccion('/admin/enlaces')
 
     const body = await request.json().catch(() => null)
     const parsed = vigenciaSchema.safeParse(body)

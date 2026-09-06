@@ -82,9 +82,15 @@ export default function AppShell({
 
   const iniciales = (nombreUsuario || rolLabels[rol]).slice(0, 2).toUpperCase()
 
+  const seccionesNav = navDelUsuario(rol, secciones)
+  const hrefActivo = seccionesNav
+    .flatMap((seccionNav) => seccionNav.items.map((item) => item.href))
+    .filter((href) => esActiva(pathname, href))
+    .sort((a, b) => b.length - a.length)[0]
+
   const navegacion = (
     <>
-      {navDelUsuario(rol, secciones).map((seccionNav) => {
+      {seccionesNav.map((seccionNav) => {
         const items = seccionNav.items
 
         return (
@@ -99,7 +105,7 @@ export default function AppShell({
           </p>
           <div className={cn('mt-2 space-y-1', sidebarColapsado && 'lg:mt-0 lg:flex lg:flex-col lg:items-center lg:gap-2 lg:space-y-0')}>
             {items.map((item) => {
-              const activa = esActiva(pathname, item.href)
+              const activa = item.href === hrefActivo
               return (
                 <Link
                   key={item.href}
@@ -236,7 +242,7 @@ export default function AppShell({
           </span>
         </div>
 
-        <header className="border-b border-slate-200/80 bg-[var(--turnos-bg)]/92 px-4 py-4 backdrop-blur md:px-7">
+        <header className="border-b border-slate-200/80 bg-[var(--turnos-bg)] px-4 py-4 md:px-7">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <div className="hidden items-center gap-2 text-xs font-black text-brand-600 lg:flex">

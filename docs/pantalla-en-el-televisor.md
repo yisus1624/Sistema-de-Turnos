@@ -1,36 +1,47 @@
 # Poner la pantalla de turnos en el televisor
 
-La pantalla (`/pantalla`) es una pagina web normal: lo unico que hace falta es un
-televisor que muestre un navegador. Esta es la guia practica para el montaje.
+La pantalla (`/pantalla`) es una pagina web normal: lo unico que hace falta es
+algo que muestre un navegador en el televisor.
 
 ## Lo que hay que resolver
 
 1. Algo que corra un navegador y lo pinte en el televisor.
 2. Que arranque solo, a pantalla completa, sin barras ni avisos.
-3. Que tenga **sonido**, porque el llamado se anuncia por voz.
-4. Que tenga una **voz en español de Colombia** instalada.
+3. Que tenga **sonido**, porque cada llamado suena con una campanita.
+4. Que aguante **dias encendido sin que nadie lo toque**.
+
+**No hace falta instalar ninguna voz.** El sistema no lee los turnos en voz
+alta: suena una campanita corta e igual para todos, y QUE turno paso y a que
+consultorio va se leen en la pantalla. Si alguien encuentra instrucciones para
+instalar voces en español, son de una version anterior y ya no aplican.
+
+## El televisor no necesita cable HDMI largo hasta el servidor
+
+Es la confusion mas comun. El servidor **no se conecta al televisor**: el
+televisor (o el equipito que lo maneja) se conecta al servidor **por la red**,
+como cualquier computador del hospital, y abre una direccion web.
+
+Lo unico que viaja por HDMI es el medio metro entre el equipito y el televisor,
+si se usa la opcion 1.
 
 ## Opciones, de mejor a peor
 
-### 1. Mini PC con Windows conectado al televisor por HDMI  ← recomendada
+### 1. Mini PC o Raspberry Pi pegado detras del televisor ← recomendada
 
-Es lo que mejor funciona y lo mas facil de arreglar cuando algo falla.
+Un equipito barato colgado detras del televisor, con un HDMI corto, conectado a
+la red del hospital (mejor por cable que por wifi).
 
-- Sirve cualquier mini PC barato o un computador viejo de la institucion.
-- El televisor se usa solo como monitor: no importa la marca ni si es "smart".
-- El audio sale por el HDMI al televisor, o por un parlante conectado al mini PC.
-- **Permite instalar la voz colombiana**, que es la razon principal para preferirla.
+Es lo que mejor aguanta y lo mas facil de arreglar cuando algo falla: es un
+navegador de escritorio de verdad, con su sonido, su pantalla completa y su
+modo kiosco.
 
-Configuracion:
+Configuracion en Windows:
 
-1. Instalar la voz de español (Colombia):
-   Configuracion → Hora e idioma → Idioma y region → Agregar idioma →
-   "Español (Colombia)" → marcar **Voz**. Reiniciar.
-2. Abrir **Microsoft Edge** (trae las voces neuronales, que suenan a persona y no
-   a robot) en `http://IP-DEL-SERVIDOR:3000/pantalla`.
-3. Pulsar **Activar pantalla** una vez. Este clic es obligatorio: ningun
-   navegador deja reproducir audio sin un gesto del usuario.
-4. Pantalla completa con `F11`.
+1. Abrir **Microsoft Edge** o **Chrome** en `http://IP-DEL-SERVIDOR:3000/pantalla`.
+2. Pulsar **Activar pantalla** una vez. Este clic es obligatorio y no hay forma
+   de saltarselo: ningun navegador deja sonar audio sin un gesto de una persona.
+   Ese mismo clic pone la pantalla completa.
+3. Comprobar el sonido con el enlace **Probar sonido** antes de dejarlo montado.
 
 Para que arranque solo al prender el equipo, crear un acceso directo en la
 carpeta de inicio (`Win+R` → `shell:startup`) con:
@@ -39,57 +50,64 @@ carpeta de inicio (`Win+R` → `shell:startup`) con:
 "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --kiosk http://IP-DEL-SERVIDOR:3000/pantalla --edge-kiosk-type=fullscreen --no-first-run
 ```
 
-Ojo: en modo kiosco alguien tiene que pulsar **Activar pantalla** despues de cada
-reinicio. Conviene reiniciar el equipo solo cuando haya personal en la sala.
+Ojo: despues de cada reinicio alguien tiene que pulsar **Activar pantalla** para
+que vuelva el sonido. Conviene reiniciar el equipo solo cuando haya personal en
+la sala.
 
-### 2. Televisor "smart" con navegador propio
+### 2. Televisor "smart" con su propio navegador
 
-Funciona para ver los turnos, pero **el audio casi nunca sirve**: los navegadores
-de los televisores Samsung, LG y Android TV traen pocas voces o ninguna en
-español, y el sistema entonces se queda callado a proposito (ver mas abajo).
+Sin equipito de por medio: se abre el navegador del televisor y se escribe
+`http://IP-DEL-SERVIDOR:3000/pantalla`. Es lo mas barato y no necesita ningun
+cable mas que la corriente.
 
-Uselo solo si acepta tener la pantalla sin voz, o combinado con un parlante
-manejado desde otro equipo.
+Funciona, pero hay que probarlo en ESE televisor antes de confiarle la sala,
+porque los navegadores de los televisores son viejos y limitados. Lo que hay que
+verificar, en este orden:
+
+- Que la campanita **suene** al llamar un turno (muchos son muy estrictos con el
+  audio automatico; el boton "Activar pantalla" existe justamente para eso).
+- Que despues de **una hora larga** siga actualizandose sola. Algunos televisores
+  cortan la conexion en segundo plano o duermen la pagina, y entonces la pantalla
+  se queda congelada mostrando turnos viejos **sin avisar de nada**. Es el fallo
+  peligroso: se ve normal y esta mintiendo.
+- Que no entre en reposo ni saque salvapantallas.
+
+Si alguna de las tres falla, opcion 1.
 
 ### 3. Chromecast / duplicar la pantalla de un computador
 
-Sirve para una demostracion rapida, no para el dia a dia: cualquiera que use ese
+Para una demostracion rapida, no para el dia a dia: cualquiera que use ese
 computador tumba la pantalla, y la duplicacion suele cortar el audio.
 
-## La voz
+## El sonido
 
-El sistema **solo habla en español** y prefiere la voz de Colombia. Si no hay
-voz colombiana, usa otra en español (México, España...). Y si el equipo no
-tiene **ninguna** voz en español, **no habla con voz inglesa**: deja solo la
-campana. Nunca se lee un turno con acento extranjero.
+Cada llamado suena una vez. Si varios consultorios pasan paciente casi al mismo
+tiempo, las campanadas **se separan un segundo entre si** para que no se pisen:
+pasan tres pacientes, se oyen tres campanadas y la sala las puede contar.
 
-La pantalla dice cual voz esta usando antes de activarse. Para asegurar la voz
-colombiana en el equipo del televisor hay dos caminos:
-
-1. **Instalar la voz (recomendado para el equipo fijo).** En el proyecto hay un
-   instalador: `scripts/instalar-voz-colombia.ps1`. Clic derecho →
-   "Ejecutar con PowerShell", aceptar los permisos, y reiniciar el equipo. Deja
-   la voz de Español (Colombia) disponible sin depender de internet.
-
-2. **Abrir la pantalla en Microsoft Edge.** Edge trae voces colombianas "en
-   linea" (Salome, Gonzalo) que suenan naturales; la primera vez necesitan
-   internet y luego quedan en cache.
+El nombre del paciente **nunca** sale por el altavoz, ni aparece en el televisor.
 
 ## Prueba de aceptacion antes del montaje
 
 En el equipo que va a quedar conectado al televisor:
 
 1. Abrir `/pantalla` y pulsar **Activar pantalla**.
-2. Confirmar que abajo dice una voz que empiece por "Spanish (Colombia)".
-3. Desde otro computador, llamar un turno.
-4. Verificar que en el televisor: suena la campanita, se dice el turno y el
-   consultorio (nunca el nombre del paciente), se repite una vez tras dos
-   segundos, y el turno queda listado a la izquierda.
+2. Desde otro computador, llamar un turno.
+3. Verificar que en el televisor: suena la campanita y la casilla de ese
+   consultorio cambia al turno nuevo, con el codigo grande.
+4. Llamar dos turnos seguidos desde dos consultorios distintos y comprobar que
+   se oyen **dos** campanadas separadas, no una.
 5. Alejarse unos 8 metros y comprobar que el codigo del turno se lee sin
    esfuerzo. Si no, acercar el televisor o subir su tamaño.
+6. Dejarlo una hora largo y volver a llamar un turno: tiene que seguir
+   respondiendo al instante.
 
 ## Red
 
 El televisor y los computadores de los funcionarios tienen que ver al servidor
-por la red interna del hospital. Anote la IP fija del servidor: si cambia, hay
-que actualizar el acceso directo del televisor y el de cada ventanilla.
+por la red interna del hospital. **Anote la IP fija del servidor**: si cambia,
+hay que actualizar el acceso directo del televisor y el de cada ventanilla.
+
+Lo ideal es pedirle a sistemas un nombre en el DNS interno (por ejemplo
+`turnos.hospital.local`) y usar ese en todas partes: asi, si algun dia cambia la
+IP del servidor, no hay que ir maquina por maquina.

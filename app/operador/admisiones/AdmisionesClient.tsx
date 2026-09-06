@@ -8,11 +8,17 @@
  * desde ese momento aparece en la fila de su profesional.
  *
  * El documento y el nombre completo solo se ven aqui, en una pantalla con
- * sesion. Hacia la pantalla de la sala de espera el nombre viaja enmascarado.
+ * sesion: hacia la pantalla de la sala de espera no viaja ningun dato del
+ * paciente, ni siquiera abreviado.
+ *
+ * Por eso esta pantalla termina en un COMPROBANTE grande con el turno, el
+ * consultorio y el doctor: es lo que el funcionario le dicta al paciente, y
+ * es todo lo que este necesita para reconocerse despues en la pantalla, donde
+ * solo va a ver su numero de turno.
  */
 
 import { useEffect, useState } from 'react'
-import { CheckCircle, UserFocus } from '@phosphor-icons/react/dist/ssr'
+import { CheckCircle, DoorOpen, Stethoscope, UserFocus } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -20,25 +26,22 @@ import EmptyState from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Loader'
 import { toast } from '@/components/ui/toast'
 import { useValorConRetraso } from '@/lib/hooks'
-import type { Cita, Turno } from '@/lib/turnos/types'
+// El cliente COMPARTIDO, no una copia local. Esta pantalla tenia la suya, y por
+// eso se quedaba fuera del manejo de sesion caducada: el funcionario seguia
+// viendo la busqueda de siempre y creia haber registrado llegadas que la API
+// estaba rechazando con un 401. Justo aqui es donde peor duele.
+import { horaCorta, pedir } from '@/lib/api/cliente'
+import type { Cita, ComprobanteLlegada, Turno } from '@/lib/turnos/types'
 
 /** Digitos minimos antes de consultar: menos que esto da media EPS. */
 const MINIMO_DIGITOS = 4
 
-async function pedir<T>(url: string, opciones?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...opciones,
-    headers: { 'Content-Type': 'application/json', ...opciones?.headers },
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data?.error ?? 'Ocurrio un error inesperado.')
-  return data as T
-}
-
-function horaCorta(iso: string) {
+/** "jueves, 11 de septiembre" — para que no haya duda de que no es hoy. */
+function fechaLarga(iso: string) {
   return new Intl.DateTimeFormat('es-CO', {
-    hour: '2-digit',
-    minute: '2-digit',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
     timeZone: 'America/Bogota',
   }).format(new Date(iso))
 }
@@ -53,9 +56,12 @@ const etiquetaEstado: Record<Cita['estado'], { texto: string; tono: 'blue' | 'gr
 export default function AdmisionesClient() {
   const [documento, setDocumento] = useState('')
   const [citas, setCitas] = useState<Cita[] | null>(null)
+  // Citas del paciente en otros dias. No se les registra la llegada; estan
+  // para poder decirle "su cita es el jueves" en vez de "no tiene citas".
+  const [otras, setOtras] = useState<Cita[]>([])
   const [buscando, setBuscando] = useState(false)
   const [registrando, setRegistrando] = useState<string | null>(null)
-  const [ultimoTurno, setUltimoTurno] = useState<Turno | null>(null)
+  const [comprobante, setComprobante] = useState<ComprobanteLlegada | null>(null)
 
   // Busca sola al dejar de escribir: no hay boton que presionar.
   const documentoDiferido = useValorConRetraso(documento, 400)
@@ -64,6 +70,7 @@ export default function AdmisionesClient() {
     const buscado = documentoDiferido.trim()
     if (buscado.length < MINIMO_DIGITOS) {
       setCitas(null)
+      setOtras([])
       setBuscando(false)
       return
     }
@@ -72,11 +79,13 @@ export default function AdmisionesClient() {
     // reemplazo al seguir escribiendo.
     let vigente = true
     setBuscando(true)
-    setUltimoTurno(null)
+    setComprobante(null)
 
-    pedir<{ citas: Cita[] }>(`/api/turnos/citas?documento=${encodeURIComponent(buscado)}`)
-      .then(({ citas: encontradas }) => {
-        if (vigente) setCitas(encontradas)
+    pedir<{ citas: Cita[]; otras: Cita[] }>(`/api/turnos/citas?documento=${encodeURIComponent(buscado)}`)
+      .then(({ citas: encontradas, otras: deOtrosDias }) => {
+        if (!vigente) return
+        setCitas(encontradas)
+        setOtras(deOtrosDias ?? [])
       })
       .catch((error) => {
         if (vigente) toast.error('No se pudo buscar', error instanceof Error ? error.message : undefined)
@@ -93,15 +102,18 @@ export default function AdmisionesClient() {
   async function registrarLlegada(cita: Cita) {
     setRegistrando(cita.id)
     try {
-      const { turno } = await pedir<{ turno: Turno }>('/api/turnos/citas/llegada', {
+      const { comprobante: entregado } = await pedir<{
+        turno: Turno
+        comprobante: ComprobanteLlegada
+      }>('/api/turnos/citas/llegada', {
         method: 'POST',
         body: JSON.stringify({ citaId: cita.id }),
       })
-      setUltimoTurno(turno)
+      setComprobante(entregado)
       setCitas((previas) =>
         previas?.map((c) => (c.id === cita.id ? { ...c, estado: 'PRESENTADO' } : c)) ?? null,
       )
-      toast.success('Llegada registrada', `Turno ${turno.codigo} para ${cita.nombrePaciente}.`)
+      toast.success('Llegada registrada', `Turno ${entregado.codigo} para ${cita.nombrePaciente}.`)
     } catch (error) {
       toast.error('No se pudo registrar la llegada', error instanceof Error ? error.message : undefined)
     } finally {
@@ -135,12 +147,47 @@ export default function AdmisionesClient() {
         </CardContent>
       </Card>
 
-      {ultimoTurno ? (
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-6 py-5 text-center">
-          <p className="text-sm font-bold uppercase tracking-wide text-emerald-700">Turno asignado</p>
-          <p className="mt-1 text-5xl font-black tracking-[-0.03em] text-emerald-900">{ultimoTurno.codigo}</p>
-          <p className="mt-2 text-sm font-semibold text-emerald-800">
-            Indicale al paciente que espere a que lo llamen en la pantalla.
+      {comprobante ? (
+        <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50">
+          <div className="px-6 pt-5 text-center">
+            <p className="text-sm font-bold uppercase tracking-wide text-emerald-700">Turno asignado</p>
+            <p className="mt-1 text-6xl font-black tracking-[-0.03em] text-emerald-900">
+              {comprobante.codigo}
+            </p>
+            {comprobante.nombrePaciente ? (
+              <p className="mt-1 text-sm font-bold text-emerald-800">{comprobante.nombrePaciente}</p>
+            ) : null}
+          </div>
+
+          {/* Consultorio y doctor: es lo que hay que decirle en voz alta, asi
+              que va en bloques grandes y separados, no en una linea de texto
+              corrido que el funcionario tenga que descifrar con el paciente
+              enfrente. */}
+          <div className="mt-4 grid gap-px bg-emerald-200 sm:grid-cols-2">
+            <div className="bg-white px-5 py-4">
+              <p className="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-slate-500">
+                <DoorOpen size={16} weight="bold" />
+                Consultorio
+              </p>
+              <p className="mt-1 text-xl font-black leading-tight text-brand-950">
+                {comprobante.moduloNombre ?? 'Se le indicara en la pantalla'}
+              </p>
+            </div>
+            <div className="bg-white px-5 py-4">
+              <p className="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-slate-500">
+                <Stethoscope size={16} weight="bold" />
+                Lo atiende
+              </p>
+              <p className="mt-1 text-xl font-black leading-tight text-brand-950">
+                {comprobante.profesionalNombre ?? comprobante.servicioNombre}
+              </p>
+            </div>
+          </div>
+
+          <p className="bg-emerald-100 px-6 py-3 text-center text-sm font-semibold leading-6 text-emerald-900">
+            Digale al paciente que espere en la sala. En la pantalla va a aparecer{' '}
+            <strong className="font-black">solo su turno {comprobante.codigo}</strong> y el consultorio al
+            que debe entrar; su nombre no se muestra ni se dice en voz alta.
           </p>
         </div>
       ) : null}
@@ -176,8 +223,12 @@ export default function AdmisionesClient() {
       ) : citas.length === 0 ? (
         <EmptyState
           icon={UserFocus}
-          title="Sin citas para ese documento"
-          description="Verifica el numero. Si el paciente no tiene cita, atiendelo por la fila de ventanilla."
+          title="No tiene cita para hoy"
+          description={
+            otras.length > 0
+              ? 'Este paciente si tiene cita, pero en otra fecha. Mirala abajo y confirmasela; hoy no se le puede registrar la llegada.'
+              : 'Verifica el numero. Si el paciente no tiene cita, atiendelo por la fila de ventanilla.'
+          }
         />
       ) : (
         <Card>
@@ -221,6 +272,46 @@ export default function AdmisionesClient() {
           </CardContent>
         </Card>
       )}
+
+      {/*
+        Citas de OTROS dias: sin boton, a proposito.
+
+        Antes la busqueda devolvia las citas de cualquier fecha y la lista se
+        mostraba solo con la hora, asi que una cita de la semana entrante se
+        veia igual que una de hoy y se le podia registrar la llegada: el
+        paciente entraba a la fila de un dia que no era el suyo y quemaba la
+        cita. Aqui salen aparte, con la fecha bien visible, para poder decirle
+        cuando le toca.
+      */}
+      {otras.length > 0 ? (
+        <Card padded={false}>
+          <CardHeader>
+            <CardTitle>Tiene cita en otra fecha ({otras.length})</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-3 text-sm leading-6 text-slate-600">
+              Estas citas <strong className="font-black">no son de hoy</strong>, asi que no se les registra
+              la llegada. Confirmale al paciente el dia y la hora.
+            </p>
+            <ul className="space-y-2">
+              {otras.map((cita) => (
+                <li
+                  key={cita.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-amber-950">{cita.nombrePaciente}</p>
+                    <p className="mt-0.5 text-sm font-semibold text-amber-800">
+                      {fechaLarga(cita.horaCita)} · {horaCorta(cita.horaCita)}
+                    </p>
+                  </div>
+                  <Badge tone="amber">Otra fecha</Badge>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   )
 }

@@ -10,9 +10,9 @@
  */
 import NextAuth from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
-import { usuarioRepository } from '@/lib/usuarios/in-memory-repository'
+import { usuarioRepository } from '@/lib/usuarios/repositorio'
 import type { RolUsuario } from '@/lib/usuarios/types'
-import { contextoPeticion, limitarIntentos, registrarEvento } from '@/lib/seguridad/registro'
+import { contextoPeticion, limitarIntentos, limpiarIntentos, registrarEvento } from '@/lib/seguridad/registro'
 import { useSecureAuthCookies } from './auth-cookies'
 
 /** Jornada larga en ventanilla: la sesion dura un dia habil completo. */
@@ -49,14 +49,28 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         if (!usuario || !password) return rechazar('credenciales_incompletas')
 
-        const porIp = limitarIntentos('login_ip', ip, 20, 15 * 60 * 1000)
-        if (!porIp.permitido) return rechazar('demasiados_intentos_ip')
+        // El limite por IP solo se aplica si la IP es de fiar, es decir si hay
+        // un proxy declarado delante (ver `contextoPeticion`). Sin proxy, la IP
+        // la escribe el propio cliente en una cabecera y basta con cambiarla en
+        // cada intento para saltarse el limite: aplicarlo daria una sensacion
+        // de proteccion que no existe, y ademas bloquearia a quien mandara la
+        // IP de otro. El limite POR USUARIO, que es el que de verdad frena la
+        // fuerza bruta, se aplica siempre.
+        if (ip) {
+          const porIp = limitarIntentos('login_ip', ip, 20, 15 * 60 * 1000)
+          if (!porIp.permitido) return rechazar('demasiados_intentos_ip')
+        }
 
         const porUsuario = limitarIntentos('login_usuario', usuario, 8, 15 * 60 * 1000)
         if (!porUsuario.permitido) return rechazar('demasiados_intentos_usuario')
 
         const encontrado = await usuarioRepository.verificarCredenciales(usuario, password)
         if (!encontrado) return rechazar('credenciales_invalidas')
+
+        // Entro bien: se le borra la cuenta de intentos. El limite tiene que
+        // contar FALLOS, no usos, o un mostrador compartido se bloquea solo.
+        limpiarIntentos('login_usuario', usuario)
+        if (ip) limpiarIntentos('login_ip', ip)
 
         registrarEvento({
           tipo: 'INICIO_SESION',

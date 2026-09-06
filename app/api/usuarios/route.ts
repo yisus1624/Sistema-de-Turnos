@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { usuarioRepository } from '@/lib/usuarios/in-memory-repository'
+import { usuarioRepository } from '@/lib/usuarios/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
+import { seccionesDelRol } from '@/lib/permissions/rutas'
 
 export async function GET() {
   try {
@@ -49,6 +50,20 @@ export async function POST(request: Request) {
 
     if (parsed.data.rol === 'OPERADOR' && parsed.data.secciones && parsed.data.secciones.length === 0) {
       return NextResponse.json({ error: 'Selecciona al menos una seccion para el operador.' }, { status: 400 })
+    }
+
+    // Nadie reparte permisos que no tiene: sin esto, un operador con la
+    // seccion de usuarios se creaba una cuenta con todas las secciones de
+    // administracion y entraba con ella.
+    if (session.user.rol !== 'ADMINISTRADOR') {
+      const propias = new Set(session.user.secciones ?? seccionesDelRol(session.user.rol).map((s) => s.href))
+      const ajenas = (parsed.data.secciones ?? []).filter((seccion) => !propias.has(seccion))
+      if (ajenas.length > 0) {
+        return NextResponse.json(
+          { error: 'No puedes dar acceso a secciones que tu no tienes.' },
+          { status: 403 },
+        )
+      }
     }
 
     const usuario = await usuarioRepository.crear(parsed.data)

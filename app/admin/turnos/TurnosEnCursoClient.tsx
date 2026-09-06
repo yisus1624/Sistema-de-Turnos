@@ -14,10 +14,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Loader'
-import { horaCorta, pedir } from '@/lib/api/cliente'
+import { hoyEnColombia, horaCorta, pedir } from '@/lib/api/cliente'
 import type { CasillaPantalla, Servicio, Turno } from '@/lib/turnos/types'
 
 const MS_REFRESCO = 15000
+
+/**
+ * Cuanto se espera antes de recargar por un evento en vivo, para juntar en una
+ * sola recarga la rafaga de llamados que llegan casi al tiempo.
+ */
+const MS_AGRUPAR_EVENTOS = 500
 
 type Resumen = { enEspera: number; llamados: number; atendidos: number; ausentes: number }
 
@@ -47,9 +53,17 @@ export default function TurnosEnCursoClient() {
 
   const cargar = useCallback(async () => {
     try {
+      // La fecha se calcula en CADA carga, no al montar: esta pantalla vive
+      // abierta en el puesto del administrador y tiene que pasar sola al dia
+      // siguiente.
+      //
+      // Sin este filtro se pedia el historico COMPLETO y con el se calculaban
+      // los cuatro indicadores y la espera por servicio: los turnos de dias
+      // anteriores (incluidos los que quedaron colgados en EN_ESPERA al cerrar
+      // la jornada) sumaban en el tablero de "hoy".
       const [pantalla, historico, catalogo] = await Promise.all([
         pedir<{ casillas: CasillaPantalla[] }>('/api/turnos/pantalla'),
-        pedir<{ turnos: Turno[] }>('/api/turnos/historico'),
+        pedir<{ turnos: Turno[] }>(`/api/turnos/historico?fecha=${hoyEnColombia()}`),
         pedir<{ servicios: Servicio[] }>('/api/turnos/servicios'),
       ])
       setCasillas(pantalla.casillas)
@@ -69,10 +83,32 @@ export default function TurnosEnCursoClient() {
     return () => clearInterval(id)
   }, [cargar])
 
+  /**
+   * Los eventos en vivo disparan una recarga, pero AGRUPADA.
+   *
+   * Cada `cargar()` son tres peticiones, y los llamados llegan a rafagas: a
+   * primera hora, diez consultorios pasando paciente casi al tiempo producian
+   * diez recargas seguidas, o sea treinta peticiones en un par de segundos,
+   * para pintar exactamente el mismo estado final. Con medio segundo de espera
+   * la rafaga entera se resuelve en una sola recarga y el tablero se ve igual
+   * de al instante.
+   */
   useEffect(() => {
     const es = new EventSource('/api/turnos/stream')
-    es.onmessage = () => cargar()
-    return () => es.close()
+    let pendiente: ReturnType<typeof setTimeout> | null = null
+
+    es.onmessage = () => {
+      if (pendiente) clearTimeout(pendiente)
+      pendiente = setTimeout(() => {
+        pendiente = null
+        void cargar()
+      }, MS_AGRUPAR_EVENTOS)
+    }
+
+    return () => {
+      if (pendiente) clearTimeout(pendiente)
+      es.close()
+    }
   }, [cargar])
 
   const resumen = contar(turnos)
@@ -167,7 +203,7 @@ export default function TurnosEnCursoClient() {
                     <>
                       <p className="mt-1 text-3xl font-black tracking-[-0.02em] text-brand-800">{casilla.codigo}</p>
                       <p className="truncate text-sm font-bold text-slate-600">
-                        {casilla.pacienteVisible ?? casilla.servicioNombre}
+                        {casilla.servicioNombre}
                         {casilla.horaLlamado ? ` · ${horaCorta(casilla.horaLlamado)}` : ''}
                       </p>
                     </>

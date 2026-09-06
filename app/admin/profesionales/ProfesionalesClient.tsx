@@ -1,150 +1,94 @@
 'use client'
 
 /**
- * Acceso de doctores por enlace temporal (RF pendiente, confirmado por el
- * hospital: cada profesional pasa sus propios turnos, sin cuenta propia
- * todavia). El administrador genera un enlace con la vigencia que elija,
- * porque hay turnos de manana, tarde y noche que duran distinto.
+ * Catalogo de profesionales (doctores).
+ *
+ * Mientras la API del hospital no exista, los doctores se dan de alta a mano
+ * aqui. Dos reglas del dominio que esta pantalla hace cumplir:
+ *
+ * 1. Un doctor no se borra, se DESACTIVA: su nombre quedo escrito en los
+ *    turnos que ya llamo y borrarlo dejaria ese rastro huerfano.
+ * 2. Solo existe en servicios que atienden POR CITA. En los de ventanilla la
+ *    fila es compartida y la toma quien este libre, asi que un doctor asignado
+ *    ahi no tendria pacientes propios a quien llamar.
+ *
+ * El enlace con el que cada doctor entra a su consultorio NO se maneja aqui,
+ * sino en "Enlaces de consultorio". Van separados a proposito: repartir
+ * enlaces es trabajo del dia a dia y se le puede encargar al operador del
+ * mostrador, mientras que tocar el catalogo (la jornada, sobre todo) le mueve
+ * la agenda a todo el hospital.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Check, Copy, IdentificationCard, Link as LinkIcon, Prohibit } from '@phosphor-icons/react/dist/ssr'
+import { IdentificationCard, Plus } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import ConfirmModal from '@/components/ui/ConfirmModal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Tabla, TablaSkeleton } from '@/components/admin/Campos'
+import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
-import type { AccesoProfesional, Modulo, Profesional, Servicio } from '@/lib/turnos/types'
+import type { Jornada, Modulo, Profesional, Servicio } from '@/lib/turnos/types'
 
-const COLUMNAS = ['Profesional', 'Servicio', 'Consultorio', 'Enlace', '']
+const COLUMNAS = ['Profesional', 'Servicio', 'Jornada', 'Consultorio', 'Estado']
 
-type EstadoAcceso = 'vigente' | 'vencido' | 'revocado' | 'sin_enlace'
-
-const ATAJOS_VIGENCIA = [
-  { etiqueta: '6 h (medio turno)', horas: 6, minutos: 0 },
-  { etiqueta: '12 h (turno completo)', horas: 12, minutos: 0 },
-  { etiqueta: '24 h (un dia)', horas: 24, minutos: 0 },
-]
-
-function estadoDelAcceso(acceso: AccesoProfesional | undefined): EstadoAcceso {
-  if (!acceso) return 'sin_enlace'
-  if (acceso.revocadoEn) return 'revocado'
-  if (new Date(acceso.expiraEn).getTime() <= Date.now()) return 'vencido'
-  return 'vigente'
+type FormularioDoctor = {
+  nombre: string
+  servicioId: string
+  jornada: Jornada
+  moduloId: string
+  activo: boolean
 }
 
-const etiquetaEstado: Record<EstadoAcceso, string> = {
-  vigente: 'Vigente',
-  vencido: 'Vencido',
-  revocado: 'Revocado',
-  sin_enlace: 'Sin enlace',
-}
-
-const tonoEstado: Record<EstadoAcceso, 'green' | 'slate' | 'red'> = {
-  vigente: 'green',
-  vencido: 'slate',
-  revocado: 'slate',
-  sin_enlace: 'slate',
-}
-
-/** Cuenta regresiva legible: "faltan 3 h 20 min", "vencido". */
-function tiempoRestante(expiraEn: string): string {
-  const ms = new Date(expiraEn).getTime() - Date.now()
-  if (ms <= 0) return 'vencido'
-  const minutosTotales = Math.round(ms / 60000)
-  const horas = Math.floor(minutosTotales / 60)
-  const minutos = minutosTotales % 60
-  if (horas === 0) return `faltan ${minutos} min`
-  if (minutos === 0) return `faltan ${horas} h`
-  return `faltan ${horas} h ${minutos} min`
-}
-
-function formatoFechaHora(iso: string): string {
-  return new Intl.DateTimeFormat('es-CO', {
-    day: 'numeric',
-    month: 'long',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: 'America/Bogota',
-  }).format(new Date(iso))
+const DOCTOR_VACIO: FormularioDoctor = {
+  nombre: '',
+  servicioId: '',
+  jornada: 'MANANA',
+  moduloId: '',
+  activo: true,
 }
 
 /**
- * El backend solo guarda el hash del token: el enlace en claro no se puede
- * volver a pedir al servidor. Para poder "ver" un enlace vigente sin generar
- * uno nuevo, se guarda una copia en el navegador del administrador, y se
- * valida contra `expiraEn` para saber si sigue siendo el acceso actual.
+ * La jornada decide a que horas se le puede agendar al doctor. Las horas
+ * concretas de cada una son las mismas para todo el hospital y se configuran
+ * en "Pantalla y audio"; aqui solo se elige en cual trabaja.
  */
-function claveCache(profesionalId: string) {
-  return `enlace-profesional:${profesionalId}`
+const etiquetaJornada: Record<Jornada, string> = {
+  MANANA: 'Mañana',
+  TARDE: 'Tarde',
+  COMPLETA: 'Dia completo',
 }
 
-function leerEnlaceCacheado(profesionalId: string): { url: string; expiraEn: string } | null {
-  try {
-    const raw = localStorage.getItem(claveCache(profesionalId))
-    return raw ? JSON.parse(raw) : null
-  } catch {
-    return null
-  }
-}
-
-function guardarEnlaceCacheado(profesionalId: string, data: { url: string; expiraEn: string }) {
-  try {
-    localStorage.setItem(claveCache(profesionalId), JSON.stringify(data))
-  } catch {
-    // localStorage puede fallar (modo privado, cuota llena); no es critico.
-  }
-}
-
-function limpiarEnlaceCacheado(profesionalId: string) {
-  try {
-    localStorage.removeItem(claveCache(profesionalId))
-  } catch {
-    // ver comentario de guardarEnlaceCacheado.
-  }
+const tonoJornada: Record<Jornada, 'amber' | 'blue' | 'green'> = {
+  MANANA: 'amber',
+  TARDE: 'blue',
+  COMPLETA: 'green',
 }
 
 export default function ProfesionalesClient() {
   const [profesionales, setProfesionales] = useState<Profesional[]>([])
   const [servicios, setServicios] = useState<Servicio[]>([])
   const [modulos, setModulos] = useState<Modulo[]>([])
-  const [accesos, setAccesos] = useState<AccesoProfesional[]>([])
   const [cargando, setCargando] = useState(true)
 
-  // Modal de generacion.
-  const [profesionalActivo, setProfesionalActivo] = useState<Profesional | null>(null)
-  const [horas, setHoras] = useState(12)
-  const [minutos, setMinutos] = useState(0)
-  const [generando, setGenerando] = useState(false)
-
-  // Resultado a mostrar: recien generado, o el vigente recuperado del cache.
-  const [enlaceGenerado, setEnlaceGenerado] = useState<{ url: string; expiraEn: string } | null>(null)
-  const [enlaceEsNuevo, setEnlaceEsNuevo] = useState(false)
-  // Hay un acceso vigente pero su enlace no esta en el cache de este navegador.
-  const [sinCacheVigente, setSinCacheVigente] = useState(false)
-  const [copiado, setCopiado] = useState(false)
-
-  // Confirmacion de revocar.
-  const [aRevocar, setARevocar] = useState<AccesoProfesional | null>(null)
-  const [revocando, setRevocando] = useState(false)
+  const [abierto, setAbierto] = useState(false)
+  const [editando, setEditando] = useState<Profesional | null>(null)
+  const [formulario, setFormulario] = useState<FormularioDoctor>(DOCTOR_VACIO)
+  const [guardando, setGuardando] = useState(false)
 
   const cargar = useCallback(async () => {
     try {
-      const [p, s, m, a] = await Promise.all([
-        pedir<{ profesionales: Profesional[] }>('/api/turnos/profesionales'),
-        pedir<{ servicios: Servicio[] }>('/api/turnos/servicios'),
-        pedir<{ modulos: Modulo[] }>('/api/turnos/modulos'),
-        pedir<{ accesos: AccesoProfesional[] }>('/api/profesionales/accesos'),
+      // `todos=1`: la administracion tambien ve a los inactivos, que es la
+      // unica forma de volver a activarlos.
+      const [p, s, m] = await Promise.all([
+        pedir<{ profesionales: Profesional[] }>('/api/turnos/profesionales?todos=1'),
+        pedir<{ servicios: Servicio[] }>('/api/turnos/servicios?todos=1'),
+        pedir<{ modulos: Modulo[] }>('/api/turnos/modulos?todos=1'),
       ])
       setProfesionales(p.profesionales)
       setServicios(s.servicios)
       setModulos(m.modulos)
-      setAccesos(a.accesos)
     } catch (error) {
       toast.error('No se pudieron cargar los profesionales', mensajeDeError(error))
     } finally {
@@ -156,13 +100,6 @@ export default function ProfesionalesClient() {
     cargar()
   }, [cargar])
 
-  // El "faltan X min" se queda viejo si no se refresca la vista.
-  const [, forzarRefresco] = useState(0)
-  useEffect(() => {
-    const id = setInterval(() => forzarRefresco((n) => n + 1), 30_000)
-    return () => clearInterval(id)
-  }, [])
-
   const nombreServicio = useMemo(() => {
     const mapa = new Map(servicios.map((s) => [s.id, s.nombre]))
     return (id: string) => mapa.get(id) ?? '—'
@@ -173,92 +110,85 @@ export default function ProfesionalesClient() {
     return (id?: string | null) => (id ? (mapa.get(id) ?? '—') : '—')
   }, [modulos])
 
-  const ultimoAccesoDe = useCallback(
-    (profesionalId: string) => accesos.find((a) => a.profesionalId === profesionalId),
-    [accesos],
+  /**
+   * Servicios a los que se puede asignar un doctor: solo los que atienden por
+   * cita. Los de ventanilla tienen fila compartida y no llevan profesional; el
+   * servidor tambien lo rechaza, pero ofrecerlos aqui seria mandar al
+   * administrador a un error evitable.
+   */
+  // El catalogo se pide con los inactivos (para poder resolver el nombre de un
+  // servicio apagado al lado de un doctor que sigue existiendo), pero ASIGNAR
+  // solo se puede a uno activo: mandar un doctor a un servicio apagado lo deja
+  // sin fila y sin pantalla.
+  const serviciosConCita = useMemo(
+    () => servicios.filter((s) => s.activo && s.modoFila === 'POR_PROFESIONAL'),
+    [servicios],
   )
 
-  function abrirGenerar(profesional: Profesional) {
-    setProfesionalActivo(profesional)
-    setHoras(12)
-    setMinutos(0)
-    setCopiado(false)
-    setEnlaceEsNuevo(false)
-    setSinCacheVigente(false)
+  /**
+   * Consultorios del servicio elegido, mas los que no estan asignados a
+   * ninguno.
+   *
+   * Se muestran solo los ACTIVOS, salvo el que el doctor ya tenga puesto: si su
+   * consultorio se desactivo, dejarlo fuera de la lista se lo borraba en
+   * silencio la proxima vez que alguien le editara el nombre.
+   */
+  const modulosDelServicio = useMemo(
+    () =>
+      modulos.filter(
+        (m) =>
+          (!m.servicioId || m.servicioId === formulario.servicioId) &&
+          (m.activo || m.id === formulario.moduloId),
+      ),
+    [modulos, formulario.servicioId, formulario.moduloId],
+  )
 
-    const acceso = ultimoAccesoDe(profesional.id)
-    if (estadoDelAcceso(acceso) === 'vigente' && acceso) {
-      const cacheado = leerEnlaceCacheado(profesional.id)
-      if (cacheado && cacheado.expiraEn === acceso.expiraEn) {
-        setEnlaceGenerado(cacheado)
-        return
+  function abrirNuevo() {
+    setEditando(null)
+    setFormulario({ ...DOCTOR_VACIO, servicioId: serviciosConCita[0]?.id ?? '' })
+    setAbierto(true)
+  }
+
+  function abrirEdicion(profesional: Profesional) {
+    setEditando(profesional)
+    setFormulario({
+      nombre: profesional.nombre,
+      servicioId: profesional.servicioId,
+      jornada: profesional.jornada,
+      moduloId: profesional.moduloId ?? '',
+      activo: profesional.activo,
+    })
+    setAbierto(true)
+  }
+
+  async function guardar(evento: React.FormEvent) {
+    evento.preventDefault()
+    setGuardando(true)
+
+    const cuerpo = {
+      nombre: formulario.nombre,
+      servicioId: formulario.servicioId,
+      jornada: formulario.jornada,
+      moduloId: formulario.moduloId || null,
+    }
+
+    try {
+      if (editando) {
+        await pedir(`/api/turnos/profesionales/${editando.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ ...cuerpo, activo: formulario.activo }),
+        })
+        toast.success('Profesional actualizado', formulario.nombre)
+      } else {
+        await pedir('/api/turnos/profesionales', { method: 'POST', body: JSON.stringify(cuerpo) })
+        toast.success('Profesional creado', `Ya se le pueden agendar citas a ${formulario.nombre}.`)
       }
-      setEnlaceGenerado(null)
-      setSinCacheVigente(true)
-      return
-    }
-    setEnlaceGenerado(null)
-  }
-
-  const duracionMinutos = horas * 60 + minutos
-  const duracionValida = duracionMinutos >= 15 && duracionMinutos <= 72 * 60
-
-  // `Date.now()` es impuro: se calcula en un efecto, no durante el render,
-  // para no romper la regla de pureza de componentes.
-  const [vencimientoPrevisto, setVencimientoPrevisto] = useState<string | null>(null)
-  useEffect(() => {
-    if (!duracionValida) {
-      setVencimientoPrevisto(null)
-      return
-    }
-    setVencimientoPrevisto(new Date(Date.now() + duracionMinutos * 60 * 1000).toISOString())
-  }, [duracionMinutos, duracionValida])
-
-  async function generarEnlace() {
-    if (!profesionalActivo || !duracionValida) return
-    setGenerando(true)
-    try {
-      const data = await pedir<{ url: string; expiraEn: string }>(
-        `/api/profesionales/${profesionalActivo.id}/acceso`,
-        { method: 'POST', body: JSON.stringify({ horas, minutos }) },
-      )
-      setEnlaceGenerado(data)
-      setEnlaceEsNuevo(true)
-      setSinCacheVigente(false)
-      guardarEnlaceCacheado(profesionalActivo.id, data)
-      toast.success('Enlace generado', `Para ${profesionalActivo.nombre}.`)
+      setAbierto(false)
       await cargar()
     } catch (error) {
-      toast.error('No se pudo generar el enlace', mensajeDeError(error))
+      toast.error('No se pudo guardar', mensajeDeError(error))
     } finally {
-      setGenerando(false)
-    }
-  }
-
-  async function copiarEnlace() {
-    if (!enlaceGenerado) return
-    try {
-      await navigator.clipboard.writeText(enlaceGenerado.url)
-      setCopiado(true)
-      setTimeout(() => setCopiado(false), 2000)
-    } catch {
-      toast.error('No se pudo copiar', 'Selecciona y copia el enlace manualmente.')
-    }
-  }
-
-  async function confirmarRevocar() {
-    if (!aRevocar) return
-    setRevocando(true)
-    try {
-      await pedir(`/api/profesionales/accesos/${aRevocar.id}`, { method: 'DELETE' })
-      limpiarEnlaceCacheado(aRevocar.profesionalId)
-      toast.info('Enlace revocado', 'El doctor ya no podra usarlo.')
-      setARevocar(null)
-      await cargar()
-    } catch (error) {
-      toast.error('No se pudo revocar', mensajeDeError(error))
-    } finally {
-      setRevocando(false)
+      setGuardando(false)
     }
   }
 
@@ -267,6 +197,10 @@ export default function ProfesionalesClient() {
       <Card padded={false}>
         <CardHeader>
           <CardTitle>Profesionales ({profesionales.length})</CardTitle>
+          <Button size="sm" onClick={abrirNuevo} disabled={serviciosConCita.length === 0}>
+            <Plus size={17} weight="bold" />
+            Nuevo doctor
+          </Button>
         </CardHeader>
         <CardContent padded={false}>
           {cargando ? (
@@ -276,196 +210,132 @@ export default function ProfesionalesClient() {
               <EmptyState
                 icon={IdentificationCard}
                 title="Sin profesionales"
-                description="Todavia no hay profesionales registrados."
+                description="Crea el primer doctor para poder agendarle citas."
               />
             </div>
           ) : (
             <Tabla columnas={COLUMNAS}>
-              {profesionales.map((profesional) => {
-                const acceso = ultimoAccesoDe(profesional.id)
-                const estado = estadoDelAcceso(acceso)
-                return (
-                  <tr
-                    key={profesional.id}
-                    className="cursor-pointer hover:bg-slate-50"
-                    onClick={() => abrirGenerar(profesional)}
-                  >
-                    <td className="px-4 py-3 font-black text-brand-950">{profesional.nombre}</td>
-                    <td className="px-4 py-3 text-slate-600">{nombreServicio(profesional.servicioId)}</td>
-                    <td className="px-4 py-3 text-slate-600">{nombreModulo(profesional.moduloId)}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-col gap-0.5">
-                        <Badge tone={tonoEstado[estado]}>{etiquetaEstado[estado]}</Badge>
-                        {acceso && estado === 'vigente' ? (
-                          <span className="text-xs font-semibold text-slate-400">
-                            {tiempoRestante(acceso.expiraEn)}
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            abrirGenerar(profesional)
-                          }}
-                        >
-                          <LinkIcon size={16} weight="bold" />
-                          {estado === 'vigente' ? 'Ver enlace' : 'Generar enlace'}
-                        </Button>
-                        {estado === 'vigente' && acceso ? (
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setARevocar(acceso)
-                            }}
-                          >
-                            <Prohibit size={16} weight="bold" />
-                            Revocar
-                          </Button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
+              {profesionales.map((profesional) => (
+                <tr
+                  key={profesional.id}
+                  className="cursor-pointer hover:bg-slate-50"
+                  onClick={() => abrirEdicion(profesional)}
+                >
+                  <td className="px-4 py-3 font-black text-brand-950">{profesional.nombre}</td>
+                  <td className="px-4 py-3 text-slate-600">{nombreServicio(profesional.servicioId)}</td>
+                  <td className="px-4 py-3">
+                    <Badge tone={tonoJornada[profesional.jornada]}>
+                      {etiquetaJornada[profesional.jornada]}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3 text-slate-600">{nombreModulo(profesional.moduloId)}</td>
+                  <td className="px-4 py-3">
+                    <Badge tone={profesional.activo ? 'green' : 'slate'}>
+                      {profesional.activo ? 'Activo' : 'Inactivo'}
+                    </Badge>
+                  </td>
+                </tr>
+              ))}
             </Tabla>
           )}
         </CardContent>
       </Card>
 
+      <p className="mt-4 text-sm leading-6 text-slate-500">
+        El enlace con el que cada doctor entra a su consultorio se genera en{' '}
+        <strong className="font-black text-slate-600">Enlaces de consultorio</strong>.
+      </p>
+
       <Modal
-        open={!!profesionalActivo}
-        onClose={() => setProfesionalActivo(null)}
-        title={profesionalActivo?.nombre ?? ''}
-        description={
-          profesionalActivo
-            ? `${nombreServicio(profesionalActivo.servicioId)} · ${nombreModulo(profesionalActivo.moduloId)}`
-            : undefined
-        }
+        open={abierto}
+        onClose={() => setAbierto(false)}
+        title={editando ? 'Editar profesional' : 'Nuevo doctor'}
+        description="Los doctores atienden por cita: el servicio decide en que fila entran sus pacientes."
       >
-        <p className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-400">Enlace de acceso</p>
-        {enlaceGenerado ? (
-          <div className="space-y-4">
-            <p className="text-sm text-slate-600">
-              {enlaceEsNuevo
-                ? 'Copialo y enviaselo al doctor ahora.'
-                : 'Este es el enlace activo para este profesional en este dispositivo.'}
-            </p>
-            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <input
-                readOnly
-                value={enlaceGenerado.url}
-                onFocus={(e) => e.currentTarget.select()}
-                className="min-w-0 flex-1 truncate bg-transparent text-sm font-semibold text-brand-950 outline-none"
-              />
-              <Button size="sm" variant="secondary" onClick={copiarEnlace}>
-                {copiado ? <Check size={16} weight="bold" /> : <Copy size={16} weight="bold" />}
-                {copiado ? 'Copiado' : 'Copiar'}
-              </Button>
-            </div>
-            <p className="text-sm text-slate-600">
-              Vence el <strong>{formatoFechaHora(enlaceGenerado.expiraEn)}</strong> ({tiempoRestante(enlaceGenerado.expiraEn)}).
-            </p>
-            <div className="flex justify-end">
-              <Button variant="secondary" onClick={() => setProfesionalActivo(null)}>
-                Listo
-              </Button>
-            </div>
-          </div>
-        ) : sinCacheVigente ? (
-          <div className="space-y-4">
-            <p className="text-sm text-slate-600">
-              Ya se genero un enlace para este profesional y sigue vigente, pero no se puede volver a mostrar en
-              este dispositivo. Puedes generar uno nuevo: el anterior dejara de funcionar de inmediato.
-            </p>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="secondary" onClick={() => setProfesionalActivo(null)}>
-                Cancelar
-              </Button>
-              <Button onClick={() => setSinCacheVigente(false)}>Generar uno nuevo</Button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <p className="text-sm text-slate-600">
-              Elige cuanto debe durar el enlace. Se pensó para que coincida con la duracion del turno del doctor.
-            </p>
-            <div className="grid grid-cols-2 gap-4">
-              <Campo etiqueta="Horas">
-                <Entrada
-                  type="number"
-                  min={0}
-                  max={72}
-                  value={horas}
-                  onChange={(e) => setHoras(Math.max(0, Number(e.target.value) || 0))}
-                />
-              </Campo>
-              <Campo etiqueta="Minutos">
-                <Entrada
-                  type="number"
-                  min={0}
-                  max={59}
-                  value={minutos}
-                  onChange={(e) => setMinutos(Math.max(0, Math.min(59, Number(e.target.value) || 0)))}
-                />
-              </Campo>
-            </div>
+        <form onSubmit={guardar} className="space-y-4">
+          <Campo etiqueta="Nombre">
+            <Entrada
+              value={formulario.nombre}
+              onChange={(e) => setFormulario((f) => ({ ...f, nombre: e.target.value }))}
+              placeholder="Dra. Maria Gomez"
+              required
+              minLength={3}
+            />
+          </Campo>
 
-            <div className="flex flex-wrap gap-2">
-              {ATAJOS_VIGENCIA.map((atajo) => (
-                <Button
-                  key={atajo.etiqueta}
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => {
-                    setHoras(atajo.horas)
-                    setMinutos(atajo.minutos)
-                  }}
-                >
-                  {atajo.etiqueta}
-                </Button>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Campo etiqueta="Servicio">
+              <Seleccion
+                value={formulario.servicioId}
+                onChange={(e) =>
+                  // Al cambiar de servicio, el consultorio anterior puede no
+                  // pertenecerle: se limpia en vez de dejar una pareja invalida.
+                  setFormulario((f) => ({ ...f, servicioId: e.target.value, moduloId: '' }))
+                }
+                required
+              >
+                {serviciosConCita.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.nombre}
+                  </option>
+                ))}
+              </Seleccion>
+            </Campo>
+
+            <Campo etiqueta="Jornada" ayuda="En que parte del dia atiende. Decide a que horas se le puede agendar.">
+              <Seleccion
+                value={formulario.jornada}
+                onChange={(e) => setFormulario((f) => ({ ...f, jornada: e.target.value as Jornada }))}
+                required
+              >
+                <option value="MANANA">{etiquetaJornada.MANANA}</option>
+                <option value="TARDE">{etiquetaJornada.TARDE}</option>
+                <option value="COMPLETA">{etiquetaJornada.COMPLETA}</option>
+              </Seleccion>
+            </Campo>
+          </div>
+
+          <Campo etiqueta="Consultorio" ayuda="Opcional. El doctor puede cambiarlo al iniciar su jornada.">
+            <Seleccion
+              value={formulario.moduloId}
+              onChange={(e) => setFormulario((f) => ({ ...f, moduloId: e.target.value }))}
+            >
+              <option value="">Sin asignar</option>
+              {modulosDelServicio.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.nombre}
+                </option>
               ))}
-            </div>
+            </Seleccion>
+          </Campo>
 
-            {duracionValida && vencimientoPrevisto ? (
-              <p className="text-sm text-slate-600">
-                Vence el <strong>{formatoFechaHora(vencimientoPrevisto)}</strong>.
-              </p>
-            ) : (
-              <p className="text-sm font-semibold text-red-600">
-                La vigencia debe ser entre 15 minutos y 72 horas.
-              </p>
-            )}
-
-            <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="secondary" onClick={() => setProfesionalActivo(null)}>
-                Cancelar
-              </Button>
-              <Button onClick={generarEnlace} loading={generando} disabled={!duracionValida}>
-                Generar enlace
-              </Button>
+          {editando ? (
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 p-3.5">
+              <div>
+                <p className="text-sm font-black text-slate-800">Activo</p>
+                <p className="text-xs text-slate-500">
+                  Al desactivarlo deja de aparecer para agendarle citas. No se borra: su nombre sigue en los
+                  turnos que ya llamo.
+                </p>
+              </div>
+              <Interruptor
+                activo={formulario.activo}
+                onChange={(valor) => setFormulario((f) => ({ ...f, activo: valor }))}
+                etiqueta={`Activar ${formulario.nombre}`}
+              />
             </div>
+          ) : null}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setAbierto(false)}>
+              Cancelar
+            </Button>
+            <Button type="submit" loading={guardando}>
+              {editando ? 'Guardar cambios' : 'Crear doctor'}
+            </Button>
           </div>
-        )}
+        </form>
       </Modal>
-
-      <ConfirmModal
-        open={!!aRevocar}
-        onClose={() => setARevocar(null)}
-        onConfirm={confirmarRevocar}
-        loading={revocando}
-        title="Revocar este enlace"
-        description="El doctor ya no podra entrar con el. Si sigue con su turno, genera uno nuevo."
-        confirmLabel="Revocar"
-        danger
-      />
     </>
   )
 }

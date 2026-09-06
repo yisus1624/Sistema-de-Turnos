@@ -10,8 +10,8 @@
  * via Server-Sent Events (SSE) en GET /api/turnos/stream.
  *
  * IMPORTANTE: lo que viaja aqui llega a una pantalla SIN sesion. Por eso los
- * eventos cargan `CasillaPantalla`, que ya trae el nombre del paciente
- * enmascarado; el nombre completo nunca se publica.
+ * eventos cargan `CasillaPantalla`, que por construccion no tiene ningun dato
+ * del paciente: solo el turno, el consultorio y el doctor.
  *
  * NOTA: esto funciona en un unico proceso/servidor. Si en produccion se
  * despliega con varias instancias, habria que migrar a un bus compartido
@@ -52,6 +52,9 @@ declare global {
 
 export const realtimeHub: RealtimeHub = globalThis.__turnosRealtimeHub ?? new RealtimeHub()
 
-if (process.env.NODE_ENV !== 'production') {
-  globalThis.__turnosRealtimeHub = realtimeHub
-}
+// Se guarda SIEMPRE, tambien en produccion. Guardarlo solo en desarrollo
+// contradecia el motivo por el que existe: si Next evalua este modulo en dos
+// contextos, quien publica el llamado y quien lo escucha por SSE terminan en
+// hubs distintos y la pantalla de la sala de espera se queda congelada,
+// mostrando turnos viejos sin ningun error visible.
+globalThis.__turnosRealtimeHub = realtimeHub

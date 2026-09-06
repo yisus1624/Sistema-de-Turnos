@@ -20,6 +20,26 @@ export async function GET() {
   let unsubscribe: (() => void) | null = null
   let ping: ReturnType<typeof setInterval> | null = null
 
+  /**
+   * Suelta la suscripcion y el temporizador.
+   *
+   * Se llama tanto desde `cancel()` (el cliente cerro la pestaña) como en
+   * cuanto un envio falla. Sin lo segundo, una pantalla que se desconecta de
+   * golpe podia dejar el intervalo latiendo y el listener enganchado para
+   * siempre; con un televisor que se apaga y se enciende todos los dias, esas
+   * conexiones muertas se van acumulando en el servidor.
+   */
+  const limpiar = () => {
+    if (unsubscribe) {
+      unsubscribe()
+      unsubscribe = null
+    }
+    if (ping) {
+      clearInterval(ping)
+      ping = null
+    }
+  }
+
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(encoder.encode(': conectado\n\n'))
@@ -28,7 +48,8 @@ export async function GET() {
         try {
           controller.enqueue(encoder.encode(formatearEvento(evento)))
         } catch {
-          // El controller ya pudo haberse cerrado si el cliente se desconecto.
+          // El controller ya se cerro: el cliente se desconecto.
+          limpiar()
         }
       })
 
@@ -36,13 +57,12 @@ export async function GET() {
         try {
           controller.enqueue(encoder.encode(': ping\n\n'))
         } catch {
-          // Ignorar: se limpia en cancel().
+          limpiar()
         }
       }, 20000)
     },
     cancel() {
-      if (unsubscribe) unsubscribe()
-      if (ping) clearInterval(ping)
+      limpiar()
     },
   })
 

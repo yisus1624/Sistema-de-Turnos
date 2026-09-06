@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { turnoRepository } from '@/lib/turnos/repositorio'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
 
 const bodySchema = z
   .object({
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   try {
     // El funcionario que llama sale de la sesion, no del cuerpo de la peticion:
     // queda registrado en el historico (requerimiento seccion 23).
-    const session = await requireRol(['OPERADOR', 'ADMINISTRADOR'])
+    const session = await requireSeccion('/operador')
 
     const body = await request.json().catch(() => null)
     const parsed = bodySchema.safeParse(body)

@@ -53,6 +53,40 @@ fila es compartida por orden de llegada, como en el documento original.
       ventanilla.
 - [ ] Catalogo de **modulos**: consultorios y ventanillas.
 - [ ] Catalogo de **profesionales** y en que consultorio atiende cada uno.
+- [ ] **Jornada de cada profesional**: si atiende en la mañana, en la tarde o
+      el dia completo. Es lo que decide a que horas se le puede agendar (ver
+      `Jornada` en [`types.ts`](../turnos/types.ts)). Si la API no lo trae, se
+      sigue marcando a mano en la pantalla de Profesionales.
+- [ ] **Duracion de la consulta**: si es la misma para todos o cambia por
+      servicio o por profesional. Hoy es un solo valor para todo el hospital,
+      configurable por el administrador; si en el hospital varia por
+      especialidad, hay que decidirlo antes de conectar la API, porque cambia
+      la forma de la parrilla del horario.
+
+#### Como mapean los "Consultorios" del sistema del hospital
+
+El sistema actual maneja una ficha de **Consultorio** con nombre (`CONS 01 -
+CONSULTA EXTERNA`, `CONS 03 - PYM`, `FISIOTERAPIA`), centro de servicios,
+centro de costos y un listado de procedimientos CUPS. La equivalencia con
+nuestro modelo es:
+
+| Sistema del hospital        | Aqui                                    |
+| --------------------------- | --------------------------------------- |
+| Consultorio (la ficha)      | `Modulo`                                |
+| Centro de costos / servicios| `Servicio` (ej. Consulta externa)       |
+| Nombre del consultorio      | `Modulo.nombre` — lleva la especialidad |
+| Listado de procedimientos CUPS | No se usa: no hace falta para el turno |
+
+Las especialidades **no** son servicios distintos: todas cuelgan de consulta
+externa y lo que distingue a una de otra es el consultorio. Por eso la
+especialidad va en el nombre del modulo, que es lo que se pinta en la pantalla
+de la sala de espera junto al turno.
+
+- [ ] Confirmar que campo del sistema del hospital corresponde al **nombre del
+      consultorio** que se le debe mostrar al paciente, y si ese nombre es el
+      mismo que esta rotulado en la puerta.
+- [ ] Confirmar si de verdad todo cuelga de consulta externa o si hay algun
+      servicio que deba tener su propia fila y su propio prefijo de turno.
 
 ### Usuarios
 
@@ -67,11 +101,12 @@ fila es compartida por orden de llegada, como en el documento original.
 - [ ] **Quien es la fuente de verdad** del estado del turno: el hospital o este
       sistema. Hoy asumimos que este sistema lo es y que la API solo aporta la
       agenda.
-- [ ] Si se muestra el **nombre del paciente** en la pantalla publica. Hoy sale
-      enmascarado ("JUAN P.") porque el nombre completo junto al servicio
-      revelaria un dato de salud en un lugar publico (Ley 1581 de 2012). Si el
-      hospital pide el nombre completo, que quede por escrito de su parte; se
-      cambia solo en [`privacidad.ts`](../turnos/privacidad.ts).
+- [x] **Nombre del paciente en la pantalla publica: NO se muestra.** Decision
+      del hospital. Ni completo ni abreviado: a la pantalla solo van el turno y
+      el consultorio. El tipo `CasillaPantalla` ([`types.ts`](../turnos/types.ts))
+      directamente no tiene campo para datos del paciente, asi que la regla no
+      se puede saltar por descuido. Al paciente se le identifica por su turno,
+      que se lo entrega admisiones junto con el consultorio y el doctor.
 - [ ] El documento de requerimientos (secciones 21.B y 27) pide base de datos y
       modelo de datos como entregable, pero se acordo no tener base de datos
       propia. Aclarar.

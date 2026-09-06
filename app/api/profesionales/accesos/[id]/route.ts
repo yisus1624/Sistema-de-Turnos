@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const session = await requireSeccion('/admin/profesionales')
+    const session = await requireSeccion('/admin/enlaces')
 
     const { id } = await context.params
     const acceso = await turnoRepository.revocarAccesoProfesional(id)

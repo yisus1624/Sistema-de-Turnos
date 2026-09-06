@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import { errorConsultorio, requireProfesionalPorToken } from '@/lib/turnos/acceso-consultorio'
 import { verificarTurnoDelProfesional } from '@/lib/turnos/acceso-consultorio-turno'
 

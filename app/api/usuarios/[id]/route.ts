@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { usuarioRepository } from '@/lib/usuarios/in-memory-repository'
+import { usuarioRepository } from '@/lib/usuarios/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
+import { seccionesDelRol } from '@/lib/permissions/rutas'
 
 const cambioSchema = z.object({
   nombre: z.string().trim().min(3).max(80).optional(),
@@ -53,6 +54,36 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       if (id === session.user.id && (parsed.data.secciones !== undefined || parsed.data.rol !== undefined)) {
         return NextResponse.json(
           { error: 'No puedes cambiar tu propio rol ni tus propios permisos.' },
+          { status: 403 },
+        )
+      }
+
+      // NO SE TOCA LA CUENTA DE UN ADMINISTRADOR.
+      //
+      // Faltaba esto y era la via de escalada: las reglas de arriba miran que
+      // rol se ASIGNA, pero no sobre QUIEN se actua. Un operador con la
+      // seccion de usuarios podia hacerle PATCH al administrador cambiandole
+      // la contrasena y entrar como el. Se busca en la lista completa (no con
+      // `buscarPorId`, que oculta los desactivados) porque si no, la misma
+      // jugada valia contra un administrador dado de baja, reactivandolo en la
+      // misma peticion.
+      const todos = await usuarioRepository.listar()
+      const objetivo = todos.find((u) => u.id === id)
+      if (objetivo?.rol === 'ADMINISTRADOR') {
+        return NextResponse.json(
+          { error: 'Solo un administrador puede modificar la cuenta de otro administrador.' },
+          { status: 403 },
+        )
+      }
+
+      // Tampoco se reparten permisos que uno mismo no tiene: si no, bastaba
+      // con crearle a otro una cuenta con todas las secciones y entrar con
+      // ella.
+      const propias = new Set(session.user.secciones ?? seccionesDelRol(session.user.rol).map((s) => s.href))
+      const ajenas = (parsed.data.secciones ?? []).filter((seccion) => !propias.has(seccion))
+      if (ajenas.length > 0) {
+        return NextResponse.json(
+          { error: 'No puedes dar acceso a secciones que tu no tienes.' },
           { status: 403 },
         )
       }

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireRol, tieneSeccion } from '@/lib/permissions/session'
 import type { EstadoTurno } from '@/lib/turnos/types'
 
@@ -11,11 +11,15 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
 
     const estado = searchParams.get('estado')
-    // Quien tiene el historico o los reportes de administracion ve todos los
-    // turnos y puede filtrar por funcionario (requerimiento seccion 18). El
-    // operador que solo tiene su propio historico ve unicamente lo que el
-    // mismo llamo.
-    const veTodo = tieneSeccion(session, '/admin/historico', '/admin/reportes')
+    // Quien tiene el monitor en vivo, el historico o los reportes ve TODOS los
+    // turnos y puede filtrar por funcionario (requerimiento seccion 18). Quien
+    // solo tiene su propio historico ve unicamente lo que el mismo llamo.
+    //
+    // '/admin/turnos' entra en la lista porque el monitor en vivo cuenta lo que
+    // esta pasando ahora mismo en toda la sala, y los turnos los llaman los
+    // medicos desde su consultorio, no el administrador: filtrarlos por quien
+    // consulta dejaba los indicadores en cero.
+    const veTodo = tieneSeccion(session, '/admin/turnos', '/admin/historico', '/admin/reportes')
     const funcionarioId = veTodo ? (searchParams.get('funcionarioId') ?? undefined) : session.user.id
 
     const turnos = await turnoRepository.historico({

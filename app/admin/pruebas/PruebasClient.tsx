@@ -13,9 +13,10 @@ import { ArrowClockwise, Broadcast, FastForward, Megaphone, PlayCircle, Stop } f
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import { Campo, Entrada } from '@/components/admin/Campos'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
-import type { ItemAgendaProfesional, Modulo, Profesional, Turno } from '@/lib/turnos/types'
+import type { HorarioDia, ItemAgendaProfesional, Modulo, Profesional, Turno } from '@/lib/turnos/types'
 
 const PROFESIONALES_SIMULACION = [
   'pro-perez',
@@ -29,6 +30,57 @@ const PROFESIONALES_SIMULACION = [
   'pro-ramirez',
   'pro-castro',
 ]
+
+/** Pacientes ficticios para rellenar la agenda cuando ya se gastaron las citas sembradas. */
+const NOMBRES_SIMULACION = [
+  'Ana Maria Ortega Ruiz',
+  'Luis Fernando Pardo Melo',
+  'Claudia Patricia Nieto Sanz',
+  'Andres Felipe Guzman Rey',
+  'Marcela Andrea Pineda Cruz',
+  'Oscar Ivan Zapata Uribe',
+  'Laura Sofia Bernal Mesa',
+  'Hernan Dario Cuesta Polo',
+  'Yuranis Paola Meza Ariza',
+  'Kevin Steven Aguilar Cano',
+]
+
+function pacienteSimulado(indice: number) {
+  return {
+    nombrePaciente: NOMBRES_SIMULACION[indice % NOMBRES_SIMULACION.length],
+    documentoPaciente: String(90000000 + Math.floor(Math.random() * 9999999)),
+  }
+}
+
+/**
+ * Franjas que tiene libres cada doctor hoy, sacadas del horario REAL.
+ *
+ * La simulacion no puede inventarse las horas: una cita solo entra si cae en
+ * una franja de la jornada de ese doctor y el cupo esta libre. Se pide el
+ * horario una sola vez, despues de reiniciar el dia, y de ahi salen las horas
+ * que se van repartiendo.
+ */
+async function franjasLibresPorDoctor(fecha: string): Promise<Map<string, string[]>> {
+  const { horario } = await pedir<{ horario: HorarioDia }>(`/api/turnos/agenda/horario?fecha=${fecha}`)
+  const libres = new Map<string, string[]>()
+
+  for (const bloque of horario.bloques) {
+    for (const columna of bloque.columnas) {
+      const horas = bloque.horas.filter((hora) => !bloque.citas[`${columna.profesionalId}|${hora}`])
+      libres.set(columna.profesionalId, [...(libres.get(columna.profesionalId) ?? []), ...horas])
+    }
+  }
+
+  return libres
+}
+
+/**
+ * Instante ISO de una franja de hoy EN COLOMBIA. El desfase va a mano porque
+ * el equipo puede estar en otra zona y la cita caeria en el dia equivocado.
+ */
+function instanteDeFranja(fecha: string, hora: string) {
+  return new Date(`${fecha}T${hora}:00-05:00`).toISOString()
+}
 
 type DoctorSimulado = {
   profesionalId: string
@@ -45,9 +97,13 @@ export default function PruebasClient() {
   const [doctores, setDoctores] = useState<DoctorSimulado[]>([])
   const [preparando, setPreparando] = useState(false)
   const [enOleada, setEnOleada] = useState(false)
+  const [pacientesPorConsultorio, setPacientesPorConsultorio] = useState(3)
   const [tamanoOleada, setTamanoOleada] = useState(2)
   const [pausaSegundos, setPausaSegundos] = useState(4)
   const [log, setLog] = useState<string[]>([])
+  // Preparar la simulacion BORRA las citas y los turnos de hoy, sean de
+  // ejemplo o de verdad. Nunca debe pasar por un solo clic.
+  const [confirmarReinicio, setConfirmarReinicio] = useState(false)
   const detenerRef = useRef(false)
 
   const agregarLog = useCallback((linea: string) => {
@@ -62,10 +118,37 @@ export default function PruebasClient() {
     setPreparando(true)
     setDoctores([])
     setLog([])
-    agregarLog(`Preparando ${PROFESIONALES_SIMULACION.length} consultorios...`)
+    agregarLog(
+      `Preparando ${PROFESIONALES_SIMULACION.length} consultorios con ${pacientesPorConsultorio} paciente(s) cada uno...`,
+    )
+
+    // Se arranca de cero: los turnos de hoy se borran y las citas de ejemplo
+    // vuelven a quedar PROGRAMADA. Sin esto, la segunda corrida encuentra
+    // todas las citas ya usadas y los consultorios quedan en 0 pacientes.
+    try {
+      await pedir('/api/turnos/simulacion', { method: 'POST' })
+      agregarLog('Datos del dia reiniciados.')
+    } catch (error) {
+      agregarLog(`No se pudieron reiniciar los datos del dia: ${mensajeDeError(error) ?? 'error desconocido'}`)
+      setPreparando(false)
+      return
+    }
 
     const hoy = hoyEnColombia()
-    for (const profesionalId of PROFESIONALES_SIMULACION) {
+
+    // Las horas libres de cada doctor, para poder agendarle mas pacientes sin
+    // chocar con la parrilla ni con las citas de ejemplo que acaba de sembrar
+    // el reinicio.
+    let libresPorDoctor: Map<string, string[]>
+    try {
+      libresPorDoctor = await franjasLibresPorDoctor(hoy)
+    } catch (error) {
+      agregarLog(`No se pudo leer el horario del dia: ${mensajeDeError(error) ?? 'error desconocido'}`)
+      setPreparando(false)
+      return
+    }
+
+    for (const [indiceDoctor, profesionalId] of PROFESIONALES_SIMULACION.entries()) {
       if (detenerRef.current) break
       try {
         const { url } = await pedir<{ url: string; expiraEn: string }>(`/api/profesionales/${profesionalId}/acceso`, {
@@ -74,20 +157,71 @@ export default function PruebasClient() {
         })
         const token = url.split('/consultorio/')[1]
 
-        const estado = await pedir<{
-          profesional: Profesional
-          modulos: Modulo[]
-          agenda: ItemAgendaProfesional[]
-          turnoActual: Turno | null
-        }>(`/api/consultorio/${token}?fecha=${hoy}`)
+        const leerEstado = () =>
+          pedir<{
+            profesional: Profesional
+            modulos: Modulo[]
+            agenda: ItemAgendaProfesional[]
+            pendientes: Turno[]
+            turnoActual: Turno | null
+          }>(`/api/consultorio/${token}?fecha=${hoy}`)
 
-        const pendientes = estado.agenda.filter((item) => item.estado === 'PROGRAMADA')
-        for (const item of pendientes) {
-          await pedir('/api/turnos/citas/llegada', { method: 'POST', body: JSON.stringify({ citaId: item.citaId }) })
+        let estado = await leerEstado()
+        let porLlegar = estado.agenda.filter((item) => item.estado === 'PROGRAMADA')
+
+        // Las citas sembradas son solo 2 o 3 por profesional: se agregan las
+        // que falten para llegar al numero de pacientes pedido.
+        const faltantes = pacientesPorConsultorio - porLlegar.length
+        if (faltantes > 0) {
+          const libres = libresPorDoctor.get(profesionalId) ?? []
+          let agregadas = 0
+          for (let i = 0; i < faltantes; i += 1) {
+            if (detenerRef.current) break
+
+            // Cada franja se usa una sola vez: se saca de la lista al pedirla.
+            const hora = libres.shift()
+            if (!hora) {
+              agregarLog(`${profesionalId} ya no tiene cupos libres en su jornada de hoy.`)
+              break
+            }
+
+            try {
+              await pedir('/api/turnos/agenda', {
+                method: 'POST',
+                body: JSON.stringify({
+                  ...pacienteSimulado(indiceDoctor * pacientesPorConsultorio + i),
+                  profesionalId,
+                  horaCita: instanteDeFranja(hoy, hora),
+                }),
+              })
+              agregadas += 1
+            } catch (error) {
+              agregarLog(`No se pudieron agregar mas citas: ${mensajeDeError(error) ?? 'error desconocido'}`)
+              break
+            }
+          }
+          if (agregadas > 0) {
+            estado = await leerEstado()
+            porLlegar = estado.agenda.filter((item) => item.estado === 'PROGRAMADA')
+          }
         }
+
+        // Registrar la llegada es lo que convierte la cita en un turno EN_ESPERA.
+        for (const item of porLlegar.slice(0, pacientesPorConsultorio)) {
+          if (detenerRef.current) break
+          try {
+            await pedir('/api/turnos/citas/llegada', { method: 'POST', body: JSON.stringify({ citaId: item.citaId }) })
+          } catch (error) {
+            agregarLog(`No se pudo registrar la llegada de ${item.nombrePaciente}: ${mensajeDeError(error) ?? 'error desconocido'}`)
+          }
+        }
+
+        // La fila real la manda el servidor, no la cuenta local.
+        estado = await leerEstado()
 
         const moduloId = estado.profesional.moduloId ?? estado.modulos[0]?.id ?? ''
         const moduloNombre = estado.modulos.find((m) => m.id === moduloId)?.nombre ?? '—'
+        const enEspera = estado.pendientes.length
 
         const doctor: DoctorSimulado = {
           profesionalId,
@@ -95,12 +229,12 @@ export default function PruebasClient() {
           moduloId,
           moduloNombre,
           token,
-          pacientesEnEspera: pendientes.length,
+          pacientesEnEspera: enEspera,
           turnoActual: estado.turnoActual,
           llamando: false,
         }
         setDoctores((prev) => [...prev, doctor])
-        agregarLog(`${doctor.nombre} listo en ${moduloNombre} — ${pendientes.length} paciente(s) en espera.`)
+        agregarLog(`${doctor.nombre} listo en ${moduloNombre} — ${enEspera} paciente(s) en espera.`)
       } catch (error) {
         agregarLog(`No se pudo preparar ${profesionalId}: ${mensajeDeError(error) ?? 'error desconocido'}`)
       }
@@ -174,12 +308,13 @@ export default function PruebasClient() {
           <CardContent className="space-y-4">
             <p className="text-sm leading-6 text-slate-600">
               Primero prepara la simulacion: genera un acceso temporal para cada uno de los 10 profesionales
-              sembrados y registra la llegada de sus citas de hoy, para que tengan pacientes en espera. Luego llama
+              sembrados y registra la llegada de las citas de hoy (crea las que falten para llegar al numero de
+              pacientes que elijas), para que tengan pacientes en espera. Luego llama
               pacientes uno por uno desde cada tarjeta, o dale a &quot;Siguiente para todos&quot; para que vayan
               pasando en oleadas.
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <Button onClick={prepararSimulacion} loading={preparando} disabled={enOleada}>
+              <Button onClick={() => setConfirmarReinicio(true)} loading={preparando} disabled={enOleada}>
                 <PlayCircle size={18} weight="bold" />
                 {doctores.length > 0 ? 'Volver a preparar' : 'Preparar simulacion'}
               </Button>
@@ -208,6 +343,18 @@ export default function PruebasClient() {
               </a>
             </div>
             <div className="flex flex-wrap gap-4 border-t border-slate-100 pt-4">
+              <Campo etiqueta="Pacientes por consultorio" className="max-w-[12rem]">
+                <Entrada
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={pacientesPorConsultorio}
+                  onChange={(e) =>
+                    setPacientesPorConsultorio(Math.min(20, Math.max(1, Number(e.target.value) || 1)))
+                  }
+                  disabled={preparando}
+                />
+              </Campo>
               <Campo etiqueta="Tamano de la oleada" className="max-w-[10rem]">
                 <Entrada
                   type="number"
@@ -309,6 +456,29 @@ export default function PruebasClient() {
           </div>
         </CardContent>
       </Card>
+
+      <ConfirmModal
+        open={confirmarReinicio}
+        onClose={() => setConfirmarReinicio(false)}
+        onConfirm={() => {
+          setConfirmarReinicio(false)
+          void prepararSimulacion()
+        }}
+        title="Esto borra la jornada de hoy"
+        description="Preparar la simulacion deja el dia en blanco antes de empezar."
+        confirmLabel="Borrar el dia y preparar"
+        danger
+      >
+        <p className="text-sm leading-6 text-slate-600">
+          Se van a <strong className="font-black text-red-700">borrar todas las citas y todos los turnos de
+          hoy</strong>, incluidos los que haya cargado el mostrador y los pacientes que ya esten en la fila.
+          Tambien se generan enlaces nuevos para los 10 doctores de ejemplo, con lo que{' '}
+          <strong className="font-black">se invalidan los enlaces que esten usando ahora</strong>.
+        </p>
+        <p className="mt-3 text-sm leading-6 text-slate-600">
+          Esta pantalla es solo para demos y pruebas de carga. No la uses en un dia de atencion real.
+        </p>
+      </ConfirmModal>
     </div>
   )
 }

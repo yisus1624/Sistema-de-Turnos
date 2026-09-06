@@ -2,7 +2,7 @@
 
 /** Indicadores de atencion (requerimiento seccion 19). */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChartBar } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import EmptyState from '@/components/ui/EmptyState'
@@ -74,17 +74,28 @@ export default function EstadisticasClient() {
   const [datos, setDatos] = useState<EstadisticasDia | null>(null)
   const [cargando, setCargando] = useState(true)
 
+  /**
+   * Ultimo dia pedido: descarta la respuesta de una consulta que el usuario ya
+   * reemplazo al cambiar de fecha. Sin esto, mover el selector rapido podia
+   * dejar en pantalla los indicadores de un dia distinto al que marca el campo,
+   * que en un tablero de cifras no se nota a simple vista.
+   */
+  const diaPedidoRef = useRef('')
+
   const cargar = useCallback(async (dia: string) => {
+    diaPedidoRef.current = dia
     setCargando(true)
     try {
       const { estadisticas } = await pedir<{ estadisticas: EstadisticasDia }>(
         `/api/turnos/estadisticas?fecha=${dia}`,
       )
+      if (diaPedidoRef.current !== dia) return
       setDatos(estadisticas)
     } catch (error) {
+      if (diaPedidoRef.current !== dia) return
       toast.error('No se pudieron cargar las estadisticas', mensajeDeError(error))
     } finally {
-      setCargando(false)
+      if (diaPedidoRef.current === dia) setCargando(false)
     }
   }, [])
 

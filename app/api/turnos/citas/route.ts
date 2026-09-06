@@ -6,12 +6,12 @@
  * Nunca sale hacia la pantalla de la sala de espera.
  */
 import { NextResponse } from 'next/server'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { turnoRepository } from '@/lib/turnos/repositorio'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
 
 export async function GET(request: Request) {
   try {
-    await requireRol(['OPERADOR', 'ADMINISTRADOR'])
+    await requireSeccion('/operador/admisiones', '/admin/citas', '/admin/pruebas')
 
     const { searchParams } = new URL(request.url)
     const documento = searchParams.get('documento')?.trim() ?? ''
@@ -19,8 +19,16 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Ingresa al menos 4 digitos del documento.' }, { status: 400 })
     }
 
-    const citas = await turnoRepository.buscarCitasPorDocumento(documento)
-    return NextResponse.json({ citas })
+    // `citas` son las de HOY, las unicas a las que se les puede registrar la
+    // llegada. `otras` son las de otros dias y viajan solo para informar: sin
+    // ellas, al paciente que se equivoca de dia se le respondia "sin citas" y
+    // la pantalla sugeria mandarlo a la fila de ventanilla.
+    const [citas, otras] = await Promise.all([
+      turnoRepository.buscarCitasPorDocumento(documento),
+      turnoRepository.otrasCitasDelPaciente(documento),
+    ])
+
+    return NextResponse.json({ citas, otras })
   } catch (error) {
     return apiError(error)
   }

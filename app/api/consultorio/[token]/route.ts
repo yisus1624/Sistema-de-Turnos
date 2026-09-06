@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import { errorConsultorio, requireProfesionalPorToken } from '@/lib/turnos/acceso-consultorio'
 
 /** Fecha de hoy en Colombia, en formato AAAA-MM-DD (mismo criterio que estadisticas). */
@@ -12,6 +12,10 @@ function hoyEnColombia() {
  * posibles (el suyo por defecto), sus pacientes en espera y su AGENDA del
  * dia completa (con o sin llegada registrada), para que entienda por que un
  * paciente todavia no aparece para llamar.
+ *
+ * Esta pantalla se refresca sola cada pocos segundos y hay una abierta por
+ * consultorio, asi que es de las rutas mas repetidas del sistema: las cuatro
+ * consultas van en paralelo y ninguna construye el historico entero.
  */
 export async function GET(request: Request, context: { params: Promise<{ token: string }> }) {
   try {
@@ -21,10 +25,15 @@ export async function GET(request: Request, context: { params: Promise<{ token: 
     const url = new URL(request.url)
     const fecha = url.searchParams.get('fecha') || hoyEnColombia()
 
+    // El paciente que tiene enfrente es SIEMPRE el de hoy, aunque este mirando
+    // la agenda de otro dia. Antes se buscaba con la `fecha` consultada: al
+    // revisar la agenda de mañana, el turno en atencion se volvia null,
+    // desaparecia la tarjeta del paciente y se le apagaban los botones de
+    // "Atendido", "Ausente" y "Repetir" con el paciente todavia sentado ahi.
     const [modulos, pendientes, turnoActual, agenda] = await Promise.all([
       turnoRepository.listarModulos(profesional.servicioId),
       turnoRepository.listarPendientes({ profesionalId: profesional.id }),
-      buscarTurnoEnAtencion(profesional.id),
+      turnoRepository.turnoEnAtencion(profesional.id, hoyEnColombia()),
       turnoRepository.agendaProfesional(profesional.id, fecha),
     ])
 
@@ -32,16 +41,4 @@ export async function GET(request: Request, context: { params: Promise<{ token: 
   } catch (error) {
     return errorConsultorio(error)
   }
-}
-
-/**
- * El turno "en atencion ahora" no vive como tal en el repositorio: se infiere
- * del ultimo turno LLAMADO/EN_ATENCION del profesional, para que si el
- * doctor recarga la pagina no pierda de vista a quien tiene al frente.
- */
-async function buscarTurnoEnAtencion(profesionalId: string) {
-  const historico = await turnoRepository.historico({ profesionalId })
-  return (
-    historico.find((t) => t.estado === 'LLAMADO' || t.estado === 'EN_ATENCION') ?? null
-  )
 }

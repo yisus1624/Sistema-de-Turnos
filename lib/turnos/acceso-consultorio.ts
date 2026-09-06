@@ -10,7 +10,7 @@
  * peticiones fallidas).
  */
 import { NextResponse } from 'next/server'
-import { turnoRepository } from './in-memory-repository'
+import { turnoRepository } from './repositorio'
 import type { Profesional } from './types'
 import { contextoPeticion, limitarIntentos, registrarEvento } from '@/lib/seguridad/registro'
 
@@ -44,15 +44,52 @@ export async function requireProfesionalPorToken(token: string): Promise<Profesi
     throw new AccesoInvalidoError()
   }
 
-  registrarEvento({
-    tipo: 'ACCESO_PROFESIONAL',
-    exito: true,
-    ip,
-    identificador: profesional.id,
-    detalle: { profesional: profesional.nombre },
-  })
+  if (debeRegistrarAcceso(profesional.id)) {
+    registrarEvento({
+      tipo: 'ACCESO_PROFESIONAL',
+      exito: true,
+      ip,
+      identificador: profesional.id,
+      detalle: { profesional: profesional.nombre },
+    })
+  }
 
   return profesional
+}
+
+/**
+ * Cuanto se deja pasar entre dos apuntes de "este doctor esta usando su
+ * enlace". Diez minutos: sigue mostrando quien estuvo conectado y cuando, sin
+ * escribir una linea por peticion.
+ */
+const MS_ENTRE_APUNTES_DE_ACCESO = 10 * 60 * 1000
+
+declare global {
+  var __turnosUltimoAccesoRegistrado: Map<string, number> | undefined
+}
+
+const ultimoApunte: Map<string, number> =
+  globalThis.__turnosUltimoAccesoRegistrado ?? new Map()
+globalThis.__turnosUltimoAccesoRegistrado = ultimoApunte
+
+/**
+ * Si toca dejar constancia de este acceso.
+ *
+ * La pantalla del doctor se refresca sola y cada refresco pasa por aqui: se
+ * escribia un evento de exito por peticion, contra un registro que solo guarda
+ * los ultimos 500. Con varios consultorios abiertos, ese goteo barria en
+ * minutos lo que de verdad hay que poder revisar despues (los intentos de
+ * entrada fallidos). El acceso se sigue registrando, pero espaciado.
+ *
+ * Los fallos NUNCA se agrupan: esos se apuntan siempre.
+ */
+function debeRegistrarAcceso(profesionalId: string): boolean {
+  const ahora = Date.now()
+  const anterior = ultimoApunte.get(profesionalId)
+  if (anterior !== undefined && ahora - anterior < MS_ENTRE_APUNTES_DE_ACCESO) return false
+
+  ultimoApunte.set(profesionalId, ahora)
+  return true
 }
 
 /** Mismo formato de error que `apiError`, para las rutas del consultorio. */

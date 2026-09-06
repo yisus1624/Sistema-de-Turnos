@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 
 const cambioSchema = z.object({
@@ -29,6 +29,26 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
     const servicio = await turnoRepository.actualizarServicio(id, parsed.data)
     return NextResponse.json({ servicio })
+  } catch (error) {
+    return apiError(error)
+  }
+}
+
+/**
+ * Borra un servicio del catalogo.
+ *
+ * El repositorio solo lo permite si el servicio nunca llego a operar (sin
+ * turnos, citas ni profesionales); si ya opero, devuelve un mensaje que
+ * explica que hay que desactivarlo en vez de borrarlo, para no dejar el
+ * historico apuntando a un servicio que ya no existe.
+ */
+export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    await requireSeccion('/admin/servicios')
+
+    const { id } = await context.params
+    await turnoRepository.eliminarServicio(id)
+    return NextResponse.json({ ok: true })
   } catch (error) {
     return apiError(error)
   }

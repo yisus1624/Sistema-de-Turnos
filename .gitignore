@@ -42,3 +42,7 @@ yarn-error.log*
 next-env.d.ts
 
 .env*
+
+# El ejemplo SI se versiona: documenta que variables hay que poner al desplegar.
+# Nunca lleva valores reales.
+!.env.example

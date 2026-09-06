@@ -37,8 +37,8 @@ export default function ModulosClient() {
   const cargar = useCallback(async () => {
     try {
       const [m, s] = await Promise.all([
-        pedir<{ modulos: Modulo[] }>('/api/turnos/modulos'),
-        pedir<{ servicios: Servicio[] }>('/api/turnos/servicios'),
+        pedir<{ modulos: Modulo[] }>('/api/turnos/modulos?todos=1'),
+        pedir<{ servicios: Servicio[] }>('/api/turnos/servicios?todos=1'),
       ])
       setModulos(m.modulos)
       setServicios(s.servicios)
@@ -177,11 +177,21 @@ export default function ModulosClient() {
               onChange={(e) => setFormulario((f) => ({ ...f, servicioId: e.target.value }))}
             >
               <option value="">Ventanilla general</option>
-              {servicios.map((servicio) => (
-                <option key={servicio.id} value={servicio.id}>
-                  {servicio.nombre}
-                </option>
-              ))}
+              {/*
+                Solo servicios ACTIVOS: el catalogo se pide completo para poder
+                mostrar el nombre de un servicio apagado en la tabla, pero
+                asignarle un consultorio nuevo no tendria sentido. Si el modulo
+                que se esta editando ya cuelga de uno apagado, se mantiene en la
+                lista para no cambiarselo sin querer al guardar.
+              */}
+              {servicios
+                .filter((servicio) => servicio.activo || servicio.id === formulario.servicioId)
+                .map((servicio) => (
+                  <option key={servicio.id} value={servicio.id}>
+                    {servicio.nombre}
+                    {servicio.activo ? '' : ' (inactivo)'}
+                  </option>
+                ))}
             </Seleccion>
           </Campo>
 

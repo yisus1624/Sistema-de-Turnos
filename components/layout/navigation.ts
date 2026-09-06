@@ -1,13 +1,12 @@
 import type { Icon } from '@phosphor-icons/react'
 import {
   CalendarPlus,
-  ChartBar,
-  ClockCounterClockwise,
-  FileText,
   Flask,
+  Key,
   Gear,
   Megaphone,
   MonitorPlay,
+  ShieldCheck,
   Stack,
   Stethoscope,
   Ticket,
@@ -36,19 +35,20 @@ export const rolLabels: Record<RolUsuario, string> = {
  */
 const iconos: Record<string, Icon> = {
   '/admin/turnos': Ticket,
-  '/admin/historico': ClockCounterClockwise,
-  '/admin/estadisticas': ChartBar,
-  '/admin/reportes': FileText,
+  '/admin/citas': CalendarPlus,
+  '/admin/enlaces': Key,
+
   '/admin/servicios': Stack,
   '/admin/modulos': Gear,
   '/admin/profesionales': Stethoscope,
   '/admin/usuarios': UsersThree,
   '/admin/pantalla': MonitorPlay,
+  '/admin/seguridad': ShieldCheck,
   '/admin/pruebas': Flask,
   '/operador/agenda': CalendarPlus,
   '/operador/admisiones': UserFocus,
+  '/operador/pantalla': MonitorPlay,
   '/operador': Megaphone,
-  '/operador/historico': ClockCounterClockwise,
 }
 
 /** Icono de respaldo: una seccion sin icono no debe romper el menu. */

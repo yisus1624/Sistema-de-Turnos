@@ -2,10 +2,13 @@ import type {
   AccesoProfesional,
   CasillaPantalla,
   Cita,
-  ConfiguracionPantalla,
+  ComprobanteLlegada,
+  ConfiguracionSistema,
   EstadisticasDia,
   FiltroHistorico,
+  HorarioDia,
   ItemAgendaProfesional,
+  Jornada,
   Modulo,
   Profesional,
   Servicio,
@@ -29,9 +32,19 @@ import type {
  */
 export interface TurnoRepository {
   // --- Catalogos (administracion, secciones 15 y 16) ---
-  listarServicios(): Promise<Servicio[]>
-  listarModulos(servicioId?: string): Promise<Modulo[]>
-  listarProfesionales(servicioId?: string): Promise<Profesional[]>
+  /**
+   * Servicios y modulos. Por defecto solo los ACTIVOS, que es lo que consumen
+   * la pantalla, la agenda y el llamado. La administracion pide tambien los
+   * inactivos, que es la unica forma de volver a activarlos.
+   */
+  listarServicios(incluirInactivos?: boolean): Promise<Servicio[]>
+  listarModulos(servicioId?: string, incluirInactivos?: boolean): Promise<Modulo[]>
+  /**
+   * Profesionales. Por defecto solo los activos, que es lo que necesitan la
+   * agenda y el llamado; la administracion pide tambien los inactivos para
+   * poder volver a activarlos.
+   */
+  listarProfesionales(servicioId?: string, incluirInactivos?: boolean): Promise<Profesional[]>
   /** Profesional asociado a una cuenta del sistema, si la tiene. */
   profesionalDeUsuario(usuarioId: string): Promise<Profesional | null>
 
@@ -45,19 +58,64 @@ export interface TurnoRepository {
     nombrePaciente: string
     profesionalId: string
     horaCita: string
+    usuarioId?: string
   }): Promise<Cita>
-  cancelarCita(citaId: string): Promise<Cita>
+  /**
+   * Cancela una cita dejando constancia de quien y por que. Los dos datos son
+   * lo que permite responderle despues al paciente que viene a reclamar.
+   */
+  cancelarCita(citaId: string, datos?: { usuarioId?: string; motivo?: string }): Promise<Cita>
+  /**
+   * Mueve una cita de hora (y opcionalmente de doctor) conservando el mismo
+   * registro, con su historial de cuantas veces se ha movido.
+   *
+   * Es distinto de cancelar y volver a crear: asi quedaban dos citas sueltas
+   * sin nada que dijera que son el mismo paciente reubicado. La hora nueva pasa
+   * por las mismas reglas de la parrilla que una cita nueva.
+   */
+  reprogramarCita(
+    citaId: string,
+    datos: { horaCita: string; profesionalId?: string; motivo?: string; usuarioId?: string },
+  ): Promise<Cita>
+  /**
+   * El horario de un dia: la parrilla de jornada de la mañana y jornada de la
+   * tarde, con una columna por doctor y una fila por franja.
+   *
+   * Es la vista con la que se trabaja la agenda (ver `HorarioDia` en
+   * `types.ts`). Se arma en el servidor porque depende de la configuracion y
+   * de la jornada de cada doctor, que son reglas del dominio.
+   */
+  horarioDelDia(fecha: string): Promise<HorarioDia>
 
   /**
-   * Busca las citas del dia por documento del paciente, para que admisiones
-   * registre su llegada. Origen real: API del hospital [PENDIENTE].
+   * TEMPORAL (solo pruebas): borra las citas y los turnos de hoy para que el
+   * panel de simulacion de carga pueda arrancar de cero. Sin esto, las citas
+   * ya usadas quedan como PRESENTADO/ATENDIDA y la siguiente corrida se queda
+   * sin pacientes (y ademas topa el maximo de citas por profesional).
    */
-  buscarCitasPorDocumento(documento: string): Promise<Cita[]>
+  reiniciarDatosDeHoy(): Promise<void>
+
+  /**
+   * Busca las citas de UN DIA (por defecto hoy) por documento del paciente,
+   * para que admisiones registre su llegada. Origen real: API del hospital
+   * [PENDIENTE].
+   */
+  buscarCitasPorDocumento(documento: string, fecha?: string): Promise<Cita[]>
+  /**
+   * Citas del paciente en otros dias, solo para informarle cuando le toca. No
+   * se les registra la llegada.
+   */
+  otrasCitasDelPaciente(documento: string, fecha?: string): Promise<Cita[]>
   /**
    * Registra que el paciente llego: la cita pasa a PRESENTADO y se genera su
    * turno EN_ESPERA en la fila del profesional correspondiente.
    */
   registrarLlegada(citaId: string): Promise<Turno>
+  /**
+   * Turno, consultorio y doctor de un turno ya generado, para que admisiones
+   * se lo dicte al paciente. Ver `ComprobanteLlegada`.
+   */
+  comprobanteDeLlegada(turnoId: string): Promise<ComprobanteLlegada>
   /** Turnos sin cita, para los servicios de ventanilla (fila compartida). */
   generarTurnoDeVentanilla(servicioId: string): Promise<Turno>
   /**
@@ -75,6 +133,16 @@ export interface TurnoRepository {
    * profesional (cada doctor ve solo los suyos).
    */
   listarPendientes(filtro: { servicioId?: string; profesionalId?: string }): Promise<Turno[]>
+  /**
+   * Si el turno pertenece a ese profesional. Es lo que impide que un doctor
+   * cierre el turno de otro cambiando el id en la URL de su enlace.
+   */
+  turnoEsDelProfesional(turnoId: string, profesionalId: string): Promise<boolean>
+  /**
+   * El paciente que el profesional tiene al frente ahora mismo (su ultimo
+   * turno LLAMADO o EN_ATENCION del dia), o null.
+   */
+  turnoEnAtencion(profesionalId: string, fecha: string): Promise<Turno | null>
   /** Llama el siguiente turno y lo asigna a un modulo (seccion 9). */
   llamarSiguiente(params: {
     servicioId?: string
@@ -84,8 +152,13 @@ export interface TurnoRepository {
   }): Promise<Turno | null>
   /** Repite el llamado, incrementando el contador (seccion 12). */
   repetirLlamado(turnoId: string): Promise<Turno>
-  marcarAtendido(turnoId: string): Promise<Turno>
-  marcarAusente(turnoId: string): Promise<Turno>
+  /**
+   * Cierra el turno. `cerradoPor` es quien lo cierra (usuario del sistema, o el
+   * id del profesional cuando entra por su enlace): sin el no se podia
+   * responder quien dio por atendido o por ausente a un paciente.
+   */
+  marcarAtendido(turnoId: string, cerradoPor?: string): Promise<Turno>
+  marcarAusente(turnoId: string, cerradoPor?: string): Promise<Turno>
 
   // --- Pantalla de la sala de espera (seccion 10) ---
   /**
@@ -104,12 +177,41 @@ export interface TurnoRepository {
   // --- Administracion de catalogos (secciones 6.1 y 15) ---
   crearServicio(datos: Omit<Servicio, 'id'>): Promise<Servicio>
   actualizarServicio(id: string, datos: Partial<Omit<Servicio, 'id'>>): Promise<Servicio>
+  /**
+   * Borra un servicio del catalogo.
+   *
+   * Solo se puede borrar un servicio que no haya llegado a operar: si tiene
+   * turnos, citas o profesionales, se rechaza y el camino es desactivarlo.
+   * Borrarlo dejaria el historico apuntando a un servicio inexistente, que es
+   * justo lo que el requerimiento (seccion 18) no permite perder.
+   */
+  eliminarServicio(id: string): Promise<void>
   crearModulo(datos: Omit<Modulo, 'id'>): Promise<Modulo>
   actualizarModulo(id: string, datos: Partial<Omit<Modulo, 'id'>>): Promise<Modulo>
+  /**
+   * Alta de un doctor en el catalogo. Mientras no exista la API del hospital,
+   * los profesionales se cargan a mano desde administracion.
+   */
+  crearProfesional(datos: {
+    nombre: string
+    servicioId: string
+    jornada: Jornada
+    moduloId?: string | null
+  }): Promise<Profesional>
+  actualizarProfesional(
+    id: string,
+    datos: Partial<{
+      nombre: string
+      servicioId: string
+      jornada: Jornada
+      moduloId: string | null
+      activo: boolean
+    }>,
+  ): Promise<Profesional>
 
   // --- Parametros generales (secciones 6.1 y 11) ---
-  configuracion(): Promise<ConfiguracionPantalla>
-  guardarConfiguracion(datos: Partial<ConfiguracionPantalla>): Promise<ConfiguracionPantalla>
+  configuracion(): Promise<ConfiguracionSistema>
+  guardarConfiguracion(datos: Partial<ConfiguracionSistema>): Promise<ConfiguracionSistema>
 
   // --- Acceso temporal de profesionales (enlace de 24h, sin usuario/clave) ---
   /**

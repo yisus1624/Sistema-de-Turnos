@@ -17,28 +17,12 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
+// El cliente COMPARTIDO, no una copia local: la copia se quedaba fuera del
+// manejo de sesion caducada (ver `lib/api/cliente.ts`).
+import { horaCorta, pedir } from '@/lib/api/cliente'
 import type { Modulo, Servicio, Turno } from '@/lib/turnos/types'
 
 type Accion = 'generar' | 'llamar' | 'repetir' | 'atendido' | 'ausente' | null
-
-async function pedir<T>(url: string, opciones?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...opciones,
-    headers: { 'Content-Type': 'application/json', ...opciones?.headers },
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data?.error ?? 'Ocurrio un error inesperado.')
-  return data as T
-}
-
-function horaCorta(iso?: string | null) {
-  if (!iso) return ''
-  return new Intl.DateTimeFormat('es-CO', {
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'America/Bogota',
-  }).format(new Date(iso))
-}
 
 const claseCampo =
   'h-11 w-full rounded-xl border border-slate-200 px-3 text-sm font-semibold text-brand-950 outline-none focus:border-brand-500'
@@ -53,6 +37,7 @@ export default function OperadorClient() {
   const [pendientes, setPendientes] = useState<Turno[]>([])
   const [turnoActual, setTurnoActual] = useState<Turno | null>(null)
   const [cargando, setCargando] = useState<Accion>(null)
+  const [catalogosListos, setCatalogosListos] = useState(false)
 
   const servicio = useMemo(() => servicios.find((s) => s.id === servicioId), [servicios, servicioId])
   const listoParaLlamar = Boolean(moduloId && servicioId)
@@ -71,6 +56,7 @@ export default function OperadorClient() {
         if (compartidos[0]) setServicioId((actual) => actual || compartidos[0].id)
       })
       .catch((error) => toast.error('No se pudieron cargar los catalogos', error.message))
+      .finally(() => setCatalogosListos(true))
   }, [])
 
   // Al cambiar de servicio, la ventanilla anterior deja de tener sentido: se
@@ -78,7 +64,7 @@ export default function OperadorClient() {
   useEffect(() => {
     if (!servicio) return
 
-    const modulosServicio = modulos.filter((m) => !m.servicioId)
+    const modulosServicio = modulos.filter((m) => !m.servicioId || m.servicioId === servicio.id)
     setModuloId(modulosServicio[0]?.id ?? '')
 
     setTurnoActual(null)
@@ -155,7 +141,23 @@ export default function OperadorClient() {
     })
 
   // Las ventanillas son genericas: sirven para cualquier fila compartida.
-  const modulosDisponibles = modulos.filter((m) => !m.servicioId)
+  const modulosDisponibles = modulos.filter((m) => !m.servicioId || m.servicioId === servicioId)
+
+  /**
+   * Esta pantalla es solo para las filas por ORDEN DE LLEGADA. Hoy el hospital
+   * atiende todo por cita, asi que normalmente no hay ninguna configurada y sin
+   * este aviso el operador se encontraba dos desplegables vacios y un boton que
+   * no hace nada, sin ninguna explicacion.
+   */
+  if (catalogosListos && servicios.length === 0) {
+    return (
+      <EmptyState
+        icon={Megaphone}
+        title="No hay filas por orden de llegada"
+        description="Esta pantalla sirve para los servicios que se atienden sin cita, por orden de llegada. Hoy no hay ninguno configurado: cada doctor llama a sus propios pacientes desde su consultorio. Si se abre una ventanilla, se crea el servicio en Servicios con modo de fila 'Ventanilla' y aparece aqui."
+      />
+    )
+  }
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">

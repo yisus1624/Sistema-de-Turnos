@@ -5,8 +5,8 @@
  */
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { turnoRepository } from '@/lib/turnos/repositorio'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
 
 const bodySchema = z.object({
   servicioId: z.string().min(1, 'Debes indicar el servicio.'),
@@ -14,7 +14,7 @@ const bodySchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireRol(['OPERADOR', 'ADMINISTRADOR'])
+    await requireSeccion('/operador')
 
     const body = await request.json().catch(() => null)
     const parsed = bodySchema.safeParse(body)

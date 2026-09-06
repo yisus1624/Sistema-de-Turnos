@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 
 /** Fecha de hoy en Colombia, en formato AAAA-MM-DD. */

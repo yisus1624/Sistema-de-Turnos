@@ -7,12 +7,13 @@
  */
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { turnoRepository } from '@/lib/turnos/in-memory-repository'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { turnoRepository } from '@/lib/turnos/repositorio'
+import { apiError, requireSeccion } from '@/lib/permissions/session'
+import { registrarEvento } from '@/lib/seguridad/registro'
 
 export async function GET(request: Request) {
   try {
-    await requireRol(['ADMINISTRADOR', 'OPERADOR'])
+    await requireSeccion('/admin/citas', '/operador/agenda', '/admin/pruebas')
 
     const { searchParams } = new URL(request.url)
     const citas = await turnoRepository.listarCitas({
@@ -34,7 +35,7 @@ const citaSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireRol(['ADMINISTRADOR', 'OPERADOR'])
+    const session = await requireSeccion('/admin/citas', '/operador/agenda', '/admin/pruebas')
 
     const body = await request.json().catch(() => null)
     const parsed = citaSchema.safeParse(body)
@@ -42,7 +43,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos invalidos.' }, { status: 400 })
     }
 
-    const cita = await turnoRepository.crearCita(parsed.data)
+    const cita = await turnoRepository.crearCita({ ...parsed.data, usuarioId: session.user.id })
+
+    registrarEvento({
+      tipo: 'CITA_CREADA',
+      exito: true,
+      usuarioId: session.user.id,
+      identificador: cita.documentoPaciente,
+      detalle: { citaId: cita.id, horaCita: cita.horaCita, profesionalId: cita.profesionalId },
+    })
+
     return NextResponse.json({ cita })
   } catch (error) {
     return apiError(error)
