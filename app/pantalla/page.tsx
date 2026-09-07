@@ -18,9 +18,15 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Clock, CornersIn, CornersOut, SpeakerHigh, SpeakerX } from '@phosphor-icons/react/dist/ssr'
 import type { EventoTurno } from '@/lib/realtime/hub'
+import {
+  RUTA_EVENTOS_EN_VIVO,
+  esCambioDeDatos,
+  interpretarMensaje,
+} from '@/lib/realtime/canal'
 import type { CasillaPantalla, ConfiguracionSistema } from '@/lib/turnos/types'
 import { CampanaDeLlamado, sonarCampana } from '@/lib/turnos/anuncio'
 import { Isotipo, NOMBRE_INSTITUCION, NOMBRE_SISTEMA } from '@/components/brand/Marca'
+import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 
 /** Cuanto dura el resalte visual de la casilla recien llamada, en milisegundos. */
 const MS_RESALTE = 8000
@@ -332,19 +338,21 @@ export default function PantallaPublicaPage() {
   useEffect(() => {
     if (!activo) return
 
-    const es = new EventSource('/api/turnos/stream')
+    const es = new EventSource(RUTA_EVENTOS_EN_VIVO)
     es.onopen = () => {
       setConectado(true)
       // Al reconectar puede haberse perdido algun evento: resincronizamos.
       cargarEstado()
     }
     es.onerror = () => setConectado(false)
-    es.onmessage = (event) => {
-      try {
-        manejarEvento(JSON.parse(event.data) as EventoTurno)
-      } catch {
-        // Ignorar mensajes que no sean JSON (p.ej. comentarios de keep-alive).
-      }
+    es.onmessage = (mensaje: MessageEvent<string>) => {
+      const recibido = interpretarMensaje(mensaje.data)
+
+      // El latido que mantiene viva la conexion NO es un cambio de turnos: si
+      // se tratara como uno, cada veinte segundos invalidaria la
+      // resincronizacion que venga en camino (ver `eventosAplicadosRef`) y la
+      // pantalla podria quedarse con casillas viejas.
+      if (recibido && esCambioDeDatos(recibido)) manejarEvento(recibido)
     }
 
     return () => es.close()
@@ -504,14 +512,7 @@ export default function PantallaPublicaPage() {
         </div>
 
         <div className="flex items-center gap-6">
-          <span
-            className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black ${
-              conectado ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-            }`}
-          >
-            <span className={`h-2 w-2 rounded-full ${conectado ? 'bg-emerald-500' : 'bg-red-500'}`} />
-            {conectado ? 'EN VIVO' : 'RECONECTANDO'}
-          </span>
+          <IndicadorConexion estado={conectado ? 'en-vivo' : 'reconectando'} />
           <Reloj />
           <button
             onClick={() => setSonidoActivo((v) => !v)}

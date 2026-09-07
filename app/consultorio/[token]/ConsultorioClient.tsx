@@ -26,8 +26,12 @@ import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Seleccion } from '@/components/admin/Campos'
-import { hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { esRechazoDeAcceso, hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { useRecargaEnVivo } from '@/lib/hooks'
+import { afectaALaFila } from '@/lib/realtime/canal'
+import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import { Isotipo, NOMBRE_INSTITUCION } from '@/components/brand/Marca'
+import { cn } from '@/lib/ui'
 import type { EstadoAgendaItem, ItemAgendaProfesional, Modulo, Profesional, Turno } from '@/lib/turnos/types'
 
 type Accion = 'llamar' | 'repetir' | 'atendido' | 'ausente' | null
@@ -40,8 +44,16 @@ type Accion = 'llamar' | 'repetir' | 'atendido' | 'ausente' | null
  */
 const SIN_LOGIN = { sinRedirigirAlLogin: true } as const
 
-/** Cada cuanto se refresca sola la pantalla del doctor, en milisegundos. */
-const MS_REFRESCO = 15000
+/**
+ * Cuanto puede durar como maximo una accion antes de darla por perdida.
+ *
+ * El refresco automatico se salta mientras el doctor esta ejecutando una
+ * accion, para no pisarle la pantalla a media operacion. Si una peticion se
+ * queda colgada (la red se fue justo ahi) y nadie suelta esa marca, la pantalla
+ * deja de actualizarse para el resto de la jornada. Pasado este tiempo se
+ * libera y el refresco continua.
+ */
+const MS_MAXIMO_POR_ACCION = 20000
 
 /** Como se ve cada estado de la agenda para el doctor: color y texto humano. */
 const ETIQUETA_AGENDA: Record<EstadoAgendaItem, { texto: string; tone: 'blue' | 'green' | 'amber' | 'red' | 'slate' }> = {
@@ -53,9 +65,39 @@ const ETIQUETA_AGENDA: Record<EstadoAgendaItem, { texto: string; tone: 'blue' | 
   AUSENTE: { texto: 'No se presento', tone: 'red' },
 }
 
+type TonoAviso = 'rojo' | 'ambar'
+
+const COLOR_AVISO: Record<TonoAviso, string> = {
+  rojo: 'bg-red-50 text-red-600',
+  ambar: 'bg-amber-50 text-amber-600',
+}
+
+function AvisoAPantallaCompleta({
+  tono,
+  titulo,
+  descripcion,
+}: {
+  tono: TonoAviso
+  titulo: string
+  descripcion: string
+}) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
+      <div className="max-w-md space-y-4">
+        <div className={cn('mx-auto grid h-16 w-16 place-items-center rounded-2xl', COLOR_AVISO[tono])}>
+          <WarningCircle size={32} weight="fill" />
+        </div>
+        <h1 className="text-xl font-black tracking-[-0.02em] text-brand-950">{titulo}</h1>
+        <p className="text-sm leading-6 text-slate-600">{descripcion}</p>
+      </div>
+    </main>
+  )
+}
+
 export default function ConsultorioClient({ token }: { token: string }) {
   const [cargando, setCargando] = useState(true)
   const [tokenInvalido, setTokenInvalido] = useState(false)
+  const [sinConexion, setSinConexion] = useState(false)
 
   const [profesional, setProfesional] = useState<Profesional | null>(null)
   const [modulos, setModulos] = useState<Modulo[]>([])
@@ -101,8 +143,14 @@ export default function ConsultorioClient({ token }: { token: string }) {
       // el servidor comprueba que pueda usarlo.
       setModuloId((actual) => actual || data.profesional.moduloId || '')
       setTokenInvalido(false)
-    } catch {
-      setTokenInvalido(true)
+      setSinConexion(false)
+    } catch (error) {
+      // SOLO un rechazo real de acceso vence el enlace. Antes cualquier fallo
+      // lo daba por vencido: un microcorte de wifi le mostraba al doctor "este
+      // enlace ya no es valido" y ademas apagaba el refresco para siempre, con
+      // el enlace bueno en la mano y pacientes esperando.
+      if (esRechazoDeAcceso(error)) setTokenInvalido(true)
+      else setSinConexion(true)
     } finally {
       setCargando(false)
     }
@@ -112,33 +160,37 @@ export default function ConsultorioClient({ token }: { token: string }) {
     cargarEstado()
   }, [cargarEstado])
 
+  const refrescarSiNoHayAccion = useCallback(() => {
+    // No mientras el doctor esta ejecutando una accion: pisarle el estado a
+    // media operacion lo unico que hace es parpadear la pantalla.
+    if (accionRef.current !== null) return
+    void cargarEstado()
+  }, [cargarEstado])
+
   /**
-   * Refresco automatico.
+   * Refresco automatico, en vivo.
    *
-   * Esta pantalla no se enteraba de nada hasta que el doctor pulsaba un boton:
-   * el paciente registraba su llegada en admisiones y el aviso seguia diciendo
-   * "aparecera cuando registre su llegada" indefinidamente. Como el doctor la
-   * deja abierta toda la jornada, tiene que refrescarse sola.
+   * Al doctor le interesa un solo evento, el de SU fila: el paciente que acaba
+   * de registrar su llegada en admisiones tiene que aparecerle al instante. No
+   * hay refresco por reloj a proposito (ver `useRecargaEnVivo`): la pantalla se
+   * pone al dia sola al reconectar, al volver al frente y al volver la red, y
+   * mientras tanto el indicador dice si lo que se ve sigue siendo cierto.
    */
-  useEffect(() => {
-    if (tokenInvalido) return
-
-    const id = setInterval(() => {
-      // No mientras el doctor esta ejecutando una accion: pisarle el estado a
-      // media operacion lo unico que hace es parpadear la pantalla.
-      if (accionRef.current === null) void cargarEstado()
-    }, MS_REFRESCO)
-
-    return () => clearInterval(id)
-  }, [cargarEstado, tokenInvalido])
+  const conexion = useRecargaEnVivo(refrescarSiNoHayAccion, {
+    activo: !tokenInvalido,
+    interesa: (evento) => afectaALaFila(evento, { profesionalId: profesional?.id }),
+  })
 
   async function ejecutar(nombre: Accion, tarea: () => Promise<void>) {
     setAccion(nombre)
+    // Una accion colgada no puede congelar el refresco: se suelta sola.
+    const soltar = setTimeout(() => setAccion(null), MS_MAXIMO_POR_ACCION)
     try {
       await tarea()
     } catch (error) {
       toast.error('No se pudo completar la accion', mensajeDeError(error))
     } finally {
+      clearTimeout(soltar)
       setAccion(null)
     }
   }
@@ -194,22 +246,25 @@ export default function ConsultorioClient({ token }: { token: string }) {
     )
   }
 
-  if (tokenInvalido || !profesional) {
+  if (tokenInvalido) {
     return (
-      <main className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
-        <div className="max-w-md space-y-4">
-          <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-red-50 text-red-600">
-            <WarningCircle size={32} weight="fill" />
-          </div>
-          <h1 className="text-xl font-black tracking-[-0.02em] text-brand-950">
-            Este enlace ya no es valido
-          </h1>
-          <p className="text-sm leading-6 text-slate-600">
-            Puede que haya vencido o que se haya generado uno nuevo. Pide un enlace nuevo a la
-            oficina de sistemas del hospital.
-          </p>
-        </div>
-      </main>
+      <AvisoAPantallaCompleta
+        tono="rojo"
+        titulo="Este enlace ya no es valido"
+        descripcion="Puede que haya vencido o que se haya generado uno nuevo. Pide un enlace nuevo a la oficina de sistemas del hospital."
+      />
+    )
+  }
+
+  // Sin datos y sin rechazo del servidor: el enlace sirve, lo que fallo fue la
+  // conexion. Se sigue reintentando solo.
+  if (!profesional) {
+    return (
+      <AvisoAPantallaCompleta
+        tono="ambar"
+        titulo="Sin conexion con el servidor"
+        descripcion="No se pudieron cargar tus pacientes. Tu enlace sigue siendo valido: en cuanto vuelva la conexion se carga solo, no hace falta que recargues."
+      />
     )
   }
 
@@ -231,6 +286,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
             servidor vuelve a comprobarlo antes de llamar.
           */}
           <div className="flex items-center gap-2">
+            <IndicadorConexion estado={conexion} />
             <MapPin size={18} weight="bold" className="shrink-0 text-brand-600" />
             <Seleccion
               value={moduloId}
@@ -280,6 +336,16 @@ export default function ConsultorioClient({ token }: { token: string }) {
               ve el boton apagado y cree que el sistema esta roto. El aviso
               explica que falta el paso de admisiones (registrar la llegada).
             */}
+            {sinConexion ? (
+              <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <WarningCircle size={20} weight="fill" className="mt-0.5 shrink-0" />
+                <span>
+                  Sin conexion con el servidor: lo que ves puede estar desactualizado. Se pone al
+                  dia solo en cuanto vuelva la conexion.
+                </span>
+              </div>
+            ) : null}
+
             {!moduloId ? (
               <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
                 <WarningCircle size={20} weight="fill" className="mt-0.5 shrink-0" />

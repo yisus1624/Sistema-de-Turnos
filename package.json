@@ -12,7 +12,7 @@
     "postinstall": "node scripts/patch-minimatch-brace-expansion.mjs",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "node --test --import ./tests/register-alias.mjs",
+    "test": "node --test --experimental-test-module-mocks --disable-warning=ExperimentalWarning --import ./tests/register-alias.mjs",
     "verify": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

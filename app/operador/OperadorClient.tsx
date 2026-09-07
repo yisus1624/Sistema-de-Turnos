@@ -20,6 +20,9 @@ import { toast } from '@/components/ui/toast'
 // El cliente COMPARTIDO, no una copia local: la copia se quedaba fuera del
 // manejo de sesion caducada (ver `lib/api/cliente.ts`).
 import { horaCorta, pedir } from '@/lib/api/cliente'
+import { useRecargaEnVivo } from '@/lib/hooks'
+import { afectaALaFila } from '@/lib/realtime/canal'
+import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import type { Modulo, Servicio, Turno } from '@/lib/turnos/types'
 
 type Accion = 'generar' | 'llamar' | 'repetir' | 'atendido' | 'ausente' | null
@@ -86,6 +89,20 @@ export default function OperadorClient() {
   useEffect(() => {
     cargarPendientes()
   }, [cargarPendientes])
+
+  /**
+   * La fila compartida la atienden VARIAS ventanillas a la vez.
+   *
+   * Sin esto, la lista solo se recargaba despues de una accion de este mismo
+   * operador: la ventanilla 2 seguia viendo en espera a alguien que la
+   * ventanilla 1 ya atendio (y podia volver a llamarlo), y un turno generado en
+   * otra ventanilla no aparecia hasta que pulsara algo. Entre dos ventanillas,
+   * asi es como se pierde de vista a un paciente.
+   */
+  const conexion = useRecargaEnVivo(cargarPendientes, {
+    activo: Boolean(servicioId),
+    interesa: (evento) => afectaALaFila(evento, { servicioId }),
+  })
 
   async function ejecutar(accion: Accion, tarea: () => Promise<void>) {
     setCargando(accion)
@@ -245,6 +262,7 @@ export default function OperadorClient() {
       <Card>
         <CardHeader>
           <CardTitle>En espera ({pendientes.length})</CardTitle>
+          <IndicadorConexion estado={conexion} />
         </CardHeader>
         <CardContent>
           {pendientes.length === 0 ? (

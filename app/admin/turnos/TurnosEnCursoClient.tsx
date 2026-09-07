@@ -4,26 +4,19 @@
  * Vista general de la operacion del dia (requerimiento secciones 8 y 13).
  *
  * Se actualiza sola: escucha los mismos eventos en vivo que la pantalla de la
- * sala de espera y ademas refresca cada 15 segundos, para reflejar tambien lo
- * que no genera evento (llegadas registradas en admisiones).
+ * sala de espera y se pone al dia sola cuando la conexion se restablece. El
+ * indicador del encabezado dice si lo que se ve sigue siendo cierto.
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import { Ticket } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
-import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Loader'
 import { hoyEnColombia, horaCorta, pedir } from '@/lib/api/cliente'
+import { useRecargaEnVivo } from '@/lib/hooks'
+import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import type { CasillaPantalla, Servicio, Turno } from '@/lib/turnos/types'
-
-const MS_REFRESCO = 15000
-
-/**
- * Cuanto se espera antes de recargar por un evento en vivo, para juntar en una
- * sola recarga la rafaga de llamados que llegan casi al tiempo.
- */
-const MS_AGRUPAR_EVENTOS = 500
 
 type Resumen = { enEspera: number; llamados: number; atendidos: number; ausentes: number }
 
@@ -79,37 +72,11 @@ export default function TurnosEnCursoClient() {
 
   useEffect(() => {
     cargar()
-    const id = setInterval(cargar, MS_REFRESCO)
-    return () => clearInterval(id)
   }, [cargar])
 
-  /**
-   * Los eventos en vivo disparan una recarga, pero AGRUPADA.
-   *
-   * Cada `cargar()` son tres peticiones, y los llamados llegan a rafagas: a
-   * primera hora, diez consultorios pasando paciente casi al tiempo producian
-   * diez recargas seguidas, o sea treinta peticiones en un par de segundos,
-   * para pintar exactamente el mismo estado final. Con medio segundo de espera
-   * la rafaga entera se resuelve en una sola recarga y el tablero se ve igual
-   * de al instante.
-   */
-  useEffect(() => {
-    const es = new EventSource('/api/turnos/stream')
-    let pendiente: ReturnType<typeof setTimeout> | null = null
-
-    es.onmessage = () => {
-      if (pendiente) clearTimeout(pendiente)
-      pendiente = setTimeout(() => {
-        pendiente = null
-        void cargar()
-      }, MS_AGRUPAR_EVENTOS)
-    }
-
-    return () => {
-      if (pendiente) clearTimeout(pendiente)
-      es.close()
-    }
-  }, [cargar])
+  // Eventos en vivo (agrupados): el mismo patron que usan el operador y el
+  // consultorio, en `useRecargaEnVivo`.
+  const conexion = useRecargaEnVivo(cargar)
 
   const resumen = contar(turnos)
   const ocupados = casillas.filter((c) => c.codigo)
@@ -177,7 +144,7 @@ export default function TurnosEnCursoClient() {
       <Card padded={false}>
         <CardHeader>
           <CardTitle>Puntos de atencion ({ocupados.length} ocupados de {casillas.length})</CardTitle>
-          <Badge tone="green">En vivo</Badge>
+          <IndicadorConexion estado={conexion} />
         </CardHeader>
         <CardContent>
           {casillas.length === 0 ? (

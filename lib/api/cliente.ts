@@ -62,6 +62,17 @@ export async function pedir<T>(url: string, opciones?: OpcionesPedir): Promise<T
   return data as T
 }
 
+/**
+ * Si el servidor RECHAZO el acceso (401/403), en vez de haber fallado la red.
+ *
+ * La diferencia importa donde el acceso puede vencer de verdad: un microcorte
+ * de wifi no es un enlace vencido, y tratarlo como tal deja al doctor mirando
+ * un cartel de "enlace no valido" con el enlace bueno en la mano.
+ */
+export function esRechazoDeAcceso(error: unknown): boolean {
+  return error instanceof ErrorApi && (error.status === 401 || error.status === 403)
+}
+
 export function mensajeDeError(error: unknown) {
   return error instanceof Error ? error.message : undefined
 }

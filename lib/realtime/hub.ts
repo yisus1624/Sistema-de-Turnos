@@ -25,6 +25,14 @@ export type EventoTurno =
   | { tipo: 'turno.llamado'; casilla: CasillaPantalla; repetido: boolean }
   /** El consultorio quedo libre: la pantalla apaga esa casilla. */
   | { tipo: 'modulo.liberado'; moduloId: string }
+  /**
+   * Cambio la fila de espera (una llegada registrada en admisiones, un turno
+   * nuevo de ventanilla): quien atiende esa fila recarga sus pendientes.
+   *
+   * No lleva el turno ni nada del paciente a proposito: solo dice QUE fila se
+   * movio, porque este mismo canal lo escucha la pantalla sin sesion.
+   */
+  | { tipo: 'fila.cambiada'; servicioId: string; profesionalId: string | null }
 
 const EVENTO = 'turno'
 

@@ -1,24 +1,26 @@
 /**
- * Server-Sent Events (SSE) para la pantalla publica.
+ * Server-Sent Events (SSE) para las pantallas que se actualizan solas.
  *
  * Emite un evento cada vez que el hub en memoria (`lib/realtime/hub.ts`)
- * publica un cambio de turno (llamado, repetido, atendido, ausente,
- * generado). Se envia tambien un "ping" periodico como comentario SSE para
- * mantener la conexion viva a traves de proxies/balanceadores.
+ * publica un cambio (llamado, repetido, consultorio liberado, fila movida), y
+ * un LATIDO periodico que mantiene viva la conexion a traves de proxies y
+ * balanceadores.
+ *
+ * El latido va como evento CON DATOS, no como comentario SSE (ver
+ * `lib/realtime/canal.ts`): los comentarios no llegan a `onmessage`, asi que el
+ * cliente no podria notar que dejaron de llegar, que es justo como se detecta
+ * una conexion muerta en silencio.
  */
-import { realtimeHub, type EventoTurno } from '@/lib/realtime/hub'
+import { realtimeHub } from '@/lib/realtime/hub'
+import { LATIDO, MS_LATIDO, formatearMensajeSse } from '@/lib/realtime/canal'
 
 export const dynamic = 'force-dynamic'
-
-function formatearEvento(evento: EventoTurno) {
-  return `data: ${JSON.stringify(evento)}\n\n`
-}
 
 export async function GET() {
   const encoder = new TextEncoder()
 
   let unsubscribe: (() => void) | null = null
-  let ping: ReturnType<typeof setInterval> | null = null
+  let latido: ReturnType<typeof setInterval> | null = null
 
   /**
    * Suelta la suscripcion y el temporizador.
@@ -34,9 +36,9 @@ export async function GET() {
       unsubscribe()
       unsubscribe = null
     }
-    if (ping) {
-      clearInterval(ping)
-      ping = null
+    if (latido) {
+      clearInterval(latido)
+      latido = null
     }
   }
 
@@ -46,20 +48,20 @@ export async function GET() {
 
       unsubscribe = realtimeHub.subscribe((evento) => {
         try {
-          controller.enqueue(encoder.encode(formatearEvento(evento)))
+          controller.enqueue(encoder.encode(formatearMensajeSse(evento)))
         } catch {
           // El controller ya se cerro: el cliente se desconecto.
           limpiar()
         }
       })
 
-      ping = setInterval(() => {
+      latido = setInterval(() => {
         try {
-          controller.enqueue(encoder.encode(': ping\n\n'))
+          controller.enqueue(encoder.encode(formatearMensajeSse(LATIDO)))
         } catch {
           limpiar()
         }
-      }, 20000)
+      }, MS_LATIDO)
     },
     cancel() {
       limpiar()

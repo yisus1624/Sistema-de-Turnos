@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
+import { avisarFilaCambiada } from '@/lib/realtime/avisos'
 
 const bodySchema = z.object({
   citaId: z.string().min(1, 'Debes indicar la cita.'),
@@ -26,6 +27,11 @@ export async function POST(request: Request) {
     // le dicta, y va en el mismo viaje para que no haya un instante en que la
     // pantalla diga una cosa y el mostrador otra.
     const comprobante = await turnoRepository.comprobanteDeLlegada(turno.id)
+
+    // El doctor tiene que ver al paciente en cuanto sale de admisiones, no en
+    // el siguiente refresco periodico. Se avisa desde aqui, no desde el
+    // repositorio, para no meterle mas infraestructura al dominio.
+    avisarFilaCambiada(turno)
 
     // La llegada es el momento en que el paciente entra al sistema: es el
     // primer eslabon de la trazabilidad del turno.
