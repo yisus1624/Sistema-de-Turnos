@@ -20,7 +20,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { IdentificationCard, Plus } from '@phosphor-icons/react/dist/ssr'
+import { ArrowsClockwise, IdentificationCard, Plus } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -76,6 +76,7 @@ export default function ProfesionalesClient() {
   const [editando, setEditando] = useState<Profesional | null>(null)
   const [formulario, setFormulario] = useState<FormularioDoctor>(DOCTOR_VACIO)
   const [guardando, setGuardando] = useState(false)
+  const [recalculando, setRecalculando] = useState(false)
 
   const cargar = useCallback(async () => {
     try {
@@ -95,6 +96,42 @@ export default function ProfesionalesClient() {
       setCargando(false)
     }
   }, [])
+
+  /**
+   * Vuelve a deducir la jornada de cada doctor de las citas que tiene.
+   *
+   * La carga diaria ya lo hace con los dias que trae el archivo. Esto es para
+   * lo que quedo cargado ANTES de que existiera esa regla: doctores con "dia
+   * completo" solo porque el reporte del hospital no trae esa columna, cuando
+   * sus propias citas dicen que uno se va a las once y otro llega a la una.
+   */
+  const recalcularJornadas = useCallback(async () => {
+    setRecalculando(true)
+    try {
+      const { ajustes } = await pedir<{ ajustes: Array<{ nombre: string; jornada: Jornada }> }>(
+        '/api/turnos/profesionales/jornadas',
+        { method: 'POST' },
+      )
+
+      if (ajustes.length === 0) {
+        toast.info(
+          'No hubo nada que cambiar',
+          'La jornada de cada doctor ya coincide con las horas a las que tiene citas.',
+        )
+      } else {
+        toast.success(
+          `${ajustes.length} doctor(es) cambiaron de jornada`,
+          ajustes.map((a) => `${a.nombre}: ${etiquetaJornada[a.jornada]}`).join(' · '),
+        )
+      }
+
+      await cargar()
+    } catch (error) {
+      toast.error('No se pudieron recalcular las jornadas', mensajeDeError(error))
+    } finally {
+      setRecalculando(false)
+    }
+  }, [cargar])
 
   useEffect(() => {
     cargar()
@@ -197,10 +234,27 @@ export default function ProfesionalesClient() {
       <Card padded={false}>
         <CardHeader>
           <CardTitle>Profesionales ({profesionales.length})</CardTitle>
-          <Button size="sm" onClick={abrirNuevo} disabled={serviciosConCita.length === 0}>
-            <Plus size={17} weight="bold" />
-            Nuevo doctor
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/*
+              La jornada sale de las citas y no de lo que alguien recuerde. El
+              boton esta aqui y no escondido en un menu porque hoy el catalogo
+              entero dice "dia completo": es lo primero que hay que corregir.
+            */}
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={recalcularJornadas}
+              loading={recalculando}
+              title="Deduce la jornada de cada doctor de las horas a las que tiene citas (ultimos 30 dias)"
+            >
+              <ArrowsClockwise size={16} weight="bold" />
+              Recalcular jornadas
+            </Button>
+            <Button size="sm" onClick={abrirNuevo} disabled={serviciosConCita.length === 0}>
+              <Plus size={17} weight="bold" />
+              Nuevo doctor
+            </Button>
+          </div>
         </CardHeader>
         <CardContent padded={false}>
           {cargando ? (

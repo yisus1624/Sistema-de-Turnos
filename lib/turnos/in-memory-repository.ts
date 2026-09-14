@@ -15,6 +15,7 @@
  * no hay ni debe haber datos reales de pacientes en el repositorio.
  */
 import { createHash, randomBytes } from 'node:crypto'
+import { MINUTOS_ACCESO_MAXIMO, MINUTOS_ACCESO_MINIMO } from './repository'
 import type { TurnoRepository } from './repository'
 import type {
   AccesoProfesional,
@@ -27,7 +28,6 @@ import type {
   ConfiguracionSistema,
   HorarioDia,
   EstadisticasDia,
-  EstadisticasServicio,
   EstadoAgendaItem,
   FiltroHistorico,
   ItemAgendaProfesional,
@@ -38,16 +38,20 @@ import type {
   Turno,
 } from './types'
 import { errorDeNegocio } from './errores'
+import { ordenAtencion, resumir } from './estadisticas'
+import {
+  ETIQUETA_JORNADA,
+  ahoraISO,
+  aMinutos,
+  atiendeEnJornada,
+  bloqueDeCita,
+  jornadaSegunHoras,
+  diaColombia,
+  franjasDeJornada,
+  horaColombia,
+  instanteDeFranja,
+} from './tiempo'
 import { realtimeHub } from '@/lib/realtime/hub'
-
-/**
- * Rango permitido para la vigencia del enlace temporal del profesional (RF
- * pendiente, confirmado por el hospital). El minimo evita enlaces
- * inservibles por error de dedo; el maximo evita dejar una llave viva
- * indefinidamente, que es el riesgo real de este mecanismo.
- */
-export const MINUTOS_ACCESO_MINIMO = 15
-export const MINUTOS_ACCESO_MAXIMO = 72 * 60
 
 interface EstadoMemoria {
   servicios: Servicio[]
@@ -81,103 +85,6 @@ const CONFIGURACION_INICIAL: ConfiguracionSistema = {
 
 function crearId() {
   return Math.random().toString(36).slice(2, 10)
-}
-
-function ahoraISO() {
-  return new Date().toISOString()
-}
-
-/**
- * Dia (AAAA-MM-DD) de un instante ISO, en hora de Colombia.
- *
- * Las fechas se guardan en UTC (`toISOString()`), pero el hospital y la UI
- * razonan en hora local (America/Bogota, UTC-5). Recortar el ISO directamente
- * daria el dia UTC: despues de las 7 p. m. en Colombia el dia UTC ya es el
- * siguiente, y el historico/estadisticas de "hoy" saldrian en cero. Comparar
- * por este dia local evita ese desfase.
- */
-function diaColombia(iso: string): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(new Date(iso))
-}
-
-/** "HH:MM" de un instante, en hora de Colombia. */
-function horaColombia(iso: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'America/Bogota',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(iso))
-}
-
-/** "07:30" -> 450. Devuelve NaN si la hora no tiene forma de hora. */
-function aMinutos(hora: string): number {
-  const partes = /^(\d{1,2}):(\d{2})$/.exec(hora.trim())
-  if (!partes) return Number.NaN
-
-  const horas = Number(partes[1])
-  const minutos = Number(partes[2])
-  if (horas > 23 || minutos > 59) return Number.NaN
-
-  return horas * 60 + minutos
-}
-
-/** 450 -> "07:30". */
-function aHora(minutos: number): string {
-  const dosDigitos = (n: number) => String(n).padStart(2, '0')
-  return `${dosDigitos(Math.floor(minutos / 60))}:${dosDigitos(minutos % 60)}`
-}
-
-/**
- * Franjas en las que se puede agendar dentro de una jornada.
- *
- * La ultima franja tiene que CABER COMPLETA antes del cierre: con consultas de
- * 15 minutos y una jornada que termina a las 12:00, la ultima cita es a las
- * 11:45 y no a las 11:55, porque esa se saldria de la jornada. Una
- * configuracion incoherente (cierre antes de la apertura, o una consulta mas
- * larga que la jornada) devuelve una lista vacia en vez de reventar: la
- * pantalla lo muestra como "sin franjas" y el administrador lo corrige.
- */
-function franjasDeJornada(inicio: string, fin: string, duracionMinutos: number): string[] {
-  // Las franjas de una jornada solo cambian cuando el administrador toca la
-  // configuracion, pero esto se llama en bucle: una vez por cita al validar la
-  // parrilla y dos veces por cada comprobacion de franja. Recalcular la lista
-  // entera cada vez es trabajo repetido para siempre el mismo resultado.
-  const clave = `${inicio}|${fin}|${duracionMinutos}`
-  const memorizadas = franjasMemorizadas.get(clave)
-  if (memorizadas) return memorizadas
-
-  const desde = aMinutos(inicio)
-  const hasta = aMinutos(fin)
-  if (!Number.isFinite(desde) || !Number.isFinite(hasta) || duracionMinutos < 1) return []
-
-  const franjas: string[] = []
-  for (let minuto = desde; minuto + duracionMinutos <= hasta; minuto += duracionMinutos) {
-    franjas.push(aHora(minuto))
-  }
-
-  franjasMemorizadas.set(clave, franjas)
-  return franjas
-}
-
-/**
- * Franjas ya calculadas, por jornada y duracion.
- *
- * No crece: las claves posibles son las combinaciones de horario que el
- * administrador llegue a configurar, un puñado en toda la vida del sistema. La
- * lista se devuelve tal cual, asi que NADIE debe modificarla.
- */
-const franjasMemorizadas = new Map<string, string[]>()
-
-/**
- * Instante ISO de una hora de un dia concreto EN COLOMBIA.
- *
- * El desfase se escribe a mano (-05:00) en vez de usar la zona del proceso:
- * Colombia no tiene horario de verano, y si el servidor esta en otra zona
- * (pasa: equipos de desarrollo en Europa) la cita caeria en el dia equivocado.
- */
-function instanteDeFranja(dia: string, hora: string): string {
-  return new Date(`${dia}T${hora}:00-05:00`).toISOString()
 }
 
 function sembrar(): EstadoMemoria {
@@ -390,17 +297,6 @@ function bloqueDeFranja(hora: string): 'MANANA' | 'TARDE' | null {
     return 'TARDE'
   }
   return null
-}
-
-const ETIQUETA_JORNADA: Record<Jornada, string> = {
-  MANANA: 'la jornada de la mañana',
-  TARDE: 'la jornada de la tarde',
-  COMPLETA: 'el dia completo',
-}
-
-/** Si el doctor trabaja en esa jornada. `COMPLETA` atiende en las dos. */
-function atiendeEnJornada(profesional: Profesional, bloque: 'MANANA' | 'TARDE') {
-  return profesional.jornada === 'COMPLETA' || profesional.jornada === bloque
 }
 
 /**
@@ -716,11 +612,6 @@ function exigirTurnoEnAtencion(turno: Turno, accion: 'atendido' | 'ausente') {
   errorDeNegocio(`El turno ${turno.codigo} ya esta cerrado; no se puede marcar como ${accion}.`)
 }
 
-function ordenAtencion(a: Turno, b: Turno) {
-  if (a.prioridad !== b.prioridad) return a.prioridad === 'PRIORITARIO' ? -1 : 1
-  return new Date(a.fechaGeneracion).getTime() - new Date(b.fechaGeneracion).getTime()
-}
-
 /** Arma la casilla que ve la pantalla publica, con el nombre ya enmascarado. */
 function casillaDeTurno(turno: Turno): CasillaPantalla {
   const modulo = buscarModulo(turno.moduloId!)
@@ -974,6 +865,26 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     // Las que van quedando colocadas, para saber al final cuales sobraron.
     const colocadas = new Set<string>()
 
+    // A QUE JORNADA PERTENECE CADA DOCTOR HOY, segun las horas a las que tiene
+    // pacientes. Hace falta antes de repartir las citas por los dos bloques,
+    // porque la hora del almuerzo no es de nadie: las 12:20 del doctor que
+    // atiende de 12:20 a 16:14 son su tarde, y las del que atiende de 7 a 12:30
+    // son su mañana. Sin esto, las primeras caian en la mañana, donde ese doctor
+    // no tiene columna, y sus pacientes se iban de la parrilla.
+    const jornadaDelDoctor = new Map<string, Jornada | null>()
+    {
+      const horasPorDoctor = new Map<string, string[]>()
+      for (const cita of citasDelDia) {
+        const hora = horaColombia(cita.horaCita)
+        const horas = horasPorDoctor.get(cita.profesionalId)
+        if (horas) horas.push(hora)
+        else horasPorDoctor.set(cita.profesionalId, [hora])
+      }
+      for (const [id, horas] of horasPorDoctor) {
+        jornadaDelDoctor.set(id, jornadaSegunHoras(horas, configuracion))
+      }
+    }
+
     const definicion = [
       {
         jornada: 'MANANA' as const,
@@ -990,8 +901,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     ]
 
     const bloques: BloqueHorario[] = definicion.map(({ jornada, etiqueta, desde, hasta }) => {
-      const horas = franjasDeJornada(desde, hasta, duracionCitaMinutos)
-      const franjas = new Set(horas)
+      const franjas = new Set(franjasDeJornada(desde, hasta, duracionCitaMinutos))
 
       // Solo doctores activos de servicios que atienden por cita, ordenados
       // por servicio y nombre para que la parrilla se lea siempre igual y no
@@ -1005,33 +915,47 @@ export class InMemoryTurnoRepository implements TurnoRepository {
           return servicioA.localeCompare(servicioB, 'es') || a.nombre.localeCompare(b.nombre, 'es')
         })
 
-      const citas: Record<string, CitaEnHorario> = {}
-      const ocupadosPorDoctor = new Map<string, number>()
       // Set y no `doctores.some(...)`: aquello recorria la lista de doctores
       // entera por cada cita del dia. Con treinta doctores y varios cientos de
       // citas eso son miles de comparaciones para armar una parrilla.
       const idsDeDoctores = new Set(doctores.map((d) => d.id))
 
+      const citas: Record<string, CitaEnHorario[]> = {}
+      const citasPorDoctor = new Map<string, number>()
+      // Las horas de la jornada: las franjas configuradas MAS la hora exacta de
+      // cada cita. Es lo que hace que la agenda del hospital quepa: sus citas
+      // vienen a las 7:09 y a las 7:13, y una rejilla fija las expulsaba.
+      const horas = new Set(franjas)
+
       for (const cita of citasDelDia) {
         const hora = horaColombia(cita.horaCita)
-        if (!franjas.has(hora)) continue
         if (!idsDeDoctores.has(cita.profesionalId)) continue
+        if (bloqueDeCita(hora, configuracion, jornadaDelDoctor.get(cita.profesionalId) ?? null) !== jornada) {
+          continue
+        }
 
-        citas[`${cita.profesionalId}|${hora}`] = enHorario(cita)
-        ocupadosPorDoctor.set(cita.profesionalId, (ocupadosPorDoctor.get(cita.profesionalId) ?? 0) + 1)
+        horas.add(hora)
+        const clave = `${cita.profesionalId}|${hora}`
+        // Dos pacientes a la misma hora con el mismo doctor caben los dos: si
+        // el hospital los cito asi, los dos se presentan.
+        ;(citas[clave] ??= []).push(enHorario(cita))
+        citasPorDoctor.set(cita.profesionalId, (citasPorDoctor.get(cita.profesionalId) ?? 0) + 1)
         colocadas.add(cita.id)
       }
+
+      const filas = [...horas]
+        .sort((a, b) => a.localeCompare(b))
+        .map((hora) => ({ hora, agendable: franjas.has(hora) }))
 
       const columnas: ColumnaHorario[] = doctores.map((doctor) => ({
         profesionalId: doctor.id,
         profesionalNombre: doctor.nombre,
         servicioNombre: estado.servicios.find((s) => s.id === doctor.servicioId)?.nombre ?? '—',
         moduloNombre: estado.modulos.find((m) => m.id === doctor.moduloId)?.nombre ?? null,
-        ocupados: ocupadosPorDoctor.get(doctor.id) ?? 0,
-        cupos: horas.length,
+        citas: citasPorDoctor.get(doctor.id) ?? 0,
       }))
 
-      return { jornada, etiqueta, desde, hasta, horas, columnas, citas }
+      return { jornada, etiqueta, desde, hasta, filas, columnas, citas }
     })
 
     return {
@@ -1906,60 +1830,6 @@ function validarPrefijoLibre(prefijo: string) {
   if (!normalizado) errorDeNegocio('El prefijo es obligatorio.')
   if (estado.servicios.some((s) => s.prefijo === normalizado)) {
     errorDeNegocio(`El prefijo ${normalizado} ya lo usa otro servicio.`)
-  }
-}
-
-function promedioMinutos(valores: number[]): number | null {
-  if (valores.length === 0) return null
-  const total = valores.reduce((suma, valor) => suma + valor, 0)
-  return Math.round((total / valores.length / 60000) * 10) / 10
-}
-
-function resumir(
-  servicioId: string,
-  servicioNombre: string,
-  turnos: Turno[],
-  citas: Cita[],
-): EstadisticasServicio {
-  const esperas: number[] = []
-  const atenciones: number[] = []
-
-  for (const turno of turnos) {
-    // La espera se mide contra el PRIMER llamado, nunca contra `horaLlamado`:
-    // esa se sobrescribe al repetir el llamado, asi que medir contra ella
-    // alargaba en el informe la espera de los pacientes a los que mas costo
-    // ubicar. `horaPrimerLlamado` no existe en turnos anteriores a este
-    // cambio, y para esos se sigue usando el ultimo llamado.
-    const primerLlamado = turno.horaPrimerLlamado ?? turno.horaLlamado
-    if (primerLlamado) {
-      esperas.push(new Date(primerLlamado).getTime() - new Date(turno.fechaGeneracion).getTime())
-    }
-    if (primerLlamado && turno.horaAtencion) {
-      atenciones.push(new Date(turno.horaAtencion).getTime() - new Date(primerLlamado).getTime())
-    }
-  }
-
-  return {
-    servicioId,
-    servicioNombre,
-    generados: turnos.length,
-    atendidos: turnos.filter((t) => t.estado === 'ATENDIDO').length,
-    ausentes: turnos.filter((t) => t.estado === 'AUSENTE').length,
-    pendientes: turnos.filter((t) => t.estado === 'EN_ESPERA').length,
-    cerradosAutomaticamente: turnos.filter((t) => t.cierreAutomatico).length,
-    // Citado y no vino: la cita se quedo en PROGRAMADA, sin llegada registrada.
-    // Es un indicador distinto de `ausentes` (esos si llegaron); no se medía en
-    // ningun lado porque, al no haber turno, no existian en el historico.
-    //
-    // Solo cuentan las citas cuya HORA YA PASO. Si no, a media mañana la
-    // inasistencia del dia incluiria a todos los pacientes de la tarde, que
-    // simplemente todavia no han llegado.
-    inasistencias: citas.filter(
-      (c) => c.estado === 'PROGRAMADA' && new Date(c.horaCita).getTime() < Date.now(),
-    ).length,
-    citasAgendadas: citas.filter((c) => c.estado !== 'CANCELADA').length,
-    minutosEsperaPromedio: promedioMinutos(esperas),
-    minutosAtencionPromedio: promedioMinutos(atenciones),
   }
 }
 

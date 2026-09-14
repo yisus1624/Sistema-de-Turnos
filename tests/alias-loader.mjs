@@ -36,7 +36,15 @@ function subimportDeNext(specifier) {
   return existsSync(archivo) ? `${specifier}.js` : null
 }
 
+/**
+ * `server-only` lanza al importarse fuera del bundler de Next. Ver
+ * `server-only-stub.mjs`.
+ */
+const stubServerOnly = pathToFileURL(path.join(import.meta.dirname, 'server-only-stub.mjs')).href
+
 export async function resolve(specifier, context, nextResolve) {
+  if (specifier === 'server-only') return { url: stubServerOnly, shortCircuit: true }
+
   const deNext = subimportDeNext(specifier)
   if (deNext) return nextResolve(deNext, context)
 

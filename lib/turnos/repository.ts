@@ -234,3 +234,16 @@ export interface TurnoRepository {
   listarAccesosProfesional(): Promise<AccesoProfesional[]>
   revocarAccesoProfesional(id: string): Promise<AccesoProfesional>
 }
+
+/**
+ * Rango permitido para la vigencia del enlace temporal del profesional (RF
+ * pendiente, confirmado por el hospital). El minimo evita enlaces
+ * inservibles por error de dedo; el maximo evita dejar una llave viva
+ * indefinidamente, que es el riesgo real de este mecanismo.
+ *
+ * Viven en el contrato y no en una implementacion porque son la REGLA, no un
+ * detalle de donde se guarden los accesos: las dos implementaciones tienen que
+ * rechazar exactamente las mismas vigencias.
+ */
+export const MINUTOS_ACCESO_MINIMO = 15
+export const MINUTOS_ACCESO_MAXIMO = 72 * 60

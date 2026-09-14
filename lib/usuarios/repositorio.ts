@@ -16,9 +16,15 @@
  * se conecte el directorio del hospital ese metodo no estaria, y el fallo
  * saldria en la cara del funcionario intentando entrar a trabajar.
  */
-import { usuarioRepository as enMemoria } from './in-memory-repository'
+import { usuarioRepository as enPostgres } from './prisma-repository'
 import type { UsuarioRepository } from './repository'
 
-export const usuarioRepository: UsuarioRepository = enMemoria
+/**
+ * FUENTE ACTUAL: PostgreSQL (Supabase), via `prisma-repository`. Las cuentas
+ * semilla se crean una sola vez con `npm run db:seed`, en vez de recrearse en
+ * cada arranque; asi los permisos que el administrador cambia se quedan
+ * cambiados.
+ */
+export const usuarioRepository: UsuarioRepository = enPostgres
 
 export type { UsuarioRepository }

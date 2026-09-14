@@ -1,10 +1,12 @@
 // El horario del dia: la parrilla de jornada de mañana y jornada de tarde con
-// una columna por doctor y una fila por franja.
+// una columna por doctor y una fila por hora.
 //
-// Es la vista con la que se trabaja la agenda, asi que lo que se cuida aqui es
-// que las franjas salgan de la configuracion, que cada doctor aparezca solo en
-// la jornada que trabaja, y sobre todo que ninguna cita se pierda: las que no
-// encajan en la parrilla tienen que salir aparte y no desaparecer.
+// LAS FILAS NO SON UNA REJILLA FIJA. Salen de las franjas configuradas MAS la
+// hora exacta de cada cita del dia, porque la agenda del hospital no va a horas
+// redondas: trae citas a las 7:09 y a las 7:13, cada doctor con su propio
+// ritmo, y eso no lo decide este sistema. Lo que se cuida aqui es que toda cita
+// caiga en la celda de su doctor a su hora de verdad, que ninguna se pierda, y
+// que solo se ofrezca agendar a mano donde el servidor lo va a aceptar.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -27,7 +29,7 @@ function enFranja(dia, hora) {
 const bloqueDe = (horario, jornada) => horario.bloques.find((b) => b.jornada === jornada)
 const columna = (bloque, profesionalId) => bloque.columnas.find((c) => c.profesionalId === profesionalId)
 
-test('la parrilla sale de la configuracion: 15 minutos dan 20 cupos de 7 a 12', async () => {
+test('un dia sin citas ensena las franjas de la configuracion: 15 minutos, de 7 a 12', async () => {
   const horario = await repo.horarioDelDia(enDias(10))
 
   assert.equal(horario.duracionCitaMinutos, 15)
@@ -35,16 +37,19 @@ test('la parrilla sale de la configuracion: 15 minutos dan 20 cupos de 7 a 12', 
   const manana = bloqueDe(horario, 'MANANA')
   assert.equal(manana.desde, '07:00')
   assert.equal(manana.hasta, '12:00')
-  assert.equal(manana.horas.length, 20)
-  assert.equal(manana.horas[0], '07:00')
+  assert.equal(manana.filas.length, 20)
+  assert.equal(manana.filas[0].hora, '07:00')
 
   // La ultima consulta tiene que CABER antes del cierre: con 15 minutos, la
   // ultima entra a las 11:45 y no a las 11:55.
-  assert.equal(manana.horas.at(-1), '11:45')
+  assert.equal(manana.filas.at(-1).hora, '11:45')
+
+  // Todas son franjas de la configuracion, asi que en todas se puede agendar.
+  assert.ok(manana.filas.every((f) => f.agendable))
 
   const tarde = bloqueDe(horario, 'TARDE')
-  assert.equal(tarde.horas.length, 16)
-  assert.equal(tarde.horas.at(-1), '16:45')
+  assert.equal(tarde.filas.length, 16)
+  assert.equal(tarde.filas.at(-1).hora, '16:45')
 })
 
 test('cada doctor aparece solo en la jornada que trabaja; el de dia completo, en las dos', async () => {
@@ -86,12 +91,13 @@ test('la cita agendada cae en la celda de su doctor y su hora', async () => {
   const celda = manana.citas['pro-perez|09:30']
 
   assert.ok(celda, 'la cita deberia estar en la celda pro-perez / 09:30')
-  assert.equal(celda.nombrePaciente, 'Paciente En Celda')
-  assert.equal(celda.estado, 'PROGRAMADA')
-  assert.equal(celda.hora, '09:30')
+  assert.equal(celda.length, 1)
+  assert.equal(celda[0].nombrePaciente, 'Paciente En Celda')
+  assert.equal(celda[0].estado, 'PROGRAMADA')
+  assert.equal(celda[0].hora, '09:30')
 })
 
-test('la columna del doctor cuenta sus cupos ocupados', async () => {
+test('la columna del doctor cuenta sus citas', async () => {
   const dia = enDias(12)
   for (const hora of ['07:00', '07:15', '07:30']) {
     await repo.crearCita({
@@ -105,8 +111,11 @@ test('la columna del doctor cuenta sus cupos ocupados', async () => {
   const manana = bloqueDe(await repo.horarioDelDia(dia), 'MANANA')
   const col = columna(manana, 'pro-gomez')
 
-  assert.equal(col.ocupados, 3)
-  assert.equal(col.cupos, 20)
+  // Cuantas citas tiene, y nada de "3 de 20": esos 20 salian de partir la
+  // jornada entre la duracion de la consulta, y no son cupos que este doctor
+  // tenga. Su agenda la arma el hospital, con el ritmo que cada uno lleve.
+  assert.equal(col.citas, 3)
+  assert.equal(col.cupos, undefined)
 })
 
 test('la cita cancelada libera la celda', async () => {
@@ -129,9 +138,118 @@ test('la cita cancelada libera la celda', async () => {
   )
 })
 
+// --- Quien atiende hoy y quien no ---
+//
+// La pantalla esconde las columnas de los doctores que hoy no tienen ni un
+// paciente, porque el catalogo lo llena la carga diaria y crece, pero en un dia
+// cualquiera atiende una parte. Para poder esconderlas sin esconder a quien si
+// atiende, la columna tiene que decir cuantas citas trae en esa jornada.
+
+test('la columna dice cuantas citas trae el doctor en esa jornada', async () => {
+  const dia = enDias(21)
+  for (const hora of ['08:00', '08:15']) {
+    await repo.crearCita({
+      documentoPaciente: `881${hora.replace(':', '')}`,
+      nombrePaciente: 'Paciente De La Mañana',
+      profesionalId: 'pro-ramirez',
+      horaCita: enFranja(dia, hora),
+    })
+  }
+
+  const horario = await repo.horarioDelDia(dia)
+
+  assert.equal(columna(bloqueDe(horario, 'MANANA'), 'pro-ramirez').citas, 2)
+  // El mismo doctor (dia completo) no tiene nada por la tarde: esa columna es
+  // la que la pantalla esconde.
+  assert.equal(columna(bloqueDe(horario, 'TARDE'), 'pro-ramirez').citas, 0)
+})
+
+test('un doctor sin ninguna cita ese dia trae cero, aunque atienda la jornada', async () => {
+  const horario = await repo.horarioDelDia(enDias(22))
+
+  for (const bloque of horario.bloques) {
+    for (const col of bloque.columnas) {
+      assert.equal(col.citas, 0, `${col.profesionalNombre} no deberia traer citas ese dia`)
+    }
+  }
+})
+
+test('la cita a una hora que no es franja se abre su propia fila, y no se expulsa', async () => {
+  // ESTE ES EL CASO REAL DEL HOSPITAL. Su agenda trae citas a las 7:09 y a las
+  // 7:13: con una rejilla fija, esos pacientes se iban a una lista al pie y la
+  // columna de su doctor quedaba en blanco, igual que la de uno que no vino.
+  // Aqui se reproduce descuadrando las franjas, que es la unica forma de
+  // conseguirlo por la puerta de delante.
+  const dia = enDias(23)
+  await repo.crearCita({
+    documentoPaciente: '882001',
+    nombrePaciente: 'Paciente A Hora Suelta',
+    profesionalId: 'pro-perez',
+    horaCita: enFranja(dia, '08:15'),
+  })
+
+  await repo.guardarConfiguracion({ duracionCitaMinutos: 20 })
+  try {
+    const horario = await repo.horarioDelDia(dia)
+    const manana = bloqueDe(horario, 'MANANA')
+
+    // Con 20 minutos las franjas son 07:00, 07:20, 07:40, 08:00, 08:20... Las
+    // 08:15 no son franja, pero hay un paciente citado, asi que hay fila.
+    const fila = manana.filas.find((f) => f.hora === '08:15')
+    assert.ok(fila, 'la hora de la cita tiene que tener su fila')
+    assert.equal(fila.agendable, false, 'pero no se ofrece agendar a mano en ella')
+
+    assert.equal(manana.citas['pro-perez|08:15'][0].nombrePaciente, 'Paciente A Hora Suelta')
+    assert.equal(columna(manana, 'pro-perez').citas, 1)
+    assert.equal(horario.fueraDeHorario.length, 0, 'ya no se expulsa a nadie de la parrilla')
+  } finally {
+    await repo.guardarConfiguracion({ duracionCitaMinutos: 15 })
+  }
+})
+
+test('dos pacientes con el mismo doctor a la misma hora se ven los dos', async () => {
+  // El hospital lo hace. Guardando uno solo en la celda, el otro desaparece de
+  // la agenda sin que nadie se entere, y aun asi se presenta en la ventanilla.
+  const dia = enDias(24)
+  const doctor = await repo.crearProfesional({
+    nombre: 'Dr. Doble Cita',
+    servicioId: 'srv-consulta-externa',
+    jornada: 'MANANA',
+  })
+
+  for (const [documento, nombre, hora] of [
+    ['883001', 'Primero De Las Nueve', '09:00'],
+    ['883002', 'Segundo De Las Nueve', '09:15'],
+  ]) {
+    await repo.crearCita({ documentoPaciente: documento, nombrePaciente: nombre, profesionalId: doctor.id, horaCita: enFranja(dia, hora) })
+  }
+
+  // Agendar a mano encima de un cupo ocupado lo impide el dominio, y asi tiene
+  // que seguir. La coincidencia solo puede entrar por la carga del hospital,
+  // que guarda la hora tal cual: se reproduce moviendo la segunda a las 09:00.
+  const citas = await repo.listarCitas({ profesionalId: doctor.id, fecha: dia })
+  citas.find((c) => c.documentoPaciente === '883002').horaCita = enFranja(dia, '09:00')
+
+  const manana = bloqueDe(await repo.horarioDelDia(dia), 'MANANA')
+  const celda = manana.citas[`${doctor.id}|09:00`]
+
+  assert.equal(celda.length, 2, 'las dos citas tienen que estar en la celda')
+  assert.deepEqual(
+    celda.map((c) => c.nombrePaciente).sort(),
+    ['Primero De Las Nueve', 'Segundo De Las Nueve'],
+  )
+  assert.equal(columna(manana, doctor.id).citas, 2)
+
+  // Se limpia: el estado del archivo es compartido.
+  for (const cita of await repo.listarCitas({ profesionalId: doctor.id, fecha: dia })) {
+    await repo.cancelarCita(cita.id, { motivo: 'Fin de la prueba' })
+  }
+  await repo.actualizarProfesional(doctor.id, { activo: false })
+})
+
 // --- Lo que NO se puede perder ---
 
-test('al cambiar la duracion de la consulta, las citas descuadradas salen aparte y no desaparecen', async () => {
+test('cambiar la duracion de la consulta no descoloca a los que ya estaban citados', async () => {
   const dia = enDias(14)
   await repo.crearCita({
     documentoPaciente: '777003',
@@ -141,15 +259,18 @@ test('al cambiar la duracion de la consulta, las citas descuadradas salen aparte
   })
 
   // Con consultas de 20 minutos las franjas pasan a 07:00, 07:20, 07:40,
-  // 08:00, 08:20... y las 08:15 dejan de existir.
+  // 08:00, 08:20... y las 08:15 dejan de ser hora de agendar.
   await repo.guardarConfiguracion({ duracionCitaMinutos: 20 })
   try {
     const horario = await repo.horarioDelDia(dia)
+    const manana = bloqueDe(horario, 'MANANA')
 
-    assert.equal(bloqueDe(horario, 'MANANA').citas['pro-perez|08:15'], undefined)
-    assert.equal(horario.fueraDeHorario.length, 1)
-    assert.equal(horario.fueraDeHorario[0].nombrePaciente, 'Paciente Descuadrado')
-    assert.equal(horario.fueraDeHorario[0].hora, '08:15')
+    // El paciente sigue donde su cita dice, con su hora intacta. Cambiar una
+    // opcion de la configuracion no puede mover a nadie de hora ni sacarlo de
+    // la agenda: al paciente ya le dijeron a que hora venir.
+    assert.equal(manana.citas['pro-perez|08:15'][0].nombrePaciente, 'Paciente Descuadrado')
+    assert.equal(manana.filas.find((f) => f.hora === '08:15').agendable, false)
+    assert.equal(horario.fueraDeHorario.length, 0)
   } finally {
     // El estado es compartido entre las pruebas del archivo.
     await repo.guardarConfiguracion({ duracionCitaMinutos: 15 })
@@ -224,8 +345,8 @@ test('cambiar la duracion de la consulta cambia los cupos del dia', async () => 
   await repo.guardarConfiguracion({ duracionCitaMinutos: 30 })
   try {
     const manana = bloqueDe(await repo.horarioDelDia(enDias(16)), 'MANANA')
-    assert.equal(manana.horas.length, 10, 'de 7 a 12, consultas de 30 minutos dan 10 cupos')
-    assert.equal(columna(manana, 'pro-perez').cupos, 10)
+    assert.equal(manana.filas.length, 10, 'de 7 a 12, consultas de 30 minutos dan 10 franjas')
+    assert.ok(manana.filas.every((f) => f.agendable))
   } finally {
     await repo.guardarConfiguracion({ duracionCitaMinutos: 15 })
   }
@@ -274,8 +395,8 @@ test('la parrilla sostiene muchos doctores sin mezclar las celdas', async () => 
   for (const [i, doctor] of creados.entries()) {
     const celda = manana.citas[`${doctor.id}|${horas[i % horas.length]}`]
     assert.ok(celda, `falta la cita de ${doctor.nombre}`)
-    assert.equal(celda.nombrePaciente, `Paciente De ${doctor.nombre}`)
-    assert.equal(columna(manana, doctor.id).ocupados, 1)
+    assert.equal(celda[0].nombrePaciente, `Paciente De ${doctor.nombre}`)
+    assert.equal(columna(manana, doctor.id).citas, 1)
   }
 
   // Se dejan inactivos: el estado del archivo es compartido y 20 columnas de

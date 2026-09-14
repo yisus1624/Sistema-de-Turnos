@@ -8,14 +8,22 @@
  * dentro de la carpeta de un rol.
  *
  * POR QUE UNA PARRILLA Y NO UNA LISTA. En el hospital unos doctores atienden
- * en la mañana y otros en la tarde, y cada consulta ocupa un rato fijo. Con esa
- * forma, la pregunta que se hace el que agenda no es "que citas hay" sino "que
- * le queda libre a este doctor": una parrilla de doctor x hora la responde de
- * un vistazo y, sobre todo, hace imposible el error caro, que es citar dos
- * pacientes con el mismo doctor a la misma hora. El cupo se ve ocupado.
+ * en la mañana y otros en la tarde. La pregunta que se hace el que agenda no es
+ * "que citas hay" sino "como va este doctor": una parrilla de doctor x hora la
+ * responde de un vistazo y, sobre todo, deja ver el error caro, que es citar
+ * dos pacientes con el mismo doctor a la misma hora.
  *
- * La parrilla la arma el SERVIDOR (`horarioDelDia`), porque las franjas
- * dependen de la configuracion del hospital y de la jornada de cada doctor.
+ * LAS FILAS SALEN DE LAS CITAS, NO DE UNA REJILLA FIJA. Antes las horas eran
+ * las franjas de la configuracion (7:00, 7:10, 7:20...) y lo que no caia justo
+ * ahi se mandaba a una lista al pie. Con la agenda real del hospital eso
+ * vaciaba columnas enteras: sus citas vienen a las 7:09 y a las 7:13, cada
+ * doctor con su ritmo —uno cada diez minutos, otro cada trece, uno con treinta
+ * pacientes y otro con veintisiete—, y ese ritmo no lo decide este sistema.
+ * Ahora cada cita cae en su hora de verdad; las franjas configuradas siguen
+ * apareciendo, pero solo como los huecos donde se puede agendar A MANO.
+ *
+ * La parrilla la arma el SERVIDOR (`horarioDelDia`), porque depende de la
+ * configuracion del hospital, de la jornada de cada doctor y de sus citas.
  * Aqui solo se pinta y se piden los cambios.
  *
  * El documento y el nombre completo del paciente solo se manejan en esta
@@ -42,6 +50,7 @@ import EmptyState from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Loader'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Seleccion } from '@/components/admin/Campos'
+import CargarReporteCitas from './CargarReporteCitas'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import { useValorConRetraso } from '@/lib/hooks'
 import type { BloqueHorario, CitaEnHorario, EstadoCita, HorarioDia } from '@/lib/turnos/types'
@@ -126,6 +135,21 @@ export default function AgendaCitasClient() {
   const [servicioFiltro, setServicioFiltro] = useState('')
   const busquedaDiferida = useValorConRetraso(busqueda, 250)
 
+  /**
+   * Si se muestran tambien los doctores que hoy NO tienen ni una cita.
+   *
+   * Apagado a proposito. El catalogo de doctores lo va llenando la carga diaria
+   * y crece con el tiempo, pero en un dia cualquiera atiende una parte: con
+   * todos en la parrilla, la mayoria de las columnas quedan vacias y encontrar
+   * la del doctor que se busca es recorrer la pantalla de lado leyendo nombres.
+   * Peor aun, esas columnas vacias se ven exactamente igual que la del doctor
+   * que si atiende y todavia no tiene pacientes, asi que no informan de nada.
+   *
+   * Se puede encender, porque para agendarle el primer paciente del dia a un
+   * doctor hay que poder llegar a su columna.
+   */
+  const [verSinCitas, setVerSinCitas] = useState(false)
+
   // Alta de cita sobre una franja libre.
   const [celda, setCelda] = useState<CeldaSeleccionada | null>(null)
   const [documento, setDocumento] = useState('')
@@ -188,11 +212,20 @@ export default function AgendaCitasClient() {
     cargar(fecha)
   }, [cargar, fecha])
 
-  /** Servicios presentes hoy, para el selector. */
+  /**
+   * Servicios presentes hoy, para el selector.
+   *
+   * Salen de las columnas que la parrilla llega a mostrar, no del catalogo: un
+   * servicio cuyos doctores hoy no atienden dejaria la parrilla en blanco al
+   * elegirlo, y el operador pensaria que se rompio algo.
+   */
   const servicios = useMemo(() => {
-    const nombres = horario?.bloques.flatMap((b) => b.columnas.map((c) => c.servicioNombre)) ?? []
+    const nombres =
+      horario?.bloques.flatMap((b) =>
+        b.columnas.filter((c) => verSinCitas || c.citas > 0).map((c) => c.servicioNombre),
+      ) ?? []
     return [...new Set(nombres)].sort((a, b) => a.localeCompare(b, 'es'))
-  }, [horario])
+  }, [horario, verSinCitas])
 
   const filtrando = busquedaDiferida.trim() !== '' || servicioFiltro !== ''
   // Un dia que ya paso se consulta, pero no se agenda: el servidor tambien lo
@@ -212,6 +245,8 @@ export default function AgendaCitasClient() {
     return horario.bloques.map((bloque) => ({
       ...bloque,
       columnas: bloque.columnas.filter((columna) => {
+        // El doctor que hoy no atiende no ocupa sitio en la parrilla.
+        if (!verSinCitas && columna.citas === 0) return false
         if (servicioFiltro && columna.servicioNombre !== servicioFiltro) return false
         if (!texto) return true
         // Se busca tambien por consultorio: el operador muchas veces sabe
@@ -219,27 +254,55 @@ export default function AgendaCitasClient() {
         return `${columna.profesionalNombre} ${columna.moduloNombre ?? ''}`.toLowerCase().includes(texto)
       }),
     }))
-  }, [horario, busquedaDiferida, servicioFiltro])
+  }, [horario, busquedaDiferida, servicioFiltro, verSinCitas])
 
+  /** Doctores que la parrilla puede llegar a mostrar: el universo de la busqueda. */
   const doctoresTotales = useMemo(
-    () => new Set(horario?.bloques.flatMap((b) => b.columnas.map((c) => c.profesionalId)) ?? []).size,
-    [horario],
+    () =>
+      new Set(
+        horario?.bloques.flatMap((b) =>
+          b.columnas.filter((c) => verSinCitas || c.citas > 0).map((c) => c.profesionalId),
+        ) ?? [],
+      ).size,
+    [horario, verSinCitas],
   )
   const doctoresVisibles = useMemo(
     () => new Set(bloquesVisibles.flatMap((b) => b.columnas.map((c) => c.profesionalId))).size,
     [bloquesVisibles],
   )
 
-  const resumen = useMemo(() => {
-    if (!horario) return { agendadas: 0, cupos: 0 }
-    return horario.bloques.reduce(
-      (total, bloque) => ({
-        agendadas: total.agendadas + Object.keys(bloque.citas).length,
-        cupos: total.cupos + bloque.columnas.reduce((suma, c) => suma + c.cupos, 0),
-      }),
-      { agendadas: 0, cupos: 0 },
-    )
+  /**
+   * Columnas escondidas por no tener ninguna cita.
+   *
+   * Se cuentan COLUMNAS y no doctores, y la diferencia se ve: el medico de dia
+   * completo que hoy solo tiene pacientes por la mañana sigue en la parrilla,
+   * pero su columna de la tarde no esta. Contando doctores, el aviso decia "8
+   * ocultos" justo al lado de "14 de 14 doctores", y las dos cosas eran
+   * ciertas: por eso ahora se nombra lo que de verdad se escondio.
+   */
+  const columnasOcultas = useMemo(() => {
+    let ocultas = 0
+    for (const bloque of horario?.bloques ?? []) {
+      for (const columna of bloque.columnas) {
+        if (columna.citas === 0) ocultas += 1
+      }
+    }
+    return ocultas
   }, [horario])
+
+  /**
+   * Cuantas citas hay hoy en las columnas QUE SE VEN.
+   *
+   * Ya no se dice "64 de 546 cupos ocupados". Ese 546 salia de partir la
+   * jornada entre la duracion de la consulta, y era un numero inventado: cada
+   * doctor lleva su propio ritmo y su propia cantidad de pacientes, eso lo
+   * decide la agenda del hospital. Lo que se puede afirmar es cuantas citas
+   * hay, y es lo que se muestra.
+   */
+  const totalCitas = useMemo(
+    () => bloquesVisibles.reduce((total, b) => total + b.columnas.reduce((s, c) => s + c.citas, 0), 0),
+    [bloquesVisibles],
+  )
 
   const abrirNueva = useCallback((profesionalId: string, profesionalNombre: string, hora: string) => {
     setCelda({ profesionalId, profesionalNombre, hora })
@@ -369,9 +432,13 @@ export default function AgendaCitasClient() {
     const libres: string[] = []
     for (const bloque of horarioDestino.bloques) {
       if (!bloque.columnas.some((c) => c.profesionalId === destinoProfesional)) continue
-      for (const hora of bloque.horas) {
-        const ocupante = bloque.citas[`${destinoProfesional}|${hora}`]
-        if (!ocupante || ocupante.id === aReprogramar?.id) libres.push(hora)
+      for (const fila of bloque.filas) {
+        // Solo franjas de la configuracion: mover a alguien a las 7:09 porque
+        // otro doctor tiene una cita a esa hora lo rechaza el servidor.
+        if (!fila.agendable) continue
+        const ocupantes = bloque.citas[`${destinoProfesional}|${fila.hora}`] ?? []
+        const libre = ocupantes.every((c) => c.id === aReprogramar?.id)
+        if (libre) libres.push(fila.hora)
       }
     }
     return libres
@@ -421,18 +488,46 @@ export default function AgendaCitasClient() {
               <CalendarBlank size={17} weight="bold" />
               Hoy
             </Button>
+
+            {/*
+              La agenda del dia no se teclea: la trae el reporte del hospital.
+              El boton vive junto al selector de fecha porque es lo primero que
+              se hace al abrir, antes de mirar la parrilla.
+            */}
+            <CargarReporteCitas alTerminar={() => cargar(fecha)} />
           </div>
 
           {horario ? (
             <div className="flex flex-wrap items-center gap-4 text-sm">
               <span className="font-bold text-slate-600">
-                <strong className="text-lg font-black text-brand-900">{resumen.agendadas}</strong> de{' '}
-                {resumen.cupos} cupos ocupados
+                <strong className="text-lg font-black text-brand-900">{totalCitas}</strong> cita(s)
+                agendadas
               </span>
               <span className="text-slate-400">·</span>
               <span className="font-semibold text-slate-500">
-                Consultas de {horario.duracionCitaMinutos} minutos
+                Franjas para agendar a mano: cada {horario.duracionCitaMinutos} minutos
               </span>
+
+              {/*
+                Los doctores sin agenda hoy estan escondidos, pero se dice
+                cuantos son y se pueden traer: esconderlos en silencio haria
+                que quien busca a uno concreto creyera que no esta registrado
+                y lo diera de alta otra vez, duplicando el catalogo.
+              */}
+              {columnasOcultas > 0 ? (
+                <>
+                  <span className="text-slate-400">·</span>
+                  <button
+                    type="button"
+                    onClick={() => setVerSinCitas((antes) => !antes)}
+                    className="font-bold text-brand-700 underline decoration-brand-300 underline-offset-4 transition-colors hover:text-brand-900"
+                  >
+                    {verSinCitas
+                      ? `Ocultar las ${columnasOcultas} columna(s) sin citas`
+                      : `${columnasOcultas} columna(s) sin citas de hoy, ocultas · Mostrar`}
+                  </button>
+                </>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -524,6 +619,7 @@ export default function AgendaCitasClient() {
               key={bloque.jornada}
               bloque={bloque}
               filtrando={filtrando}
+              ocultandoSinCitas={!verSinCitas && columnasOcultas > 0}
               soloLectura={esPasado}
               onLibre={abrirNueva}
               onOcupada={setDetalle}
@@ -817,12 +913,15 @@ export default function AgendaCitasClient() {
 const Parrilla = memo(function Parrilla({
   bloque,
   filtrando,
+  ocultandoSinCitas,
   soloLectura,
   onLibre,
   onOcupada,
 }: {
   bloque: BloqueHorario
   filtrando: boolean
+  /** Se estan escondiendo los doctores que no tienen citas en esta jornada. */
+  ocultandoSinCitas: boolean
   /** Dia ya pasado: se consulta, no se agenda. */
   soloLectura: boolean
   onLibre: (profesionalId: string, profesionalNombre: string, hora: string) => void
@@ -836,13 +935,9 @@ const Parrilla = memo(function Parrilla({
     return (nombre: string) => COLORES_SERVICIO[servicios.indexOf(nombre) % COLORES_SERVICIO.length]
   }, [bloque.columnas])
 
-  // Las citas se cuentan SOLO de las columnas visibles, igual que los cupos.
-  // Antes `agendadas` salia de todas las citas del bloque y `cupos` solo de las
-  // columnas filtradas, asi que al filtrar por servicio el encabezado mostraba
-  // cosas como "30/12".
-  const visibles = new Set(bloque.columnas.map((c) => c.profesionalId))
-  const agendadas = Object.values(bloque.citas).filter((c) => visibles.has(c.profesionalId)).length
-  const cupos = bloque.columnas.reduce((suma, c) => suma + c.cupos, 0)
+  // Se cuentan SOLO las columnas visibles: si no, al filtrar por servicio el
+  // encabezado mostraba cosas como "30 citas" sobre una parrilla con tres.
+  const agendadas = bloque.columnas.reduce((suma, c) => suma + c.citas, 0)
 
   return (
     <Card padded={false}>
@@ -864,28 +959,32 @@ const Parrilla = memo(function Parrilla({
           </div>
         </div>
         <span className="shrink-0 text-sm font-black text-slate-500">
-          {agendadas}/{cupos}
+          {agendadas} cita(s)
         </span>
       </CardHeader>
 
       <CardContent padded={false}>
-        {bloque.columnas.length === 0 || bloque.horas.length === 0 ? (
+        {bloque.columnas.length === 0 || bloque.filas.length === 0 ? (
           <div className="p-5">
             <EmptyState
               icon={CalendarPlus}
               title={
-                bloque.horas.length === 0
+                bloque.filas.length === 0
                   ? 'Jornada sin franjas'
                   : filtrando
                     ? 'Ningun doctor coincide'
-                    : 'Sin doctores en esta jornada'
+                    : ocultandoSinCitas
+                      ? 'Nadie tiene citas en esta jornada'
+                      : 'Sin doctores en esta jornada'
               }
               description={
-                bloque.horas.length === 0
+                bloque.filas.length === 0
                   ? 'Las horas configuradas para esta jornada no dejan espacio para ninguna consulta. Revisalas en Pantalla y audio.'
                   : filtrando
                     ? 'En esta jornada no hay doctores que coincidan con lo que buscas. Prueba con otro nombre o quita el filtro.'
-                    : 'Ningun doctor activo atiende en esta jornada. Asignale la jornada a un doctor en Profesionales.'
+                    : ocultandoSinCitas
+                      ? 'Ningun doctor tiene pacientes agendados en esta jornada, asi que la parrilla esta vacia. Para agendar el primero, muestra arriba los doctores sin citas.'
+                      : 'Ningun doctor activo atiende en esta jornada. Asignale la jornada a un doctor en Profesionales.'
               }
             />
           </div>
@@ -919,47 +1018,63 @@ const Parrilla = memo(function Parrilla({
                         </span>
                       ) : null}
                       <span className="mt-1 block truncate text-xs font-semibold text-white/75">
-                        {columna.servicioNombre} · {columna.ocupados}/{columna.cupos} cupos
+                        {columna.servicioNombre} · {columna.citas} cita(s)
                       </span>
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {bloque.horas.map((hora) => (
-                  <tr key={hora}>
+                {bloque.filas.map((fila) => (
+                  <tr key={fila.hora}>
                     <th
                       scope="row"
-                      className="sticky left-0 z-10 border-b border-slate-100 bg-slate-50 px-3 py-1.5 text-left text-sm font-black tabular-nums text-slate-600"
+                      className={`sticky left-0 z-10 border-b border-slate-100 px-3 py-1.5 text-left text-sm font-black tabular-nums ${
+                        // La hora que no es franja de la configuracion se marca
+                        // mas suave: esta ahi porque alguien tiene cita a esa
+                        // hora, no porque se pueda agendar en ella.
+                        fila.agendable ? 'bg-slate-50 text-slate-600' : 'bg-white text-slate-400'
+                      }`}
                     >
-                      {hora}
+                      {fila.hora}
                     </th>
                     {bloque.columnas.map((columna) => {
-                      const cita = bloque.citas[`${columna.profesionalId}|${hora}`]
+                      const citas = bloque.citas[`${columna.profesionalId}|${fila.hora}`]
 
                       return (
                         <td
                           key={columna.profesionalId}
                           className="border-b border-l border-slate-100 p-1 align-top"
                         >
-                          {cita ? (
-                            <button
-                              type="button"
-                              onClick={() => onOcupada(cita)}
-                              className={`w-full rounded-lg border px-2 py-1.5 text-left transition-colors ${
-                                estilosEstado[cita.estado].celda
-                              }`}
-                              title={`${cita.nombrePaciente} · ${estilosEstado[cita.estado].etiqueta}`}
-                            >
-                              <span className="line-clamp-2 block whitespace-normal text-sm font-black leading-snug">
-                                {cita.nombrePaciente}
-                              </span>
-                              <span className="mt-0.5 block truncate text-xs font-semibold opacity-70">
-                                {estilosEstado[cita.estado].etiqueta}
-                              </span>
-                            </button>
-                          ) : soloLectura ? (
-                            // Dia pasado: la franja se ve, pero no se agenda.
+                          {citas?.length ? (
+                            // Puede haber mas de una: el hospital a veces cita a
+                            // dos pacientes con el mismo doctor a la misma hora.
+                            // Se ven las dos; esconder una seria perder a alguien
+                            // que igual se presenta.
+                            <div className="space-y-1">
+                              {citas.map((cita) => (
+                                <button
+                                  key={cita.id}
+                                  type="button"
+                                  onClick={() => onOcupada(cita)}
+                                  className={`w-full rounded-lg border px-2 py-1.5 text-left transition-colors ${
+                                    estilosEstado[cita.estado].celda
+                                  }`}
+                                  title={`${cita.nombrePaciente} · ${estilosEstado[cita.estado].etiqueta}`}
+                                >
+                                  <span className="line-clamp-2 block whitespace-normal text-sm font-black leading-snug">
+                                    {cita.nombrePaciente}
+                                  </span>
+                                  <span className="mt-0.5 block truncate text-xs font-semibold opacity-70">
+                                    {estilosEstado[cita.estado].etiqueta}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          ) : soloLectura || !fila.agendable ? (
+                            // Dia pasado, u hora que no es franja de consulta: la
+                            // celda se ve para no descuadrar la fila, pero no se
+                            // ofrece agendar ahi porque el servidor lo rechaza.
                             <div
                               className="flex w-full items-center justify-center rounded-lg border border-dashed border-slate-100 px-2 py-2.5 text-slate-200"
                               aria-hidden="true"
@@ -969,10 +1084,12 @@ const Parrilla = memo(function Parrilla({
                           ) : (
                             <button
                               type="button"
-                              onClick={() => onLibre(columna.profesionalId, columna.profesionalNombre, hora)}
+                              onClick={() =>
+                                onLibre(columna.profesionalId, columna.profesionalNombre, fila.hora)
+                              }
                               className="flex w-full items-center justify-center rounded-lg border border-dashed border-slate-200 px-2 py-2.5 text-slate-300 transition-colors hover:border-brand-400 hover:bg-brand-50 hover:text-brand-600"
-                              title={`Agendar a las ${hora} con ${columna.profesionalNombre}`}
-                              aria-label={`Agendar a las ${hora} con ${columna.profesionalNombre}`}
+                              title={`Agendar a las ${fila.hora} con ${columna.profesionalNombre}`}
+                              aria-label={`Agendar a las ${fila.hora} con ${columna.profesionalNombre}`}
                             >
                               <Plus size={14} weight="bold" />
                             </button>
@@ -992,11 +1109,13 @@ const Parrilla = memo(function Parrilla({
 })
 
 /**
- * Citas del dia que no caen en ninguna franja de la parrilla.
+ * Citas del dia que no tienen columna donde caer.
  *
- * No se esconden: un paciente que desaparece de la agenda igual se presenta en
- * el hospital. Pasa al cambiar la duracion de la consulta, el horario de una
- * jornada o la jornada de un doctor que ya tenia pacientes citados.
+ * Ya no son las que "no encajan en la rejilla" —eso lo arreglo que las filas
+ * salgan de las propias citas—, sino las del doctor que no esta en la parrilla:
+ * se le dio de baja, o se le paso a un servicio de ventanilla, despues de
+ * haberle agendado. No se esconden: un paciente que desaparece de la agenda
+ * igual se presenta en el hospital.
  */
 function FueraDeHorario({
   citas,
@@ -1015,9 +1134,10 @@ function FueraDeHorario({
             <Warning size={20} weight="fill" />
           </span>
           <div className="min-w-0">
-            <CardTitle>Citas fuera del horario ({citas.length})</CardTitle>
+            <CardTitle>Citas sin doctor en la parrilla ({citas.length})</CardTitle>
             <p className="text-xs font-bold text-slate-500">
-              Quedaron en horas que ya no existen en la parrilla. Cancelalas y vuelve a agendarlas.
+              Su doctor ya no aparece en la agenda del dia: esta inactivo o cambio a un servicio que
+              atiende por orden de llegada. Reasignalas a otro doctor.
             </p>
           </div>
         </div>
@@ -1048,7 +1168,7 @@ function Leyenda() {
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-1 text-xs font-bold text-slate-500">
       <span className="flex items-center gap-2">
         <span className="h-3 w-3 rounded border border-dashed border-slate-300" />
-        Cupo libre
+        Hora libre para agendar
       </span>
       {(['PROGRAMADA', 'PRESENTADO', 'ATENDIDA'] as const).map((estado) => (
         <span key={estado} className="flex items-center gap-2">

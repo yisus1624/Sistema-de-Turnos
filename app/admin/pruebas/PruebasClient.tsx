@@ -66,7 +66,11 @@ async function franjasLibresPorDoctor(fecha: string): Promise<Map<string, string
 
   for (const bloque of horario.bloques) {
     for (const columna of bloque.columnas) {
-      const horas = bloque.horas.filter((hora) => !bloque.citas[`${columna.profesionalId}|${hora}`])
+      // Solo franjas de la configuracion: en las horas sueltas que trae la
+      // agenda del hospital (7:09) el servidor no deja agendar.
+      const horas = bloque.filas
+        .filter((fila) => fila.agendable && !bloque.citas[`${columna.profesionalId}|${fila.hora}`])
+        .map((fila) => fila.hora)
       libres.set(columna.profesionalId, [...(libres.get(columna.profesionalId) ?? []), ...horas])
     }
   }

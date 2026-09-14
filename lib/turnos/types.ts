@@ -210,9 +210,40 @@ export interface ColumnaHorario {
   profesionalNombre: string
   servicioNombre: string
   moduloNombre: string | null
-  /** Cupos ocupados y cupos totales de ese doctor en la jornada. */
-  ocupados: number
-  cupos: number
+  /**
+   * Citas que tiene ese doctor en esa jornada.
+   *
+   * NO HAY "CUPOS TOTALES", y no es un olvido. Cada doctor lleva su propio
+   * ritmo —uno cita cada diez minutos, otro cada trece, otro mete treinta
+   * pacientes donde el de al lado mete veintisiete— y eso lo decide la agenda
+   * del hospital, no este sistema. Dividir la jornada entre la duracion de la
+   * consulta daba un "27/30" inventado: ni los 30 existian ni sobraban 3.
+   */
+  citas: number
+}
+
+/**
+ * Una fila de la parrilla: una hora.
+ *
+ * LAS FILAS SALEN DE LAS CITAS DEL DIA, no solo de la configuracion. Antes la
+ * parrilla era una rejilla fija (7:00, 7:10, 7:20...) y todo lo que no caia
+ * justo ahi se iba a "fuera de horario": con la agenda real del hospital, que
+ * trae citas a las 7:09 y a las 7:13, eso dejaba columnas enteras en blanco con
+ * sus pacientes amontonados en una lista al pie. El doctor con mas trabajo del
+ * dia se veia igual que uno que no vino.
+ */
+export interface FilaHorario {
+  /** "HH:MM" en hora de Colombia. */
+  hora: string
+  /**
+   * Si a esta hora se puede agendar a mano.
+   *
+   * Lo son las franjas de la configuracion. Las horas que entraron porque
+   * alguien tiene una cita ahi (las 7:09) se ven, pero no se ofrecen: agendar
+   * en ellas lo rechaza el servidor, y ofrecer un boton que siempre falla es
+   * peor que no ofrecerlo.
+   */
+  agendable: boolean
 }
 
 /** La parrilla de una jornada (la de la mañana o la de la tarde). */
@@ -222,12 +253,19 @@ export interface BloqueHorario {
   /** Rango de la jornada, "HH:MM", para mostrarlo en el encabezado. */
   desde: string
   hasta: string
-  /** Franjas de la jornada, "HH:MM", cada `duracionCitaMinutos`. */
-  horas: string[]
+  /** Filas de la jornada: las franjas configuradas mas las horas con cita. */
+  filas: FilaHorario[]
   /** Doctores que atienden en esta jornada, en el orden del catalogo. */
   columnas: ColumnaHorario[]
-  /** Citas del bloque, indexadas por `${profesionalId}|${hora}`. */
-  citas: Record<string, CitaEnHorario>
+  /**
+   * Citas del bloque, indexadas por `${profesionalId}|${hora}`.
+   *
+   * Es una LISTA y no una cita suelta porque el hospital puede citar a dos
+   * pacientes con el mismo doctor a la misma hora. Pasa, y guardando una sola
+   * el otro paciente desapareceria de la agenda sin que nadie se entere, hasta
+   * que se presenta en la ventanilla.
+   */
+  citas: Record<string, CitaEnHorario[]>
 }
 
 /** El horario completo de un dia. */
@@ -237,13 +275,13 @@ export interface HorarioDia {
   duracionCitaMinutos: number
   bloques: BloqueHorario[]
   /**
-   * Citas del dia que no caen en ninguna franja de la parrilla.
+   * Citas del dia que no tienen columna donde caer.
    *
-   * Pasa cuando se cambia la duracion de la consulta o el horario de las
-   * jornadas y quedan citas viejas descuadradas, o cuando a un doctor se le
-   * cambia la jornada despues de agendarle. NO se descartan en silencio: se
-   * devuelven aparte para que el operador las vea y las reubique, porque un
-   * paciente que desaparece de la agenda igual se presenta en el hospital.
+   * Ya no son las que "no encajan en la rejilla" —eso lo resolvio que las filas
+   * salgan de las propias citas—, sino las del doctor que no esta en la
+   * parrilla: se le dio de baja, o se le paso a un servicio que atiende por
+   * orden de llegada, despues de haberle agendado. NO se descartan en silencio:
+   * un paciente que desaparece de la agenda igual se presenta en el hospital.
    */
   fueraDeHorario: CitaEnHorario[]
 }

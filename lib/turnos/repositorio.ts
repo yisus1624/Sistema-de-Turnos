@@ -25,9 +25,18 @@
  * el adaptador que implementa `TurnoRepository` contra ella y se cambia la
  * asignacion de abajo. Nada mas del sistema se toca.
  */
-import { turnoRepository as enMemoria } from './in-memory-repository'
+import { turnoRepository as enPostgres } from './prisma-repository'
 import type { TurnoRepository } from './repository'
 
-export const turnoRepository: TurnoRepository = enMemoria
+/**
+ * FUENTE ACTUAL: PostgreSQL (Supabase), via `prisma-repository`.
+ *
+ * Hasta aqui los datos vivian en la memoria del proceso y se perdian en cada
+ * reinicio: servia para el demo, pero un hospital no puede perder la agenda del
+ * dia porque se reinicio el servidor. La implementacion en memoria SIGUE en el
+ * repositorio (`in-memory-repository.ts`) y cumple el mismo contrato, asi que
+ * cambiar esta linea la devuelve entera para desarrollar sin base de datos.
+ */
+export const turnoRepository: TurnoRepository = enPostgres
 
 export type { TurnoRepository }

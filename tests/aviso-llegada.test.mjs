@@ -32,6 +32,9 @@ mock.module(comoUrl('node_modules/next/headers.js'), {
   },
 })
 
+// Las pruebas nunca tocan la base de datos real. Ver el modulo.
+await import('./repositorios-en-memoria.mjs')
+
 const { InMemoryTurnoRepository } = await import('@/lib/turnos/in-memory-repository')
 const { realtimeHub } = await import('@/lib/realtime/hub')
 const { avisarFilaCambiada } = await import('@/lib/realtime/avisos')

@@ -50,6 +50,9 @@ mock.module(comoUrl('node_modules/next/headers.js'), {
   },
 })
 
+// Las pruebas nunca tocan la base de datos real. Ver el modulo.
+await import('./repositorios-en-memoria.mjs')
+
 const { turnoRepository } = await import('@/lib/turnos/repositorio')
 
 const METODOS_HTTP = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -242,4 +245,32 @@ test('las dos rutas publicas siguen abiertas y sin un solo dato del paciente', a
   assert.match(eventos.headers.get('content-type'), /text\/event-stream/)
   // Se cierra: el servidor tiene que soltar la suscripcion y el latido.
   await eventos.body.cancel()
+})
+
+test('la carga de la agenda la puede hacer el operador, no solo el administrador', async () => {
+  // Es lo primero que se hace al abrir el hospital. Si solo la pudiera hacer el
+  // administrador, el dia que no llegue temprano no habria agenda y nadie
+  // podria registrar una llegada. La prueba de barrido de arriba ya comprueba
+  // lo contrario (que un operador SIN secciones queda fuera); esta fija que el
+  // operador normal SI entra.
+  const { POST } = await import('@/app/api/turnos/citas/importar/route')
+
+  const pedir = () =>
+    POST(
+      new Request('http://localhost/api/turnos/citas/importar', {
+        method: 'POST',
+        body: new FormData(),
+      }),
+    )
+
+  for (const rol of ['ADMINISTRADOR', 'OPERADOR']) {
+    sesion = { user: { id: `usr-${rol}`, rol, secciones: null, nombre: rol } }
+    const respuesta = await pedir()
+
+    // 400 por venir sin archivo, NO 403: el permiso paso y lo que falta es el
+    // adjunto. Un 403 aqui significaria que la pantalla muestra el boton y la
+    // carga le falla.
+    assert.equal(respuesta.status, 400, `${rol} deberia poder cargar la agenda`)
+    assert.match((await respuesta.json()).error, /archivo/i)
+  }
 })

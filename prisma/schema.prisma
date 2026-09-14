@@ -1,0 +1,376 @@
+// Esquema de datos del Sistema de Gestion y Llamado de Turnos.
+// ESE Hospital San Rafael de Chinu.
+//
+// Este archivo es la version persistente del modelo que hasta ahora vivia solo
+// en `lib/turnos/in-memory-repository.ts`. Los nombres son los mismos que los
+// del dominio (`lib/turnos/types.ts`) a proposito: la implementacion del
+// repositorio contra Prisma tiene que leerse como una traduccion directa, no
+// como un modelo paralelo que haya que reinterpretar.
+//
+// Convencion, igual que en el resto del sistema: nada de datos clinicos ni de
+// datos del paciente que no hagan falta para operar el turno (requerimiento
+// seccion 17). Del reporte de citas del hospital solo se guarda con que
+// documento se busca al paciente, como se llama, a que hora, con que
+// profesional y en que servicio.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enumeraciones (espejo de lib/turnos/types.ts y lib/usuarios/types.ts)
+// ---------------------------------------------------------------------------
+
+enum RolUsuario {
+  ADMINISTRADOR
+  OPERADOR
+}
+
+enum ModoFila {
+  COMPARTIDA
+  POR_PROFESIONAL
+}
+
+enum Jornada {
+  MANANA
+  TARDE
+  COMPLETA
+}
+
+enum EstadoCita {
+  PROGRAMADA
+  PRESENTADO
+  ATENDIDA
+  CANCELADA
+}
+
+enum EstadoTurno {
+  EN_ESPERA
+  LLAMADO
+  EN_ATENCION
+  ATENDIDO
+  AUSENTE
+  CANCELADO
+}
+
+enum PrioridadTurno {
+  NORMAL
+  PRIORITARIO
+}
+
+/// De donde salio la cita. Importa para revisar la carga diaria: una cita
+/// creada a mano por el operador y una importada del reporte del hospital no
+/// se corrigen igual.
+enum OrigenCita {
+  MANUAL
+  IMPORTACION
+}
+
+// ---------------------------------------------------------------------------
+// Funcionarios
+// ---------------------------------------------------------------------------
+
+model Usuario {
+  id            String     @id @default(cuid())
+  nombre        String
+  /// Nombre de entrada, guardado en minusculas: el mostrador escribe el mismo
+  /// usuario de varias maneras y todas tienen que entrar.
+  usuario       String     @unique
+  passwordHash  String
+  rol           RolUsuario
+  area          String?
+  activo        Boolean    @default(true)
+  /// Secciones (hrefs) permitidas a un OPERADOR. Vacio = las de su rol.
+  /// Se ignora para ADMINISTRADOR, que siempre ve todo.
+  secciones     String[]   @default([])
+  fechaCreacion DateTime   @default(now())
+  actualizadoEn DateTime   @updatedAt
+
+  profesional Profesional?
+  cargas      CargaCitas[]
+
+  @@map("usuarios")
+}
+
+// ---------------------------------------------------------------------------
+// Catalogos
+// ---------------------------------------------------------------------------
+
+model Servicio {
+  id       String   @id @default(cuid())
+  nombre   String   @unique
+  /// Prefijo del codigo de turno, ej: "O" para Odontologia (RF-002).
+  prefijo  String
+  modoFila ModoFila @default(POR_PROFESIONAL)
+  activo   Boolean  @default(true)
+
+  modulos       Modulo[]
+  profesionales Profesional[]
+  citas         Cita[]
+  turnos        Turno[]
+
+  @@map("servicios")
+}
+
+model Modulo {
+  id         String  @id @default(cuid())
+  nombre     String  @unique
+  servicioId String?
+  activo     Boolean @default(true)
+
+  /// Como llama el hospital a este consultorio en su reporte de citas
+  /// ("CONS 01- CONSULTA EXTERNA"). Es la clave con la que la carga diaria
+  /// reconoce el consultorio, y existe para que el administrador pueda
+  /// renombrarlo aqui a algo que el paciente entienda ("Consultorio 1") sin
+  /// que la siguiente carga cree un consultorio nuevo por no reconocer el
+  /// nombre. Null en los que se crean a mano.
+  claveExterna String? @unique
+
+  servicio      Servicio?     @relation(fields: [servicioId], references: [id], onDelete: SetNull)
+  profesionales Profesional[]
+  turnos        Turno[]
+
+  @@index([servicioId])
+  @@map("modulos")
+}
+
+model Profesional {
+  id         String  @id @default(cuid())
+  nombre     String  @unique
+  servicioId String
+  jornada    Jornada @default(COMPLETA)
+  moduloId   String?
+  /// Cuenta del sistema asociada, si el doctor ya tiene una.
+  usuarioId  String? @unique
+  activo     Boolean @default(true)
+
+  /// Como viene el nombre del doctor en el reporte del hospital, normalizado.
+  /// Mismo motivo que en `Modulo.claveExterna`: permite corregir el nombre que
+  /// se muestra sin que la carga siguiente duplique al doctor.
+  claveExterna String? @unique
+
+  servicio Servicio            @relation(fields: [servicioId], references: [id], onDelete: Restrict)
+  modulo   Modulo?             @relation(fields: [moduloId], references: [id], onDelete: SetNull)
+  usuario  Usuario?            @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+  citas    Cita[]
+  turnos   Turno[]
+  accesos  AccesoProfesional[]
+
+  @@index([servicioId])
+  @@index([moduloId])
+  @@map("profesionales")
+}
+
+/// Enlace temporal con el que un doctor entra a su consultorio sin usuario ni
+/// contrasena. EL TOKEN EN CLARO NO SE GUARDA: solo su hash, igual que en la
+/// implementacion en memoria.
+model AccesoProfesional {
+  id            String    @id @default(cuid())
+  profesionalId String
+  tokenHash     String    @unique
+  creadoEn      DateTime  @default(now())
+  expiraEn      DateTime
+  revocadoEn    DateTime?
+  ultimoUsoEn   DateTime?
+
+  profesional Profesional @relation(fields: [profesionalId], references: [id], onDelete: Cascade)
+
+  @@index([profesionalId])
+  @@map("accesos_profesional")
+}
+
+// ---------------------------------------------------------------------------
+// Agenda
+// ---------------------------------------------------------------------------
+
+model Cita {
+  id                String     @id @default(cuid())
+  documentoPaciente String
+  /// Tipo de documento tal como lo trae el reporte del hospital (CC, TI, RC).
+  /// Solo se muestra junto al numero; no se busca por el.
+  tipoDocumento     String?
+  nombrePaciente    String
+  profesionalId     String
+  servicioId        String
+  horaCita          DateTime
+  /// Dia AAAA-MM-DD en hora de Colombia, calculado al guardar. Existe porque
+  /// toda consulta de este sistema es "las citas de un dia", y filtrar por
+  /// rango de DateTime obliga a rehacer la conversion de zona horaria en cada
+  /// consulta; con la columna el indice trabaja, y el dia no depende de la
+  /// zona horaria en que este el servidor de base de datos.
+  fecha             String
+  estado            EstadoCita @default(PROGRAMADA)
+  origen            OrigenCita @default(MANUAL)
+
+  /// Procedimiento del reporte del hospital (descripcion y codigo CUPS). Se
+  /// guardan porque son lo que distingue dos citas del mismo paciente el mismo
+  /// dia, y porque es lo que el paciente pregunta en admisiones.
+  procedimiento String?
+  cups          String?
+
+  creadaEn  DateTime @default(now())
+  creadaPor String?
+
+  horaCitaOriginal     DateTime?
+  vecesReprogramada    Int       @default(0)
+  reprogramadaEn       DateTime?
+  reprogramadaPor      String?
+  motivoReprogramacion String?
+
+  canceladaEn       DateTime?
+  canceladaPor      String?
+  motivoCancelacion String?
+
+  /// Carga de la que entro, si vino del reporte diario.
+  cargaId String?
+
+  profesional Profesional @relation(fields: [profesionalId], references: [id], onDelete: Restrict)
+  servicio    Servicio    @relation(fields: [servicioId], references: [id], onDelete: Restrict)
+  carga       CargaCitas? @relation(fields: [cargaId], references: [id], onDelete: SetNull)
+  turnos      Turno[]
+
+  /// Identidad de una cita dentro de la agenda del hospital. Es lo que
+  /// convierte volver a subir el mismo archivo en una operacion inocua: la
+  /// fila que ya existe se actualiza en vez de duplicar al paciente.
+  @@unique([fecha, documentoPaciente, profesionalId, horaCita], name: "citaDelDia")
+  @@index([fecha])
+  @@index([fecha, profesionalId])
+  @@index([documentoPaciente])
+  @@index([cargaId])
+  @@map("citas")
+}
+
+// ---------------------------------------------------------------------------
+// Turnos
+// ---------------------------------------------------------------------------
+
+model Turno {
+  id         String         @id @default(cuid())
+  /// Codigo visible, ej: "O-025".
+  codigo     String
+  servicioId String
+  estado     EstadoTurno    @default(EN_ESPERA)
+  prioridad  PrioridadTurno @default(NORMAL)
+
+  fechaGeneracion DateTime @default(now())
+  /// Dia AAAA-MM-DD en hora de Colombia. Mismo motivo que en `Cita.fecha`.
+  fecha           String
+
+  /// Hora del ULTIMO llamado: ordena la pantalla y se pisa al repetir.
+  horaLlamado       DateTime?
+  /// Hora del PRIMER llamado, que ya no se toca nunca mas. La espera del
+  /// paciente se mide SIEMPRE contra esta.
+  horaPrimerLlamado DateTime?
+  horaAtencion      DateTime?
+
+  moduloId      String?
+  funcionarioId String?
+  vecesLlamado  Int     @default(0)
+
+  cerradoPor       String?
+  cerradoEn        DateTime?
+  /// El turno no lo cerro nadie: se cerro solo al pulsar el doctor "siguiente".
+  cierreAutomatico Boolean   @default(false)
+
+  citaId         String?
+  profesionalId  String?
+  horaCita       DateTime?
+  /// Solo para las pantallas CON sesion. A la pantalla publica no viaja.
+  nombrePaciente String?
+
+  servicio    Servicio     @relation(fields: [servicioId], references: [id], onDelete: Restrict)
+  modulo      Modulo?      @relation(fields: [moduloId], references: [id], onDelete: SetNull)
+  cita        Cita?        @relation(fields: [citaId], references: [id], onDelete: SetNull)
+  profesional Profesional? @relation(fields: [profesionalId], references: [id], onDelete: SetNull)
+
+  @@unique([fecha, codigo])
+  @@index([fecha, estado])
+  @@index([fecha, profesionalId, estado])
+  @@index([fecha, servicioId, estado])
+  @@index([citaId])
+  @@map("turnos")
+}
+
+// ---------------------------------------------------------------------------
+// Parametros generales (requerimiento secciones 6.1 y 11)
+// ---------------------------------------------------------------------------
+
+/// Fila unica. `id` es siempre "unica": es una tabla de parametros, no una
+/// coleccion, y dejarlo abierto permitiria dos configuraciones conviviendo sin
+/// que nada avise.
+model Configuracion {
+  id String @id @default("unica")
+
+  audioActivo     Boolean @default(true)
+  volumen         Float   @default(0.8)
+  ultimosVisibles Int     @default(5)
+  mensajePie      String  @default("")
+
+  duracionCitaMinutos Int    @default(15)
+  jornadaMananaInicio String @default("07:00")
+  jornadaMananaFin    String @default("12:00")
+  jornadaTardeInicio  String @default("13:00")
+  jornadaTardeFin     String @default("17:00")
+
+  actualizadoEn DateTime @updatedAt
+
+  @@map("configuracion")
+}
+
+// ---------------------------------------------------------------------------
+// Seguridad (requerimiento seccion 17)
+// ---------------------------------------------------------------------------
+
+model EventoSeguridad {
+  id            String   @id @default(cuid())
+  fecha         DateTime @default(now())
+  tipo          String
+  exito         Boolean
+  usuarioId     String?
+  identificador String?
+  ip            String?
+  detalle       Json?
+
+  @@index([fecha])
+  @@index([tipo, fecha])
+  @@map("eventos_seguridad")
+}
+
+// ---------------------------------------------------------------------------
+// Carga diaria de citas (reporte de citas asignadas del hospital)
+// ---------------------------------------------------------------------------
+
+/// Una subida del reporte de citas. Se guarda aunque la carga salga bien: al
+/// dia siguiente, cuando un paciente reclame que no aparece, lo primero que
+/// hay que poder mirar es que archivo se subio, quien lo subio, y que filas
+/// rechazo el sistema y por que.
+model CargaCitas {
+  id        String   @id @default(cuid())
+  archivo   String
+  subidaEn  DateTime @default(now())
+  subidaPor String?
+
+  /// Dia al que corresponden las citas del archivo (AAAA-MM-DD). Null si el
+  /// archivo traia varios dias.
+  fecha String?
+
+  filasLeidas  Int @default(0)
+  creadas      Int @default(0)
+  actualizadas Int @default(0)
+  omitidas     Int @default(0)
+
+  /// Filas rechazadas: numero de fila del archivo y por que se rechazo.
+  errores Json?
+
+  usuario Usuario? @relation(fields: [subidaPor], references: [id], onDelete: SetNull)
+  citas   Cita[]
+
+  @@index([subidaEn])
+  @@map("cargas_citas")
+}

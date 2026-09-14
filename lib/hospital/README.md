@@ -10,6 +10,23 @@ El hospital aun **no ha compartido** la informacion de integracion. Hasta que la
 entregue, aqui **no** se implementa nada ni se inventan endpoints, rutas, campos
 ni datos de ejemplo.
 
+## Mientras tanto: la agenda entra por archivo, no por API
+
+Desde que el sistema tiene base de datos propia, la agenda del dia se carga
+**subiendo el reporte de citas asignadas** que el hospital ya exporta hoy desde
+SaludPlus (XML o Excel). Lo hacen el administrador y el operador desde la
+pantalla de Citas; ver [`docs/carga-diaria-de-citas.md`](../../docs/carga-diaria-de-citas.md).
+
+Eso resuelve el dia a dia sin esperar a nadie, pero **no sustituye la
+integracion**: el archivo es una foto del momento en que se exporto, asi que una
+cita cancelada o movida despues no se entera hasta la siguiente carga. Las
+preguntas de mas abajo siguen abiertas, y la mas importante gana peso: *que pasa
+con las citas canceladas o reprogramadas durante el dia*.
+
+Cuando llegue la API, lo que se escribe aqui es el adaptador; la carga por
+archivo se puede quedar como camino de respaldo para el dia que la red del
+hospital falle.
+
 ## El flujo que hay que soportar
 
 Confirmado por el hospital (no esta en el documento de requerimientos v1.0):
