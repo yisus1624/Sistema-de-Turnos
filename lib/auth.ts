@@ -8,12 +8,26 @@
  * concreta, para poder cambiar a la fuente del hospital sin tocar este archivo
  * mas que en la linea de importacion.
  */
-import NextAuth from 'next-auth'
+import NextAuth, { CredentialsSignin } from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { usuarioRepository } from '@/lib/usuarios/repositorio'
 import type { RolUsuario } from '@/lib/usuarios/types'
 import { contextoPeticion, limitarIntentos, limpiarIntentos, registrarEvento } from '@/lib/seguridad/registro'
 import { useSecureAuthCookies } from './auth-cookies'
+
+/**
+ * La fuente de usuarios no respondio: base caida, red, o credenciales de
+ * conexion mal puestas en el despliegue.
+ *
+ * Existe como error APARTE del de credenciales invalidas a proposito. Mientras
+ * todo fallo se le mostraba al funcionario como "usuario o contrasena
+ * incorrectos", un corte de base se buscaba durante horas en las cuentas,
+ * porque la pantalla afirmaba con seguridad algo que no era cierto. `code`
+ * viaja hasta el cliente y es lo que el login usa para decir la verdad.
+ */
+class FuenteUsuariosNoDisponible extends CredentialsSignin {
+  code = 'fuente_no_disponible'
+}
 
 /** Jornada larga en ventanilla: la sesion dura un dia habil completo. */
 const duracionSesionSegundos = 12 * 60 * 60
@@ -24,6 +38,25 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   useSecureCookies: useSecureAuthCookies,
   session: { strategy: 'jwt', maxAge: duracionSesionSegundos },
   pages: { signIn: '/auth/login' },
+  logger: {
+    error(error) {
+      // `JWTSessionError` significa que la cookie de sesion del navegador ya no
+      // se puede descifrar: quedo de una sesion anterior a un cambio de
+      // NEXTAUTH_SECRET. No es un fallo del sistema y no rompe nada —la
+      // peticion sigue como "sin sesion" y al volver a entrar la cookie se
+      // reemplaza sola—, pero tal cual lo escribe Auth.js es un error rojo sin
+      // causa visible que aparece en cada carga de pagina.
+      if (error.name === 'JWTSessionError') {
+        console.warn(
+          '[auth] cookie de sesion antigua o ilegible: se ignora y se pide iniciar sesion de nuevo. ' +
+            'Se arregla sola al volver a entrar; para limpiarla antes, borra las cookies del sitio.',
+        )
+        return
+      }
+
+      console.error('[auth]', error)
+    },
+  },
   providers: [
     CredentialsProvider({
       name: 'credentials',
@@ -64,7 +97,26 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const porUsuario = limitarIntentos('login_usuario', usuario, 8, 15 * 60 * 1000)
         if (!porUsuario.permitido) return rechazar('demasiados_intentos_usuario')
 
-        const encontrado = await usuarioRepository.verificarCredenciales(usuario, password)
+        let encontrado
+        try {
+          encontrado = await usuarioRepository.verificarCredenciales(usuario, password)
+        } catch (error) {
+          // No se registra como credencial fallida: el funcionario no se
+          // equivoco en nada, fallo el sistema. Contarlo ademas dejaria la
+          // cuenta bloqueada por fuerza bruta despues de una caida de base.
+          registrarEvento({
+            tipo: 'INICIO_SESION',
+            exito: false,
+            identificador: usuario,
+            ip,
+            detalle: {
+              motivo: 'fuente_usuarios_no_disponible',
+              error: error instanceof Error ? error.message.split('\n')[0] : String(error),
+            },
+          })
+          throw new FuenteUsuariosNoDisponible()
+        }
+
         if (!encontrado) return rechazar('credenciales_invalidas')
 
         // Entro bien: se le borra la cuenta de intentos. El limite tiene que
@@ -98,7 +150,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (token.sub) {
         // Revalidar en cada peticion: si el administrador desactiva la cuenta,
         // la sesion abierta debe caer sin esperar a que expire el token.
-        const actual = await usuarioRepository.buscarPorId(token.sub)
+        //
+        // Si la consulta FALLA no se puede distinguir "cuenta desactivada" de
+        // "base no disponible", y son cosas opuestas. Lanzar aqui no era una
+        // opcion: Auth.js envuelve cualquier excepcion de este callback en un
+        // `JWTSessionError` opaco, que aparece en CADA pantalla que lea la
+        // sesion y no dice nada de la causa real. Y cerrar la sesion tampoco:
+        // un corte de segundos en la base echaria a la vez a todo el personal
+        // que esta atendiendo, en mitad de la jornada.
+        //
+        // Se conserva lo que el token ya traia. La sesion sigue viva como
+        // mucho hasta que expire, y la revalidacion vuelve sola en cuanto la
+        // base responda.
+        let actual
+        try {
+          actual = await usuarioRepository.buscarPorId(token.sub)
+        } catch (error) {
+          console.warn(
+            '[auth] no se pudo revalidar la sesion contra la fuente de usuarios; se mantiene la sesion actual.',
+            error instanceof Error ? error.message.split('\n')[0] : error,
+          )
+          return token
+        }
+
         if (!actual) return null
 
         token.name = actual.nombre

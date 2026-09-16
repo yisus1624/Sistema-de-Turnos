@@ -11,7 +11,8 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { ShieldCheck } from '@phosphor-icons/react/dist/ssr'
+import { Broom, ShieldCheck } from '@phosphor-icons/react/dist/ssr'
+import PurgaDatosModal from '@/components/seguridad/PurgaDatosModal'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -39,6 +40,12 @@ const ETIQUETAS: Record<string, string> = {
   TURNO_AUSENTE: 'Paciente dado por ausente',
   CONFIGURACION_ACTUALIZADA: 'Configuracion del sistema',
   SIMULACION_REINICIO_DEL_DIA: 'Reinicio del dia (simulacion)',
+  // Estos dos se guardan en minusculas porque nacieron despues. El nombre
+  // guardado no se toca —cambiarlo dejaria ilegibles los registros que ya
+  // estan— pero si su etiqueta, que es lo que se lee en la pantalla.
+  'citas.importadas': 'Agenda del hospital cargada',
+  'citas.datos.purgados': 'Datos de pacientes anonimizados',
+  'profesionales.jornadas.recalculadas': 'Jornadas de los doctores recalculadas',
 }
 
 function cuando(iso: string) {
@@ -60,11 +67,12 @@ function detalleCorto(detalle?: Record<string, unknown>) {
   return partes.length > 0 ? partes.join(' · ') : '—'
 }
 
-export default function RegistroActividadClient() {
+export default function RegistroActividadClient({ esAdministrador }: { esAdministrador: boolean }) {
   const [eventos, setEventos] = useState<EventoSeguridad[]>([])
   const [cargando, setCargando] = useState(true)
   const [tipo, setTipo] = useState('')
   const [soloFallidos, setSoloFallidos] = useState(false)
+  const [purgaAbierta, setPurgaAbierta] = useState(false)
 
   const cargar = useCallback(async () => {
     try {
@@ -91,6 +99,7 @@ export default function RegistroActividadClient() {
   })
 
   return (
+    <>
     <Card padded={false}>
       <CardHeader>
         <CardTitle>Actividad reciente ({visibles.length})</CardTitle>
@@ -115,6 +124,16 @@ export default function RegistroActividadClient() {
           <Button variant="secondary" size="sm" onClick={cargar}>
             Actualizar
           </Button>
+          {/*
+            Aqui y no junto a la carga de la agenda: es lo unico irreversible
+            del sistema y no puede ser un efecto secundario del trabajo diario.
+          */}
+          {esAdministrador ? (
+            <Button variant="secondary" size="sm" onClick={() => setPurgaAbierta(true)}>
+              <Broom size={16} weight="bold" />
+              Anonimizar datos viejos
+            </Button>
+          ) : null}
         </div>
       </CardHeader>
 
@@ -160,5 +179,14 @@ export default function RegistroActividadClient() {
         )}
       </CardContent>
     </Card>
+
+    <PurgaDatosModal
+      abierto={purgaAbierta}
+      onCerrar={() => {
+        setPurgaAbierta(false)
+        cargar()
+      }}
+    />
+    </>
   )
 }

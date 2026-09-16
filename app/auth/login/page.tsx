@@ -41,7 +41,15 @@ export default function LoginPage() {
     })
 
     if (resultado?.error) {
-      setError('Usuario o contrasena incorrectos.')
+      // `code` lo pone `lib/auth.ts` cuando lo que fallo NO fueron las
+      // credenciales sino la fuente de usuarios. Decir "contrasena incorrecta"
+      // ante una base caida manda al funcionario a probar contrasenas que ya
+      // eran correctas.
+      setError(
+        resultado.code === 'fuente_no_disponible'
+          ? 'No se pudo verificar tu acceso: el sistema no esta conectado a la base de datos. Avisa a soporte; no es tu contrasena.'
+          : 'Usuario o contrasena incorrectos.',
+      )
       setCargando(false)
       return
     }

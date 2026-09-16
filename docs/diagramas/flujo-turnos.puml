@@ -1,0 +1,65 @@
+@startuml FlujoTurnos
+
+title Diagrama de flujo del proceso\nSistema de Gestion y Llamado de Turnos — Integracion con Salud Plus
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Segoe UI
+skinparam defaultFontSize 13
+skinparam ArrowColor #4A5A55
+skinparam ArrowFontColor #4A5A55
+skinparam ArrowFontSize 11
+skinparam ActivityBorderColor #4A5A55
+skinparam ActivityBorderThickness 1
+skinparam ActivityDiamondBackgroundColor #FFF6DD
+skinparam ActivityDiamondBorderColor #B8860B
+skinparam ActivityDiamondFontSize 12
+skinparam ActivityStartColor #4A5A55
+skinparam ActivityEndColor #4A5A55
+
+start
+
+#D6E6F5:**1. Se agenda la cita**\nSalud Plus\ncita_id · medico_id · consultorio_id · fecha_hora_cita;
+-> llega el dia de la cita;
+
+#FBE3CE:**2. Admisiones busca al paciente**\npor paciente_numero_documento;
+#FBE3CE:**3. Admisiones registra la llegada**\nfecha_hora_llegada · estado_cita = PRESENTADO;
+-> lectura de la agenda del dia;
+
+#D9EFE2:**4. El sistema de turnos lee la cita**\nsolo lectura, no escribe en Salud Plus;
+
+if (la cita tiene fecha_hora_llegada?) then (si)
+  #D9EFE2:**5. Genera el turno**\ncodigo A-025 · estado_turno = EN_ESPERA;
+else (no)
+  #F7D9D5:**El paciente no ha llegado**\nno se genera turno; al cerrar el dia\ncuenta como INASISTENCIA;
+  stop
+endif
+
+-> entra en la fila de su medico;
+
+#E3DAF3:**6. El medico pulsa "Siguiente"**\nestado_turno = LLAMADO · consultorio_id;
+-> se actualiza la casilla;
+
+#DCE8EC:**7. La pantalla muestra el turno**\nturno + consultorio_nombre + medico_nombre\ny suena la campana;
+-> el paciente pasa al consultorio;
+
+if (el paciente se presenta?) then (si)
+  #E3DAF3:**8. El medico lo atiende y cierra**\nestado_turno = ATENDIDO;
+else (no responde)
+  #F7D9D5:**8. El medico lo marca AUSENTE**;
+endif
+
+#D9EFE2:**9. Queda en el historico**\nquien llamo · quien cerro · tiempos de espera y atencion;
+
+stop
+
+legend right
+  |<back:#D6E6F5>       </back>| Salud Plus |
+  |<back:#FBE3CE>       </back>| Admisiones |
+  |<back:#D9EFE2>       </back>| Sistema de turnos (solo lectura) |
+  |<back:#E3DAF3>       </back>| Consultorio (el medico) |
+  |<back:#DCE8EC>       </back>| Pantalla de la sala de espera |
+  |<back:#F7D9D5>       </back>| El paciente no se atiende |
+endlegend
+
+@enduml

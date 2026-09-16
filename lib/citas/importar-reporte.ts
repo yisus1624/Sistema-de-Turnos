@@ -35,7 +35,8 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { errorDeNegocio } from '@/lib/turnos/errores'
-import { recalcularJornadas, type AjusteDeJornada } from './jornadas'
+import { recalcularJornadas } from './jornadas'
+import type { AjusteDeJornada } from '@/lib/turnos/types'
 import { leerReporteDelHospital, type ErrorFila, type FilaReporte } from './reporte-hospital'
 
 export interface ResumenCarga {
@@ -129,7 +130,7 @@ export async function importarReporteDeCitas(params: {
   // doctor tiene de verdad esos dias, y las de este archivo ya estan puestas.
   // Solo los dias del archivo y solo sus doctores: una carga no tiene por que
   // opinar sobre quien no aparece en ella.
-  const jornadasAjustadas = await recalcularJornadas({
+  const { ajustes: jornadasAjustadas } = await recalcularJornadas({
     fechas: reporte.fechas,
     profesionalIds: [...new Set(catalogo.profesionales.values())],
   })

@@ -78,6 +78,61 @@ export interface Modulo {
 export type Jornada = 'MANANA' | 'TARDE' | 'COMPLETA'
 
 /**
+ * Lo que un doctor trabajo (o va a trabajar) UN DIA concreto.
+ *
+ * LA JORNADA NO ES UN DATO DEL DOCTOR, ES UN DATO DEL DOCTOR Y EL DIA. En el
+ * hospital el mismo medico hace el lunes completo, el martes solo la mañana y
+ * el miercoles no viene. Un unico campo en su ficha no puede decir eso: cada
+ * carga lo machacaba con el veredicto del ultimo archivo y se perdia el resto.
+ *
+ * NO SE GUARDA EN NINGUNA TABLA, SE DEDUCE. Las citas de cada dia ya estan
+ * guardadas y no se borran: de sus horas sale la jornada de ese dia, hacia
+ * atras, para cualquier dia que se haya cargado. Guardarla aparte seria
+ * duplicar un dato que ya existe y abrir la puerta a que las dos copias dejen
+ * de coincidir, que es exactamente el problema que se esta arreglando.
+ */
+export interface JornadaDelDia {
+  profesionalId: string
+  /**
+   * Lo que dicen sus citas de ese dia. `null` es "no trabaja": ese dia no
+   * tiene ni un paciente, y eso es una respuesta, no un dato que falte.
+   */
+  jornada: Jornada | null
+  /** Cuantos pacientes tiene ese dia. */
+  citas: number
+  /** Primera y ultima hora con paciente, para poder mirarlo y creerlo. */
+  desde: string | null
+  hasta: string | null
+}
+
+/** Un doctor al que un recalculo le corrigio la jornada habitual. */
+export interface AjusteDeJornada {
+  nombre: string
+  jornada: Jornada
+  /** La que tenia antes, para que el registro de actividad diga el cambio entero. */
+  anterior: Jornada
+  /** En cuantos dias del periodo trabajo. Es lo que sostiene el veredicto. */
+  diasTrabajados: number
+}
+
+/**
+ * Lo que devuelve recalcular las jornadas habituales.
+ *
+ * Vive aqui y no junto al codigo que lo calcula porque es la forma de una
+ * respuesta de la API: lo lee la pantalla de Profesionales, que corre en el
+ * navegador y no puede importar nada que toque la base de datos.
+ */
+export interface ResumenRecalculo {
+  desde: string
+  hasta: string
+  diasMirados: number
+  doctoresRevisados: number
+  /** Doctores sin ni una cita en el periodo. No se les toca. */
+  sinCitas: number
+  ajustes: AjusteDeJornada[]
+}
+
+/**
  * Profesional que atiende: medico, odontologo, pediatra.
  *
  * Es distinto del usuario del sistema (`lib/usuarios/types.ts`): un profesional

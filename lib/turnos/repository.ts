@@ -9,6 +9,7 @@ import type {
   HorarioDia,
   ItemAgendaProfesional,
   Jornada,
+  JornadaDelDia,
   Modulo,
   Profesional,
   Servicio,
@@ -86,6 +87,19 @@ export interface TurnoRepository {
    * de la jornada de cada doctor, que son reglas del dominio.
    */
   horarioDelDia(fecha: string): Promise<HorarioDia>
+
+  /**
+   * Que trabajo cada doctor UN DIA concreto, deducido de sus citas de ese dia.
+   *
+   * Es la trazabilidad de jornadas: el mismo medico hace el lunes completo, el
+   * martes solo la mañana y el miercoles no viene, y con un solo campo en su
+   * ficha eso no se puede ni ver ni consultar hacia atras. Aqui se responde
+   * por dia, para cualquier dia que ya este cargado.
+   *
+   * Solo devuelve a los doctores que ese dia TIENEN citas. El que no aparece
+   * no trabajo: ver `JornadaDelDia` en `types.ts`.
+   */
+  jornadasDelDia(fecha: string): Promise<JornadaDelDia[]>
 
   /**
    * TEMPORAL (solo pruebas): borra las citas y los turnos de hoy para que el

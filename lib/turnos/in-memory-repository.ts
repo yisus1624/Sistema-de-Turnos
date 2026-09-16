@@ -31,6 +31,7 @@ import type {
   EstadoAgendaItem,
   FiltroHistorico,
   ItemAgendaProfesional,
+  JornadaDelDia,
   Jornada,
   Modulo,
   Profesional,
@@ -45,7 +46,9 @@ import {
   aMinutos,
   atiendeEnJornada,
   bloqueDeCita,
+  bloquesConPacientes,
   jornadaSegunHoras,
+  jornadasSegunCitas,
   diaColombia,
   franjasDeJornada,
   horaColombia,
@@ -472,20 +475,38 @@ function validarFranjaDeCita(params: {
     )
   }
 
-  if (!atiendeEnJornada(profesional, bloque)) {
+  // Las citas que el doctor YA tiene ese dia: dicen que jornada trabaja ese
+  // dia y si la hora esta ocupada.
+  const citasDelDia = estado.citas.filter(
+    (c) =>
+      c.profesionalId === profesional.id &&
+      c.estado !== 'CANCELADA' &&
+      diaColombia(c.horaCita) === diaDeLaCita,
+  )
+
+  // QUE JORNADA MANDA ESE DIA. La ficha dice lo habitual; las citas de ese dia
+  // SUMAN. Es la misma regla con la que la parrilla decide las columnas, y
+  // tiene que ser la misma: si el formulario aceptara algo que la parrilla no
+  // pinta (o al reves), el operador agendaria un paciente que luego no ve.
+  //
+  // SUMAN, NUNCA RESTAN. Al doctor de mañana que hoy tiene pacientes por la
+  // tarde se le puede agendar por la tarde, que es lo que el hospital hace
+  // cuando alguien cambia de horario. Pero al de dia completo cuyo dia
+  // arranca con una sola cita de las nueve NO se le cierra la tarde: ahi no
+  // hay nada deducido todavia, solo un dia a medio llenar.
+  const conPacientes = bloquesConPacientes(
+    citasDelDia.map((c) => horaColombia(c.horaCita)),
+    estado.configuracion,
+  )
+
+  if (!atiendeEnJornada(profesional, bloque) && !conPacientes.has(bloque)) {
     errorDeNegocio(
-      `${profesional.nombre} atiende en ${ETIQUETA_JORNADA[profesional.jornada]}, asi que no se le puede agendar a las ${hora}.`,
+      `${profesional.nombre} atiende en ${ETIQUETA_JORNADA[profesional.jornada]} y el ${diaDeLaCita} no tiene pacientes en la otra, asi que no se le puede agendar a las ${hora}.`,
     )
   }
 
-  const dia = diaColombia(horaCita)
-  const ocupada = estado.citas.some(
-    (c) =>
-      c.id !== ignorarCitaId &&
-      c.profesionalId === profesional.id &&
-      c.estado !== 'CANCELADA' &&
-      diaColombia(c.horaCita) === dia &&
-      horaColombia(c.horaCita) === hora,
+  const ocupada = citasDelDia.some(
+    (c) => c.id !== ignorarCitaId && horaColombia(c.horaCita) === hora,
   )
   if (ocupada) {
     errorDeNegocio(`${profesional.nombre} ya tiene un paciente a las ${hora}. Elige otra hora.`)
@@ -871,18 +892,35 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     // atiende de 12:20 a 16:14 son su tarde, y las del que atiende de 7 a 12:30
     // son su mañana. Sin esto, las primeras caian en la mañana, donde ese doctor
     // no tiene columna, y sus pacientes se iban de la parrilla.
-    const jornadaDelDoctor = new Map<string, Jornada | null>()
-    {
-      const horasPorDoctor = new Map<string, string[]>()
-      for (const cita of citasDelDia) {
-        const hora = horaColombia(cita.horaCita)
-        const horas = horasPorDoctor.get(cita.profesionalId)
-        if (horas) horas.push(hora)
-        else horasPorDoctor.set(cita.profesionalId, [hora])
-      }
-      for (const [id, horas] of horasPorDoctor) {
-        jornadaDelDoctor.set(id, jornadaSegunHoras(horas, configuracion))
-      }
+    const jornadaDelDoctor = new Map<string, Jornada | null>(
+      jornadasSegunCitas(
+        citasDelDia.map((c) => ({ profesionalId: c.profesionalId, hora: horaColombia(c.horaCita) })),
+        configuracion,
+      ).map((j) => [j.profesionalId, j.jornada]),
+    )
+
+    // EN QUE BLOQUES TIENE PACIENTES HOY CADA DOCTOR.
+    //
+    // La jornada de su ficha dice a que horas se le PUEDE agendar, pero no
+    // manda sobre las citas que ya existen. Cuando las dos cosas no coinciden
+    // —el reporte le trajo pacientes por la tarde a alguien que esta guardado
+    // como de mañana— el doctor se quedaba sin columna en la tarde y sus
+    // pacientes caian en "citas sin doctor en la parrilla" aunque el doctor
+    // estuviera activo y atendiendo. Pasaba con quien cambia de horario y con
+    // quien entro al catalogo antes de que la jornada se dedujera.
+    //
+    // Se le abre columna en el bloque donde de verdad tiene citas. La ficha
+    // sigue mandando en lo suyo: agendar a mano.
+    const bloquesConCitas = new Map<string, Set<Jornada>>()
+    for (const cita of citasDelDia) {
+      const bloque = bloqueDeCita(
+        horaColombia(cita.horaCita),
+        configuracion,
+        jornadaDelDoctor.get(cita.profesionalId) ?? null,
+      )
+      const suyos = bloquesConCitas.get(cita.profesionalId)
+      if (suyos) suyos.add(bloque)
+      else bloquesConCitas.set(cita.profesionalId, new Set([bloque]))
     }
 
     const definicion = [
@@ -907,7 +945,9 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       // por servicio y nombre para que la parrilla se lea siempre igual y no
       // baile cuando se agrega un doctor nuevo.
       const doctores = estado.profesionales
-        .filter((p) => p.activo && atiendeEnJornada(p, jornada))
+        .filter(
+          (p) => p.activo && (atiendeEnJornada(p, jornada) || bloquesConCitas.get(p.id)?.has(jornada) === true),
+        )
         .filter((p) => estado.servicios.find((s) => s.id === p.servicioId)?.modoFila === 'POR_PROFESIONAL')
         .sort((a, b) => {
           const servicioA = estado.servicios.find((s) => s.id === a.servicioId)?.nombre ?? ''
@@ -967,6 +1007,20 @@ export class InMemoryTurnoRepository implements TurnoRepository {
         .map(enHorario)
         .sort((a, b) => a.hora.localeCompare(b.hora)),
     }
+  }
+
+  /** Ver `jornadasDelDia` en el contrato del repositorio. */
+  async jornadasDelDia(fecha: string): Promise<JornadaDelDia[]> {
+    // Las canceladas no cuentan: un dia cuyas citas se cancelaron todas es un
+    // dia que el doctor no trabaja, y contarlas diria lo contrario.
+    const citas = estado.citas.filter(
+      (c) => c.estado !== 'CANCELADA' && diaColombia(c.horaCita) === fecha,
+    )
+
+    return jornadasSegunCitas(
+      citas.map((c) => ({ profesionalId: c.profesionalId, hora: horaColombia(c.horaCita) })),
+      estado.configuracion,
+    )
   }
 
   /**

@@ -28,10 +28,17 @@ import Modal from '@/components/ui/Modal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
-import { mensajeDeError, pedir } from '@/lib/api/cliente'
-import type { Jornada, Modulo, Profesional, Servicio } from '@/lib/turnos/types'
+import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
+import type {
+  Jornada,
+  JornadaDelDia,
+  Modulo,
+  Profesional,
+  ResumenRecalculo,
+  Servicio,
+} from '@/lib/turnos/types'
 
-const COLUMNAS = ['Profesional', 'Servicio', 'Jornada', 'Consultorio', 'Estado']
+const COLUMNAS = ['Profesional', 'Servicio', 'Ese dia', 'Jornada habitual', 'Consultorio', 'Estado']
 
 type FormularioDoctor = {
   nombre: string
@@ -50,9 +57,15 @@ const DOCTOR_VACIO: FormularioDoctor = {
 }
 
 /**
- * La jornada decide a que horas se le puede agendar al doctor. Las horas
- * concretas de cada una son las mismas para todo el hospital y se configuran
- * en "Pantalla y audio"; aqui solo se elige en cual trabaja.
+ * La jornada HABITUAL del doctor. Las horas concretas de cada una son las
+ * mismas para todo el hospital y se configuran en "Pantalla y audio"; aqui
+ * solo se elige en cual trabaja normalmente.
+ *
+ * NO ES LA JORNADA DE UN DIA. El mismo medico hace el lunes completo, el
+ * martes solo la mañana y el miercoles no viene, y eso no cabe en un campo.
+ * La de cada dia sale de las citas de ese dia y se ve en la columna "Ese dia".
+ * Esta solo decide a que horas se le puede agendar el PRIMER paciente de un
+ * dia que todavia esta vacio; en cuanto tiene una cita, mandan sus citas.
  */
 const etiquetaJornada: Record<Jornada, string> = {
   MANANA: 'Mañana',
@@ -66,6 +79,36 @@ const tonoJornada: Record<Jornada, 'amber' | 'blue' | 'green'> = {
   COMPLETA: 'green',
 }
 
+/**
+ * Lo que un doctor trabajo el dia que se esta mirando.
+ *
+ * "NO TRABAJA" ES UNA RESPUESTA, NO UN HUECO. El doctor sin ni una cita ese
+ * dia no vino, y decirlo asi es la mitad de lo que se vino a preguntar aqui.
+ * El rango de horas debajo esta para poder mirar el veredicto y creerlo sin
+ * abrir la parrilla.
+ */
+function EseDia({ jornada, cargando }: { jornada?: JornadaDelDia; cargando: boolean }) {
+  if (cargando) return <span className="text-sm font-semibold text-slate-300">…</span>
+
+  if (!jornada?.jornada) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <Badge tone="slate">No trabaja</Badge>
+        <span className="text-xs font-semibold text-slate-400">sin citas ese dia</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      <Badge tone={tonoJornada[jornada.jornada]}>{etiquetaJornada[jornada.jornada]}</Badge>
+      <span className="text-xs font-semibold text-slate-400">
+        {jornada.citas} cita(s) · {jornada.desde}–{jornada.hasta}
+      </span>
+    </div>
+  )
+}
+
 export default function ProfesionalesClient() {
   const [profesionales, setProfesionales] = useState<Profesional[]>([])
   const [servicios, setServicios] = useState<Servicio[]>([])
@@ -76,7 +119,23 @@ export default function ProfesionalesClient() {
   const [editando, setEditando] = useState<Profesional | null>(null)
   const [formulario, setFormulario] = useState<FormularioDoctor>(DOCTOR_VACIO)
   const [guardando, setGuardando] = useState(false)
+
+  /**
+   * El dia que se esta mirando.
+   *
+   * La tabla no es solo un catalogo: es tambien la respuesta a "¿que trabajo
+   * este doctor el lunes?". Se puede mover a cualquier dia ya cargado, hacia
+   * atras o hacia delante, porque la jornada de un dia sale de las citas de
+   * ese dia y las citas no se borran.
+   */
+  const [fecha, setFecha] = useState(hoyEnColombia())
+  const [jornadasDelDia, setJornadasDelDia] = useState<Map<string, JornadaDelDia>>(new Map())
+  const [cargandoJornadas, setCargandoJornadas] = useState(true)
+
+  // Recalculo de la jornada habitual, sobre el periodo que elija quien lo pide.
+  const [recalculoAbierto, setRecalculoAbierto] = useState(false)
   const [recalculando, setRecalculando] = useState(false)
+  const [periodo, setPeriodo] = useState({ desde: '', hasta: '' })
 
   const cargar = useCallback(async () => {
     try {
@@ -97,45 +156,85 @@ export default function ProfesionalesClient() {
     }
   }, [])
 
+  /** Lo que cada doctor trabajo el dia que se esta mirando. */
+  const cargarJornadasDelDia = useCallback(async (dia: string) => {
+    setCargandoJornadas(true)
+    try {
+      const { jornadas } = await pedir<{ jornadas: JornadaDelDia[] }>(
+        `/api/turnos/profesionales/jornadas?fecha=${dia}`,
+      )
+      setJornadasDelDia(new Map(jornadas.map((j) => [j.profesionalId, j])))
+    } catch (error) {
+      toast.error('No se pudo cargar lo que trabajaron ese dia', mensajeDeError(error))
+      setJornadasDelDia(new Map())
+    } finally {
+      setCargandoJornadas(false)
+    }
+  }, [])
+
   /**
-   * Vuelve a deducir la jornada de cada doctor de las citas que tiene.
+   * Vuelve a deducir la jornada HABITUAL de cada doctor de sus citas del
+   * periodo.
    *
-   * La carga diaria ya lo hace con los dias que trae el archivo. Esto es para
-   * lo que quedo cargado ANTES de que existiera esa regla: doctores con "dia
-   * completo" solo porque el reporte del hospital no trae esa columna, cuando
-   * sus propias citas dicen que uno se va a las once y otro llega a la una.
+   * Se deduce dia por dia y gana la que mas se repite. Juntando las horas de
+   * todo el periodo en un monton, bastaba una tarde suelta al mes para que un
+   * medico de mañanas saliera de "dia completo", y sobre treinta dias eso
+   * acababa poniendo a todo el mundo en dia completo.
    */
   const recalcularJornadas = useCallback(async () => {
     setRecalculando(true)
     try {
-      const { ajustes } = await pedir<{ ajustes: Array<{ nombre: string; jornada: Jornada }> }>(
-        '/api/turnos/profesionales/jornadas',
-        { method: 'POST' },
-      )
+      const resumen = await pedir<ResumenRecalculo>('/api/turnos/profesionales/jornadas', {
+        method: 'POST',
+        body: JSON.stringify(periodo),
+      })
 
-      if (ajustes.length === 0) {
+      const periodoLegible = `${resumen.desde} a ${resumen.hasta} · ${resumen.diasMirados} dia(s)`
+      if (resumen.ajustes.length === 0) {
         toast.info(
           'No hubo nada que cambiar',
-          'La jornada de cada doctor ya coincide con las horas a las que tiene citas.',
+          `${periodoLegible}. La jornada habitual de cada doctor ya coincide con sus citas.`,
         )
       } else {
         toast.success(
-          `${ajustes.length} doctor(es) cambiaron de jornada`,
-          ajustes.map((a) => `${a.nombre}: ${etiquetaJornada[a.jornada]}`).join(' · '),
+          `${resumen.ajustes.length} doctor(es) cambiaron de jornada habitual`,
+          resumen.ajustes
+            .map(
+              (a) =>
+                `${a.nombre}: ${etiquetaJornada[a.anterior]} → ${etiquetaJornada[a.jornada]} (${a.diasTrabajados} dia(s) trabajados)`,
+            )
+            .join(' · '),
         )
       }
 
+      setRecalculoAbierto(false)
       await cargar()
     } catch (error) {
       toast.error('No se pudieron recalcular las jornadas', mensajeDeError(error))
     } finally {
       setRecalculando(false)
     }
-  }, [cargar])
+  }, [cargar, periodo])
+
+  function abrirRecalculo() {
+    // Por defecto, el ultimo mes hasta el dia que se esta mirando: es el
+    // periodo que hace falta para responder "que suele hacer este doctor", y
+    // se deja cambiar porque un mes no es lo mismo en enero que en diciembre.
+    const hasta = fecha
+    const desde = new Date(Date.parse(`${fecha}T12:00:00Z`) - 29 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10)
+    setPeriodo({ desde, hasta })
+    setRecalculoAbierto(true)
+  }
 
   useEffect(() => {
     cargar()
   }, [cargar])
+
+  useEffect(() => {
+    cargarJornadasDelDia(fecha)
+  }, [cargarJornadasDelDia, fecha])
 
   const nombreServicio = useMemo(() => {
     const mapa = new Map(servicios.map((s) => [s.id, s.nombre]))
@@ -243,9 +342,8 @@ export default function ProfesionalesClient() {
             <Button
               size="sm"
               variant="secondary"
-              onClick={recalcularJornadas}
-              loading={recalculando}
-              title="Deduce la jornada de cada doctor de las horas a las que tiene citas (ultimos 30 dias)"
+              onClick={abrirRecalculo}
+              title="Deduce la jornada habitual de cada doctor de las horas a las que tuvo citas en el periodo que elijas"
             >
               <ArrowsClockwise size={16} weight="bold" />
               Recalcular jornadas
@@ -256,6 +354,30 @@ export default function ProfesionalesClient() {
             </Button>
           </div>
         </CardHeader>
+        {/*
+          EL DIA QUE SE ESTA MIRANDO. La columna "Ese dia" sale de las citas de
+          esta fecha, asi que sin poder moverla la tabla solo sabria contestar
+          por hoy, y la pregunta del hospital es "¿que trabajo este doctor el
+          lunes?". No hay tope hacia atras: las citas de todos los dias
+          cargados siguen ahi.
+        */}
+        <div className="flex flex-wrap items-end gap-3 border-b border-slate-100 px-5 py-4">
+          <Campo etiqueta="Dia" className="w-full max-w-[190px]">
+            <Entrada type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+          </Campo>
+          {fecha !== hoyEnColombia() ? (
+            <Button size="sm" variant="secondary" className="mb-0.5" onClick={() => setFecha(hoyEnColombia())}>
+              Hoy
+            </Button>
+          ) : null}
+          <p className="mb-1.5 max-w-md text-sm leading-6 text-slate-500">
+            <strong className="font-black text-slate-600">Ese dia</strong> es lo que dicen sus citas
+            de esa fecha; <strong className="font-black text-slate-600">jornada habitual</strong> es
+            la de su ficha, y solo decide a que horas se le agenda el primer paciente de un dia
+            vacio.
+          </p>
+        </div>
+
         <CardContent padded={false}>
           {cargando ? (
             <TablaSkeleton columnas={COLUMNAS} />
@@ -278,6 +400,9 @@ export default function ProfesionalesClient() {
                   <td className="px-4 py-3 font-black text-brand-950">{profesional.nombre}</td>
                   <td className="px-4 py-3 text-slate-600">{nombreServicio(profesional.servicioId)}</td>
                   <td className="px-4 py-3">
+                    <EseDia jornada={jornadasDelDia.get(profesional.id)} cargando={cargandoJornadas} />
+                  </td>
+                  <td className="px-4 py-3">
                     <Badge tone={tonoJornada[profesional.jornada]}>
                       {etiquetaJornada[profesional.jornada]}
                     </Badge>
@@ -299,6 +424,51 @@ export default function ProfesionalesClient() {
         El enlace con el que cada doctor entra a su consultorio se genera en{' '}
         <strong className="font-black text-slate-600">Enlaces de consultorio</strong>.
       </p>
+
+      <Modal
+        open={recalculoAbierto}
+        onClose={() => setRecalculoAbierto(false)}
+        title="Recalcular jornadas habituales"
+        description="Mira las citas que los doctores tuvieron de verdad en el periodo y le pone a cada uno la jornada que mas dias repitio."
+      >
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Campo etiqueta="Desde">
+              <Entrada
+                type="date"
+                value={periodo.desde}
+                onChange={(e) => setPeriodo((p) => ({ ...p, desde: e.target.value }))}
+              />
+            </Campo>
+            <Campo etiqueta="Hasta">
+              <Entrada
+                type="date"
+                value={periodo.hasta}
+                onChange={(e) => setPeriodo((p) => ({ ...p, hasta: e.target.value }))}
+              />
+            </Campo>
+          </div>
+
+          <p className="text-sm leading-6 text-slate-500">
+            Al doctor que no tenga ni una cita en el periodo no se le toca: sin citas no hay nada
+            que deducir, y cambiarsela seria pisar la que se puso a mano. Esto no cambia ninguna
+            cita ya agendada.
+          </p>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setRecalculoAbierto(false)}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={recalcularJornadas}
+              loading={recalculando}
+              disabled={!periodo.desde || !periodo.hasta || periodo.hasta < periodo.desde}
+            >
+              Recalcular
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={abierto}

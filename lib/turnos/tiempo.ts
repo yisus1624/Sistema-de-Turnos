@@ -10,7 +10,7 @@
  *
  * Todo lo de aqui es PURO: no toca estado ni base de datos.
  */
-import type { ConfiguracionSistema, Jornada, Profesional } from './types'
+import type { ConfiguracionSistema, Jornada, JornadaDelDia, Profesional } from './types'
 
 export function ahoraISO() {
   return new Date().toISOString()
@@ -183,6 +183,50 @@ export function jornadaSegunHoras(horas: string[], horario: HorarioDelHospital):
 }
 
 /**
+ * Que trabajo cada doctor un dia, a partir de las citas de ESE dia.
+ *
+ * Es `jornadaSegunHoras` aplicado por doctor, y ademas el rango de horas, que
+ * es lo que permite mirar el resultado y creerlo: "dia completo" al lado de
+ * "40 citas de 07:00 a 16:14" se entiende sin tener que abrir la parrilla.
+ *
+ * Lo usan la pantalla de Profesionales (para responder "¿que hizo este doctor
+ * el lunes?"), la parrilla (para repartir las citas del almuerzo) y la
+ * validacion de agendar a mano. Una sola regla: si se deduce distinto en cada
+ * sitio, la agenda dice una cosa y el formulario otra.
+ *
+ * Las citas pueden venir en cualquier orden.
+ */
+export function jornadasSegunCitas(
+  citas: Array<{ profesionalId: string; hora: string }>,
+  horario: HorarioDelHospital,
+): JornadaDelDia[] {
+  const horasPorDoctor = new Map<string, string[]>()
+  for (const cita of citas) {
+    const horas = horasPorDoctor.get(cita.profesionalId)
+    if (horas) horas.push(cita.hora)
+    else horasPorDoctor.set(cita.profesionalId, [cita.hora])
+  }
+
+  const jornadas: JornadaDelDia[] = []
+  for (const [profesionalId, horas] of horasPorDoctor) {
+    let desde = horas[0]
+    let hasta = horas[0]
+    for (const hora of horas) {
+      if (hora < desde) desde = hora
+      if (hora > hasta) hasta = hora
+    }
+    jornadas.push({
+      profesionalId,
+      jornada: jornadaSegunHoras(horas, horario),
+      citas: horas.length,
+      desde,
+      hasta,
+    })
+  }
+  return jornadas
+}
+
+/**
  * En que bloque de la parrilla se pinta una cita.
  *
  * Se parece a `jornadaDeHora`, pero aqui NO se puede responder "en ninguno": la
@@ -202,6 +246,30 @@ export function bloqueDeCita(
   // Hora de almuerzo: manda el doctor. Si hace el dia completo (o no se sabe),
   // se toma como mañana alargada, que es lo que suele ser.
   return jornadaDelDoctor === 'TARDE' ? 'TARDE' : 'MANANA'
+}
+
+/**
+ * En que bloques de la parrilla tiene pacientes un doctor un dia, dadas las
+ * horas de sus citas de ese dia.
+ *
+ * ES LA REGLA QUE DECIDE SI UN DOCTOR "ESTA" EN UNA JORNADA, y esta escrita
+ * una sola vez porque la usan dos sitios que no se pueden contradecir: la
+ * parrilla, para saber si abrirle columna, y la validacion de agendar, para
+ * saber si aceptarle un paciente. Con la regla duplicada, el formulario
+ * aceptaria citas que la parrilla no pinta y el operador agendaria pacientes
+ * que despues no encuentra.
+ *
+ * Pasa por `bloqueDeCita` y no por la hora pelada para que las citas del
+ * almuerzo caigan del lado que les corresponde segun el propio doctor.
+ */
+export function bloquesConPacientes(
+  horas: string[],
+  horario: HorarioDelHospital,
+): Set<'MANANA' | 'TARDE'> {
+  const jornada = jornadaSegunHoras(horas, horario)
+  const bloques = new Set<'MANANA' | 'TARDE'>()
+  for (const hora of horas) bloques.add(bloqueDeCita(hora, horario, jornada))
+  return bloques
 }
 
 /** Formato AAAA-MM-DD, que es como entran las fechas por la API. */

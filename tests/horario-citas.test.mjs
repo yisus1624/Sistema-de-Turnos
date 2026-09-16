@@ -277,6 +277,65 @@ test('cambiar la duracion de la consulta no descoloca a los que ya estaban citad
   }
 })
 
+test('al doctor cuya ficha dice una jornada y cuyas citas dicen otra se le abre columna donde tiene pacientes', async () => {
+  const dia = enDias(16)
+  const doctor = await repo.crearProfesional({
+    nombre: 'Dr. Cambia De Horario',
+    servicioId: 'srv-consulta-externa',
+    jornada: 'COMPLETA',
+  })
+  for (const [documento, hora] of [
+    ['777005', '13:15'],
+    ['777006', '13:30'],
+    ['777007', '13:45'],
+  ]) {
+    await repo.crearCita({
+      documentoPaciente: documento,
+      nombrePaciente: `Paciente De Tarde ${documento}`,
+      profesionalId: doctor.id,
+      horaCita: enFranja(dia, hora),
+    })
+  }
+
+  // Su ritmo de verdad es de trece minutos, como el de varios doctores del
+  // hospital. Agendar a mano fuera de franja lo impide el dominio y asi tiene
+  // que seguir: esas horas solo entran por la carga del hospital, que las
+  // guarda tal cual. Se reproduce moviendolas aqui.
+  const suyas = await repo.listarCitas({ profesionalId: doctor.id, fecha: dia })
+  for (const [documento, hora] of [
+    ['777005', '13:12'],
+    ['777006', '13:25'],
+    ['777007', '13:38'],
+  ]) {
+    suyas.find((c) => c.documentoPaciente === documento).horaCita = enFranja(dia, hora)
+  }
+
+  // Y ahora su ficha dice que es de mañana. Pasa de verdad: el doctor que
+  // cambia de horario, o el que entro al catalogo antes de que la jornada se
+  // dedujera de sus citas. Antes esto le quitaba la columna de la tarde y sus
+  // tres pacientes caian en "citas sin doctor en la parrilla", con el doctor
+  // activo y atendiendo.
+  const enCatalogo = (await repo.listarProfesionales(undefined, true)).find((p) => p.id === doctor.id)
+  enCatalogo.jornada = 'MANANA'
+
+  const horario = await repo.horarioDelDia(dia)
+  const tarde = bloqueDe(horario, 'TARDE')
+
+  assert.ok(columna(tarde, doctor.id), 'tiene columna en la tarde, que es donde tiene pacientes')
+  assert.equal(columna(tarde, doctor.id).citas, 3)
+  assert.equal(tarde.citas[`${doctor.id}|13:12`][0].nombrePaciente, 'Paciente De Tarde 777005')
+  assert.equal(horario.fueraDeHorario.length, 0, 'ninguno se queda fuera de la parrilla')
+
+  // Su hora no es franja de la configuracion, asi que se ve pero no se ofrece
+  // agendar ahi: eso lo sigue mandando la configuracion, no las citas.
+  assert.equal(tarde.filas.find((f) => f.hora === '13:12').agendable, false)
+
+  for (const cita of await repo.listarCitas({ profesionalId: doctor.id, fecha: dia })) {
+    await repo.cancelarCita(cita.id, { motivo: 'Fin de la prueba' })
+  }
+  enCatalogo.activo = false
+})
+
 test('las citas de un doctor desactivado tampoco se pierden', async () => {
   const dia = enDias(15)
   const doctor = await repo.crearProfesional({
@@ -305,6 +364,85 @@ test('las citas de un doctor desactivado tampoco se pierden', async () => {
     horario.fueraDeHorario.some((c) => c.nombrePaciente === 'Paciente Huerfano'),
     'pero su paciente sigue a la vista',
   )
+})
+
+// --- Trazabilidad de jornadas ---
+
+test('jornadasDelDia dice que trabajo cada doctor ESE dia, y el que no vino no aparece', async () => {
+  // LA PREGUNTA QUE CONTESTA: "¿que hizo este doctor el lunes?". El mismo
+  // medico hace un dia completo, otro solo la mañana y otro no viene, y eso no
+  // cabe en el campo de su ficha. Sale de las citas de cada dia, que no se
+  // borran, asi que se puede preguntar hacia atras por cualquier dia cargado.
+  const lunes = enDias(17)
+  const martes = enDias(18)
+  const doctor = await repo.crearProfesional({
+    nombre: 'Dr. Semana Variable',
+    servicioId: 'srv-consulta-externa',
+    jornada: 'COMPLETA',
+  })
+
+  for (const hora of ['09:00', '15:00']) {
+    await repo.crearCita({
+      documentoPaciente: '778001',
+      nombrePaciente: `Paciente Lunes ${hora}`,
+      profesionalId: doctor.id,
+      horaCita: enFranja(lunes, hora),
+    })
+  }
+  await repo.crearCita({
+    documentoPaciente: '778002',
+    nombrePaciente: 'Paciente Martes',
+    profesionalId: doctor.id,
+    horaCita: enFranja(martes, '09:00'),
+  })
+
+  const delLunes = (await repo.jornadasDelDia(lunes)).find((j) => j.profesionalId === doctor.id)
+  assert.equal(delLunes.jornada, 'COMPLETA')
+  assert.equal(delLunes.citas, 2)
+  assert.equal(delLunes.desde, '09:00')
+  assert.equal(delLunes.hasta, '15:00')
+
+  const delMartes = (await repo.jornadasDelDia(martes)).find((j) => j.profesionalId === doctor.id)
+  assert.equal(delMartes.jornada, 'MANANA', 'el martes solo tuvo mañana')
+  assert.equal(delMartes.citas, 1)
+
+  // El miercoles no vino. No aparece: "no trabaja" es una respuesta, y quien
+  // pregunta la lee de que el doctor no este en la lista de ese dia.
+  const delMiercoles = (await repo.jornadasDelDia(enDias(19))).find(
+    (j) => j.profesionalId === doctor.id,
+  )
+  assert.equal(delMiercoles, undefined)
+
+  for (const fecha of [lunes, martes]) {
+    for (const cita of await repo.listarCitas({ profesionalId: doctor.id, fecha })) {
+      await repo.cancelarCita(cita.id, { motivo: 'Fin de la prueba' })
+    }
+  }
+  const enCatalogo = (await repo.listarProfesionales(undefined, true)).find((p) => p.id === doctor.id)
+  enCatalogo.activo = false
+})
+
+test('la cita cancelada no cuenta: el dia que se cancelo todo es un dia que no se trabaja', async () => {
+  const dia = enDias(20)
+  const doctor = await repo.crearProfesional({
+    nombre: 'Dr. Dia Cancelado',
+    servicioId: 'srv-consulta-externa',
+    jornada: 'MANANA',
+  })
+  const cita = await repo.crearCita({
+    documentoPaciente: '778003',
+    nombrePaciente: 'Paciente Cancelado',
+    profesionalId: doctor.id,
+    horaCita: enFranja(dia, '09:00'),
+  })
+
+  await repo.cancelarCita(cita.id, { motivo: 'El paciente no puede' })
+
+  const suya = (await repo.jornadasDelDia(dia)).find((j) => j.profesionalId === doctor.id)
+  assert.equal(suya, undefined, 'sin pacientes en pie, ese dia no trabaja')
+
+  const enCatalogo = (await repo.listarProfesionales(undefined, true)).find((p) => p.id === doctor.id)
+  enCatalogo.activo = false
 })
 
 // --- Configuracion coherente ---

@@ -18,7 +18,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Check, Copy, IdentificationCard, Link as LinkIcon, Prohibit } from '@phosphor-icons/react/dist/ssr'
+import {
+  Check,
+  Copy,
+  IdentificationCard,
+  Link as LinkIcon,
+  MagnifyingGlass,
+  Prohibit,
+} from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -26,7 +33,7 @@ import Modal from '@/components/ui/Modal'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Tabla, TablaSkeleton } from '@/components/admin/Campos'
+import { Campo, Entrada, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { AccesoProfesional, Jornada, Modulo, Profesional, Servicio } from '@/lib/turnos/types'
 
@@ -45,6 +52,15 @@ const tonoJornada: Record<Jornada, 'amber' | 'blue' | 'green'> = {
 }
 
 type EstadoAcceso = 'vigente' | 'vencido' | 'revocado' | 'sin_enlace'
+
+/**
+ * Valor del filtro de consultorio para "los que no tienen ninguno".
+ *
+ * No es un id de modulo y no puede serlo: un doctor sin consultorio asignado
+ * es justo el que hay que encontrar para asignarselo, y sin esta opcion
+ * quedaba fuera de todos los filtros.
+ */
+const SIN_CONSULTORIO = 'sin-consultorio'
 
 const ATAJOS_VIGENCIA = [
   { etiqueta: '6 h (medio turno)', horas: 6, minutos: 0 },
@@ -156,6 +172,15 @@ export default function EnlacesClient() {
   const [accesos, setAccesos] = useState<AccesoProfesional[]>([])
   const [cargando, setCargando] = useState(true)
 
+  // Filtros de la tabla. El hospital tiene dieciocho doctores y va a tener
+  // mas: repartir el enlace es buscar UNO concreto —el que acaba de llegar a
+  // su turno— en una lista alfabetica que no cabe en la pantalla. Se busca por
+  // lo que se sabe de el en ese momento: su nombre, su jornada o el
+  // consultorio en el que esta sentado.
+  const [busqueda, setBusqueda] = useState('')
+  const [jornadaFiltro, setJornadaFiltro] = useState<'' | Jornada>('')
+  const [consultorioFiltro, setConsultorioFiltro] = useState('')
+
   // Modal de generacion.
   const [profesionalActivo, setProfesionalActivo] = useState<Profesional | null>(null)
   const [horas, setHoras] = useState(12)
@@ -215,6 +240,58 @@ export default function EnlacesClient() {
     const mapa = new Map(modulos.map((m) => [m.id, m.nombre]))
     return (id?: string | null) => (id ? (mapa.get(id) ?? '—') : '—')
   }, [modulos])
+
+  /**
+   * Los consultorios que se ofrecen en el filtro.
+   *
+   * Salen de los doctores de la tabla, no del catalogo de modulos: las
+   * ventanillas de admisiones y facturacion tambien son modulos, y ofrecerlas
+   * aqui seria ofrecer un filtro que no devuelve a nadie.
+   */
+  const consultoriosDelFiltro = useMemo(() => {
+    const ids = new Set(profesionales.map((p) => p.moduloId).filter((id): id is string => !!id))
+    return [...ids]
+      .map((id) => ({ id, nombre: nombreModulo(id) }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+  }, [profesionales, nombreModulo])
+
+  const hayDoctorSinConsultorio = useMemo(() => profesionales.some((p) => !p.moduloId), [profesionales])
+
+  const filtrando = busqueda.trim() !== '' || jornadaFiltro !== '' || consultorioFiltro !== ''
+
+  /**
+   * La tabla ya filtrada.
+   *
+   * La busqueda mira tambien el servicio y el consultorio, no solo el nombre:
+   * quien reparte los enlaces no siempre tiene el nombre del doctor a mano,
+   * pero si sabe que es "el de odontologia" o "el del CONS 03".
+   */
+  const visibles = useMemo(() => {
+    const texto = busqueda.trim().toLowerCase()
+    return profesionales.filter((profesional) => {
+      if (jornadaFiltro && profesional.jornada !== jornadaFiltro) return false
+      if (consultorioFiltro === SIN_CONSULTORIO) {
+        if (profesional.moduloId) return false
+      } else if (consultorioFiltro && profesional.moduloId !== consultorioFiltro) {
+        return false
+      }
+      if (!texto) return true
+      const buscable = [
+        profesional.nombre,
+        nombreServicio(profesional.servicioId),
+        nombreModulo(profesional.moduloId),
+      ]
+        .join(' ')
+        .toLowerCase()
+      return buscable.includes(texto)
+    })
+  }, [profesionales, busqueda, jornadaFiltro, consultorioFiltro, nombreServicio, nombreModulo])
+
+  function limpiarFiltros() {
+    setBusqueda('')
+    setJornadaFiltro('')
+    setConsultorioFiltro('')
+  }
 
   const ultimoAccesoDe = useCallback(
     (profesionalId: string) => accesos.find((a) => a.profesionalId === profesionalId),
@@ -319,6 +396,73 @@ export default function EnlacesClient() {
             {vigentes} con enlace vigente
           </span>
         </CardHeader>
+        {/*
+          La barra de filtros solo cuando de verdad hace falta. Con cuatro
+          doctores estorba y no ahorra nada; pasada la decena es la unica forma
+          de llegar al que se busca sin recorrer la tabla entera.
+        */}
+        {!cargando && profesionales.length > 6 ? (
+          <div className="flex flex-wrap items-end gap-3 border-b border-slate-100 px-5 py-4">
+            <Campo etiqueta="Buscar doctor, servicio o consultorio" className="w-full max-w-xs">
+              <div className="relative">
+                <MagnifyingGlass
+                  size={17}
+                  weight="bold"
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <Entrada
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Perez, odontologia, CONS 03..."
+                  className="pl-9"
+                />
+              </div>
+            </Campo>
+
+            <Campo etiqueta="Jornada" className="w-full max-w-[180px]">
+              <Seleccion
+                value={jornadaFiltro}
+                onChange={(e) => setJornadaFiltro(e.target.value as '' | Jornada)}
+              >
+                <option value="">Todas</option>
+                <option value="MANANA">{etiquetaJornada.MANANA}</option>
+                <option value="TARDE">{etiquetaJornada.TARDE}</option>
+                <option value="COMPLETA">{etiquetaJornada.COMPLETA}</option>
+              </Seleccion>
+            </Campo>
+
+            {consultoriosDelFiltro.length > 1 ? (
+              <Campo etiqueta="Consultorio" className="w-full max-w-[240px]">
+                <Seleccion
+                  value={consultorioFiltro}
+                  onChange={(e) => setConsultorioFiltro(e.target.value)}
+                >
+                  <option value="">Todos</option>
+                  {consultoriosDelFiltro.map((consultorio) => (
+                    <option key={consultorio.id} value={consultorio.id}>
+                      {consultorio.nombre}
+                    </option>
+                  ))}
+                  {hayDoctorSinConsultorio ? (
+                    <option value={SIN_CONSULTORIO}>Sin consultorio</option>
+                  ) : null}
+                </Seleccion>
+              </Campo>
+            ) : null}
+
+            <div className="flex items-center gap-3 pb-0.5">
+              <span className="text-sm font-bold text-slate-500">
+                {visibles.length} de {profesionales.length} doctores
+              </span>
+              {filtrando ? (
+                <Button variant="secondary" size="sm" onClick={limpiarFiltros}>
+                  Ver todos
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         <CardContent padded={false}>
           {cargando ? (
             <TablaSkeleton columnas={COLUMNAS} />
@@ -330,9 +474,22 @@ export default function EnlacesClient() {
                 description="Todavia no hay doctores a los que repartirles enlace. Se dan de alta en Profesionales."
               />
             </div>
+          ) : visibles.length === 0 ? (
+            <div className="p-5">
+              <EmptyState
+                icon={MagnifyingGlass}
+                title="Ningun doctor coincide"
+                description="Prueba con otro nombre o quita los filtros para ver a todos los doctores."
+                action={
+                  <Button variant="secondary" onClick={limpiarFiltros}>
+                    Ver todos
+                  </Button>
+                }
+              />
+            </div>
           ) : (
             <Tabla columnas={COLUMNAS}>
-              {profesionales.map((profesional) => {
+              {visibles.map((profesional) => {
                 const acceso = ultimoAccesoDe(profesional.id)
                 const estado = estadoDelAcceso(acceso)
                 return (

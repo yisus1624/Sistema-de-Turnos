@@ -184,6 +184,59 @@ test('un doctor de dia completo acepta las dos jornadas', async () => {
   )
 })
 
+test('al doctor de mañana se le agenda de tarde el dia que tiene pacientes de tarde', async () => {
+  // EL CASO DEL HOSPITAL. Un medico cambia de horario, o su ficha quedo con un
+  // veredicto viejo, y ese dia esta atendiendo de tarde: su columna de la
+  // tarde esta ahi, llena de pacientes, y el formulario le rechazaba el
+  // siguiente porque la ficha decia "mañana". La ficha dice lo HABITUAL; las
+  // citas de ese dia suman.
+  const dia = enDias(6)
+  const doctor = await repo.crearProfesional({
+    nombre: 'Dr. Cambio De Turno',
+    servicioId: 'srv-consulta-externa',
+    jornada: 'COMPLETA',
+  })
+  await repo.crearCita({
+    documentoPaciente: '999015',
+    nombrePaciente: 'Primero De La Tarde',
+    profesionalId: doctor.id,
+    horaCita: enFranja(dia, TARDE),
+  })
+
+  // Su ficha pasa a decir "mañana", como la deja una carga de otro dia.
+  const enCatalogo = (await repo.listarProfesionales(undefined, true)).find((p) => p.id === doctor.id)
+  enCatalogo.jornada = 'MANANA'
+
+  await assert.doesNotReject(
+    () =>
+      repo.crearCita({
+        documentoPaciente: '999016',
+        nombrePaciente: 'Segundo De La Tarde',
+        profesionalId: doctor.id,
+        horaCita: enFranja(dia, '15:30'),
+      }),
+    'ese dia esta atendiendo de tarde: se le puede seguir agendando de tarde',
+  )
+
+  // Pero el dia que NO tiene ni un paciente de tarde, manda su ficha: ahi no
+  // hay nada deducido, solo un dia vacio.
+  await assert.rejects(
+    () =>
+      repo.crearCita({
+        documentoPaciente: '999017',
+        nombrePaciente: 'Paciente De Otro Dia',
+        profesionalId: doctor.id,
+        horaCita: enFranja(enDias(7), TARDE),
+      }),
+    /atiende en la jornada de la mañana/i,
+  )
+
+  for (const cita of await repo.listarCitas({ profesionalId: doctor.id, fecha: dia })) {
+    await repo.cancelarCita(cita.id, { motivo: 'Fin de la prueba' })
+  }
+  enCatalogo.activo = false
+})
+
 test('el mismo cupo no se puede dar dos veces', async () => {
   const dia = enDias(3)
   const base = { nombrePaciente: 'Paciente', profesionalId: 'pro-salas' }

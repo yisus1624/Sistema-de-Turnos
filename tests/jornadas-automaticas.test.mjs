@@ -98,7 +98,7 @@ test('la carga reparte a cada doctor en su jornada segun las horas de sus citas'
     { id: 'de-leon', nombre: 'CARLOS DE LEON', horas: ['12:20', '14:00', '16:14'] },
   ])
 
-  const ajustes = await recalcularJornadas({ fechas: [DIA] })
+  const { ajustes } = await recalcularJornadas({ fechas: [DIA] })
 
   assert.equal(jornadaDe('millan'), 'MANANA', 'de 07:00 a 11:20 es jornada de la mañana')
   assert.equal(jornadaDe('paternina'), 'TARDE', 'de 14:00 a 16:08 es jornada de la tarde')
@@ -124,7 +124,7 @@ test('al doctor que no trae ninguna cita no se le toca la jornada', async () => 
   sembrar([{ id: 'sin-agenda', nombre: 'DR SIN AGENDA', horas: [] }])
   estado.doctores[0].jornada = 'TARDE'
 
-  const ajustes = await recalcularJornadas({ fechas: [DIA] })
+  const { ajustes } = await recalcularJornadas({ fechas: [DIA] })
 
   assert.equal(jornadaDe('sin-agenda'), 'TARDE')
   assert.equal(ajustes.length, 0)
@@ -136,8 +136,8 @@ test('volver a subir el mismo archivo no cambia nada la segunda vez', async () =
   const primera = await recalcularJornadas({ fechas: [DIA] })
   const segunda = await recalcularJornadas({ fechas: [DIA] })
 
-  assert.equal(primera.length, 1)
-  assert.equal(segunda.length, 0, 'ya estaba bien: no hay nada que ajustar')
+  assert.equal(primera.ajustes.length, 1)
+  assert.equal(segunda.ajustes.length, 0, 'ya estaba bien: no hay nada que ajustar')
   assert.equal(jornadaDe('millan'), 'MANANA')
 })
 
@@ -150,6 +150,81 @@ test('la cita cancelada no cuenta para deducir la jornada', async () => {
   await recalcularJornadas({ fechas: [DIA] })
 
   assert.equal(jornadaDe('millan'), 'MANANA')
+})
+
+test('la jornada habitual es la que mas dias se repite, no la suma de todas las horas', async () => {
+  // EL MEDICO QUE HACE MAÑANAS Y UNA TARDE SUELTA NO ES DE "DIA COMPLETO".
+  // Juntando las horas del periodo entero en un solo monton bastaba esa tarde
+  // para decir que si, y sobre treinta dias eso acaba poniendo a todo el
+  // hospital en dia completo, que es lo mismo que no decir nada. Se deduce dia
+  // por dia y gana lo que mas se repite.
+  const dias = ['2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10']
+  estado.doctores = [{ id: 'millan', nombre: 'ERNESTO MILLAN', jornada: 'COMPLETA', activo: true }]
+  estado.citas = []
+  let n = 0
+  const citar = (fecha, hora) =>
+    estado.citas.push({
+      id: `c${(n += 1)}`,
+      profesionalId: 'millan',
+      fecha,
+      horaCita: new Date(`${fecha}T${hora}:00-05:00`),
+      estado: 'PROGRAMADA',
+    })
+
+  for (const dia of dias.slice(0, 3)) {
+    citar(dia, '07:00')
+    citar(dia, '11:20')
+  }
+  citar(dias[3], '14:00')
+  citar(dias[3], '16:00')
+
+  const { ajustes, diasMirados, sinCitas } = await recalcularJornadas({ fechas: dias })
+
+  assert.equal(jornadaDe('millan'), 'MANANA', 'tres mañanas contra una tarde')
+  assert.equal(diasMirados, 4)
+  assert.equal(sinCitas, 0)
+  assert.equal(ajustes[0].anterior, 'COMPLETA', 'el registro guarda el antes y el despues')
+  assert.equal(ajustes[0].diasTrabajados, 4)
+})
+
+test('el que hace tantas mañanas como tardes queda de dia completo', async () => {
+  // En el empate no se elige una de las dos: cerrarle media agenda a quien
+  // trabaja las dos mitades por igual dejaria sin poder agendar el primer
+  // paciente de media jornada. La jornada del propio dia corrige en cuanto
+  // haya una cita.
+  const dias = ['2026-09-07', '2026-09-08']
+  estado.doctores = [{ id: 'mixto', nombre: 'DR MIXTO', jornada: 'MANANA', activo: true }]
+  estado.citas = [
+    { id: 'm1', profesionalId: 'mixto', fecha: dias[0], horaCita: new Date(`${dias[0]}T08:00:00-05:00`), estado: 'PROGRAMADA' },
+    { id: 'm2', profesionalId: 'mixto', fecha: dias[1], horaCita: new Date(`${dias[1]}T15:00:00-05:00`), estado: 'PROGRAMADA' },
+  ]
+
+  await recalcularJornadas({ fechas: dias })
+
+  assert.equal(jornadaDe('mixto'), 'COMPLETA')
+})
+
+test('el periodo se puede pedir por rango de fechas', async () => {
+  // Es lo que la pantalla de Profesionales manda: "desde" y "hasta", no una
+  // lista de dias. Un mes no es lo mismo en enero que en diciembre, asi que el
+  // rango lo elige quien lo pide.
+  sembrar([{ id: 'paternina', nombre: 'DAGOBERTO PATERNINA', horas: ['14:00', '16:08'] }])
+
+  const resumen = await recalcularJornadas({ desde: '2026-09-12', hasta: '2026-09-15' })
+
+  assert.equal(resumen.desde, '2026-09-12')
+  assert.equal(resumen.hasta, '2026-09-15')
+  assert.equal(resumen.diasMirados, 4, 'los dos extremos incluidos')
+  assert.equal(jornadaDe('paternina'), 'TARDE')
+})
+
+test('un periodo al reves se rechaza en vez de mirar cero dias', async () => {
+  // Devolviendo una lista vacia, la pantalla diria "no hubo nada que cambiar"
+  // y quien lo pidio se quedaria creyendo que el catalogo ya estaba bien.
+  await assert.rejects(
+    () => recalcularJornadas({ desde: '2026-09-15', hasta: '2026-09-12' }),
+    /terminar despues de empezar/i,
+  )
 })
 
 test('la carga solo opina de los doctores que trae el archivo', async () => {

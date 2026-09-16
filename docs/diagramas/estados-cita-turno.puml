@@ -1,0 +1,56 @@
+@startuml EstadosCitaTurno
+
+title Estados de la cita y estados del turno\nQue lleva cada sistema
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Segoe UI
+skinparam defaultFontSize 13
+skinparam ArrowColor #4A5A55
+skinparam ArrowFontColor #4A5A55
+skinparam ArrowFontSize 11
+skinparam NoteBackgroundColor #FFF6DD
+skinparam NoteBorderColor #B8860B
+skinparam NoteFontSize 11
+skinparam state {
+  BorderColor #4A5A55
+  FontSize 13
+}
+
+state "ESTADO DE LA CITA   —   lo lleva SALUD PLUS" as CITA #F2F7FB {
+  state "PROGRAMADA"   as C1 #D6E6F5
+  state "PRESENTADO"   as C2 #D6E6F5
+  state "ATENDIDA"     as C3 #D6E6F5
+  state "CANCELADA"    as C4 #F7D9D5
+  state "INASISTENCIA" as C5 #F7D9D5
+
+  [*] --> C1  : se agenda la cita
+  C1  --> C2  : admisiones registra la llegada
+  C2  --> C3  : termina la atencion
+  C1  --> C4  : se cancela en Salud Plus
+  C1  --> C5  : cierra el dia sin registro de llegada
+}
+
+state "ESTADO DEL TURNO   —   lo lleva el SISTEMA DE TURNOS" as TURNO #F1F9F4 {
+  state "EN_ESPERA"   as T1 #D9EFE2
+  state "LLAMADO"     as T2 #D9EFE2
+  state "EN_ATENCION" as T3 #D9EFE2
+  state "ATENDIDO"    as T4 #D9EFE2
+  state "AUSENTE"     as T5 #F7D9D5
+
+  T1 --> T2 : el medico pulsa "Siguiente"
+  T2 --> T2 : repetir el llamado
+  T2 --> T3 : el paciente entra al consultorio
+  T2 --> T5 : no responde al llamado
+  T3 --> T4 : se cierra la atencion
+}
+
+C2 -[#1F7A54,bold]-> T1 : **genera el turno**\n(fecha_hora_llegada)
+
+note bottom of TURNO
+  Unico punto de contacto entre las dos cadenas.
+  Estos estados NO se escriben de vuelta en Salud Plus:
+  el acceso solicitado es de solo lectura.
+end note
+
+@enduml
