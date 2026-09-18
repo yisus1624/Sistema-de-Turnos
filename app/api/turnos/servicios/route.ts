@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion, requireSession } from '@/lib/permissions/session'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 
 /**
  * Catalogo de servicios para las pantallas internas.
@@ -52,7 +54,7 @@ const servicioSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireSeccion('/admin/servicios')
+    const session = await requireSeccion('/admin/servicios')
 
     const body = await request.json().catch(() => null)
     const parsed = servicioSchema.safeParse(body)
@@ -61,6 +63,18 @@ export async function POST(request: Request) {
     }
 
     const servicio = await turnoRepository.crearServicio(parsed.data)
+
+    const { ip } = await contextoPeticion()
+    await registrarEvento({
+      tipo: EVENTOS.SERVICIO_CREADO,
+      exito: true,
+      usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
+      identificador: servicio.nombre,
+      ip,
+      detalle: { prefijo: servicio.prefijo, modoFila: servicio.modoFila },
+    })
+
     return NextResponse.json({ servicio })
   } catch (error) {
     return apiError(error)

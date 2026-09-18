@@ -17,6 +17,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { recalcularJornadas } from '@/lib/citas/jornadas'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { diaColombia, ahoraISO, esFechaValida } from '@/lib/turnos/tiempo'
@@ -28,7 +29,11 @@ const periodo = z.object({
 
 export async function GET(request: Request) {
   try {
-    await requireSeccion('/admin/profesionales')
+    // Tambien desde Enlaces de consultorio: ahi se reparte el enlace al doctor
+    // que llega a su turno, y para eso hay que saber quien trabaja hoy. Es una
+    // consulta de solo lectura y no da acceso al catalogo, que es lo que
+    // separa esa pantalla de Profesionales.
+    await requireSeccion('/admin/profesionales', '/admin/enlaces')
 
     const pedida = new URL(request.url).searchParams.get('fecha')
     if (pedida && !esFechaValida(pedida)) {
@@ -69,10 +74,11 @@ export async function POST(request: Request) {
     // sobre que periodo, y el antes y el despues de cada uno: con solo el
     // despues no se puede deshacer a mano lo que salio mal.
     const { ip } = await contextoPeticion()
-    registrarEvento({
-      tipo: 'profesionales.jornadas.recalculadas',
+    await registrarEvento({
+      tipo: EVENTOS.JORNADAS_RECALCULADAS,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       ip,
       detalle: {
         periodo: `${resumen.desde} a ${resumen.hasta}`,

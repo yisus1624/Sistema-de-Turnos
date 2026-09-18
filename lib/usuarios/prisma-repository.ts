@@ -13,7 +13,7 @@
  * (`lib/hospital/README.md`); cuando lo haga se escribe el adaptador y la UI
  * no cambia, porque las tres implementaciones cumplen el mismo contrato.
  */
-import bcrypt from 'bcryptjs'
+import { cifrarContrasena, contrasenaCoincide } from './contrasenas'
 import { prisma } from '@/lib/prisma'
 import { errorDeNegocio } from '@/lib/turnos/errores'
 import type { UsuarioRepository } from './repository'
@@ -72,7 +72,7 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
   async verificarCredenciales(usuario: string, password: string): Promise<Usuario | null> {
     const registro = await prisma.usuario.findUnique({ where: { usuario: normalizarUsuario(usuario) } })
     if (!registro || !registro.activo) return null
-    if (!bcrypt.compareSync(password, registro.passwordHash)) return null
+    if (!(await contrasenaCoincide(password, registro.passwordHash))) return null
     return aUsuario(registro)
   }
 
@@ -108,7 +108,7 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
         rol: datos.rol,
         area: datos.area ?? null,
         activo: datos.activo ?? true,
-        passwordHash: bcrypt.hashSync(datos.password, 10),
+        passwordHash: await cifrarContrasena(datos.password),
         // Un administrador siempre ve todo: el campo solo aplica a OPERADOR.
         // Sin esto se podia crear por API un administrador con una lista
         // recortada (o vacia), y ese usuario quedaba sin una sola pantalla a la
@@ -148,7 +148,7 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
     if (datos.rol !== undefined) cambios.rol = datos.rol
     if (datos.area !== undefined) cambios.area = datos.area ?? null
     if (datos.activo !== undefined) cambios.activo = datos.activo
-    if (datos.password) cambios.passwordHash = bcrypt.hashSync(datos.password, 10)
+    if (datos.password) cambios.passwordHash = await cifrarContrasena(datos.password)
     if (datos.secciones !== undefined) cambios.secciones = datos.secciones ?? []
 
     // Un administrador siempre ve todo; el campo solo aplica a OPERADOR.

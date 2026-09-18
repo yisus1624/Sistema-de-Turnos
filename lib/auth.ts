@@ -13,6 +13,7 @@ import CredentialsProvider from 'next-auth/providers/credentials'
 import { usuarioRepository } from '@/lib/usuarios/repositorio'
 import type { RolUsuario } from '@/lib/usuarios/types'
 import { contextoPeticion, limitarIntentos, limpiarIntentos, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 import { useSecureAuthCookies } from './auth-cookies'
 
 /**
@@ -69,9 +70,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const password = String(credentials?.password ?? '')
         const { ip } = await contextoPeticion()
 
-        function rechazar(motivo: string) {
-          registrarEvento({
-            tipo: 'INICIO_SESION',
+        async function rechazar(motivo: string) {
+          await registrarEvento({
+            tipo: EVENTOS.INICIO_SESION,
             exito: false,
             identificador: usuario || null,
             ip,
@@ -80,7 +81,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null
         }
 
-        if (!usuario || !password) return rechazar('credenciales_incompletas')
+        if (!usuario || !password) return await rechazar('credenciales_incompletas')
 
         // El limite por IP solo se aplica si la IP es de fiar, es decir si hay
         // un proxy declarado delante (ver `contextoPeticion`). Sin proxy, la IP
@@ -91,11 +92,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // fuerza bruta, se aplica siempre.
         if (ip) {
           const porIp = limitarIntentos('login_ip', ip, 20, 15 * 60 * 1000)
-          if (!porIp.permitido) return rechazar('demasiados_intentos_ip')
+          if (!porIp.permitido) return await rechazar('demasiados_intentos_ip')
         }
 
         const porUsuario = limitarIntentos('login_usuario', usuario, 8, 15 * 60 * 1000)
-        if (!porUsuario.permitido) return rechazar('demasiados_intentos_usuario')
+        if (!porUsuario.permitido) return await rechazar('demasiados_intentos_usuario')
 
         let encontrado
         try {
@@ -104,8 +105,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // No se registra como credencial fallida: el funcionario no se
           // equivoco en nada, fallo el sistema. Contarlo ademas dejaria la
           // cuenta bloqueada por fuerza bruta despues de una caida de base.
-          registrarEvento({
-            tipo: 'INICIO_SESION',
+          await registrarEvento({
+            tipo: EVENTOS.INICIO_SESION,
             exito: false,
             identificador: usuario,
             ip,
@@ -117,17 +118,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           throw new FuenteUsuariosNoDisponible()
         }
 
-        if (!encontrado) return rechazar('credenciales_invalidas')
+        if (!encontrado) return await rechazar('credenciales_invalidas')
 
         // Entro bien: se le borra la cuenta de intentos. El limite tiene que
         // contar FALLOS, no usos, o un mostrador compartido se bloquea solo.
         limpiarIntentos('login_usuario', usuario)
         if (ip) limpiarIntentos('login_ip', ip)
 
-        registrarEvento({
-          tipo: 'INICIO_SESION',
+        await registrarEvento({
+          tipo: EVENTOS.INICIO_SESION,
           exito: true,
           usuarioId: encontrado.id,
+          usuarioNombre: encontrado.nombre,
           identificador: encontrado.usuario,
           ip,
         })

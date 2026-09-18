@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { errorConsultorio, requireProfesionalPorToken } from '@/lib/turnos/acceso-consultorio'
+import { registrarLlamado } from '@/lib/turnos/rastro-llamado'
 
 const bodySchema = z.object({
   moduloId: z.string().min(1, 'Debes indicar el consultorio.'),
@@ -28,6 +29,10 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     if (!turno) {
       return NextResponse.json({ error: 'No hay pacientes en espera.' }, { status: 404 })
     }
+
+    // El doctor entra por enlace y no tiene cuenta: queda su nombre en el
+    // detalle, igual que en el cierre del turno.
+    await registrarLlamado(turno)
 
     return NextResponse.json({ turno })
   } catch (error) {

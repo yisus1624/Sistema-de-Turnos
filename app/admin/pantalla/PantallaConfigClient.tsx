@@ -15,14 +15,15 @@ import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import { sonarCampana } from '@/lib/turnos/anuncio'
-import type { ConfiguracionSistema } from '@/lib/turnos/types'
+import { franjasDeJornada } from '@/lib/turnos/tiempo'
+import type { ConfiguracionGuardada, ConfiguracionSistema } from '@/lib/turnos/types'
 
 export default function PantallaConfigClient() {
-  const [configuracion, setConfiguracion] = useState<ConfiguracionSistema | null>(null)
+  const [configuracion, setConfiguracion] = useState<ConfiguracionGuardada | null>(null)
   const [guardando, setGuardando] = useState(false)
 
   useEffect(() => {
-    pedir<{ configuracion: ConfiguracionSistema }>('/api/turnos/configuracion')
+    pedir<{ configuracion: ConfiguracionGuardada }>('/api/turnos/configuracion')
       .then((data) => setConfiguracion(data.configuracion))
       .catch((error) => toast.error('No se pudo cargar la configuracion', mensajeDeError(error)))
   }, [])
@@ -33,7 +34,14 @@ export default function PantallaConfigClient() {
 
     setGuardando(true)
     try {
-      await pedir('/api/turnos/configuracion', { method: 'PUT', body: JSON.stringify(configuracion) })
+      // La respuesta trae la configuracion recien guardada, con su marca nueva:
+      // se adopta para que el siguiente guardado de esta misma pantalla no
+      // parezca el de alguien que trabaja sobre una version vieja.
+      const guardada = await pedir<{ configuracion: ConfiguracionGuardada }>(
+        '/api/turnos/configuracion',
+        { method: 'PUT', body: JSON.stringify(configuracion) },
+      )
+      setConfiguracion(guardada.configuracion)
       toast.success('Configuracion guardada', 'La pantalla toma los cambios en su proximo llamado.')
     } catch (error) {
       toast.error('No se pudo guardar', mensajeDeError(error))
@@ -47,22 +55,16 @@ export default function PantallaConfigClient() {
   }
 
   /**
-   * Cuantas consultas caben en una jornada, con la misma regla que usa el
-   * servidor: la ultima tiene que terminar antes del cierre. Es solo una vista
-   * previa para que el administrador vea el efecto de lo que esta cambiando
-   * antes de guardar; la parrilla real la arma `horarioDelDia`.
+   * Cuantas consultas caben en una jornada.
+   *
+   * LO CUENTA LA REGLA DEL DOMINIO, no una copia. Esta cuenta estaba rehecha a
+   * mano aqui, y el dia que cambiara la regla del servidor esta pantalla —justo
+   * donde el administrador decide el horario del hospital— le habria dicho "20
+   * cupos al dia" mientras la agenda real abria otros. `franjasDeJornada` es
+   * pura, asi que se puede llamar igual desde el navegador.
    */
   function cuposDe(desde: string, hasta: string, duracion: number) {
-    const minutos = (hora: string) => {
-      const partes = /^(\d{1,2}):(\d{2})$/.exec(hora ?? '')
-      return partes ? Number(partes[1]) * 60 + Number(partes[2]) : Number.NaN
-    }
-
-    const inicio = minutos(desde)
-    const fin = minutos(hasta)
-    if (!Number.isFinite(inicio) || !Number.isFinite(fin) || duracion < 1) return 0
-
-    return Math.max(0, Math.floor((fin - inicio) / duracion))
+    return franjasDeJornada(desde, hasta, duracion).length
   }
 
   if (!configuracion) {

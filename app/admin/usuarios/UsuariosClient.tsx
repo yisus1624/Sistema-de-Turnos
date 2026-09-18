@@ -50,7 +50,62 @@ const gruposDePermisos = catalogoSecciones.reduce<Array<{ grupo: string; items: 
   [],
 )
 
-const COLUMNAS = ['Nombre', 'Usuario', 'Rol', 'Area', 'Creado', 'Estado']
+const COLUMNAS = ['Nombre', 'Usuario', 'Rol', 'Acceso', 'Area', 'Creado', 'Estado']
+
+/** href -> como se llama la seccion en el menu. */
+const etiquetaDeSeccion = new Map(catalogoSecciones.map((seccion) => [seccion.href, seccion.label]))
+
+/** Cuantas secciones se nombran en la tabla antes de resumir el resto. */
+const SECCIONES_VISIBLES = 3
+
+/** Una linea que dice a que queda entrando el funcionario. */
+function resumenDeAcceso(formulario: Formulario) {
+  if (formulario.rol === 'ADMINISTRADOR') return 'acceso a todo el sistema'
+  if (!formulario.secciones) return 'todas las secciones de operador'
+  return `${formulario.secciones.length} seccion(es)`
+}
+
+/**
+ * Que puede usar cada funcionario, en la tabla.
+ *
+ * FALTABA, Y ESO HACIA PARECER QUE NADIE TENIA PERMISOS RECORTADOS. La lista
+ * solo mostraba el rol y la columna "Estado" —que es si la cuenta esta
+ * habilitada, no a que entra—, asi que dos operadores con accesos distintos se
+ * veian exactamente igual: despues de guardar no habia forma de comprobar que
+ * lo elegido se hubiera aplicado, y lo razonable era suponer que no.
+ */
+function Acceso({ usuario }: { usuario: Usuario }) {
+  if (usuario.rol === 'ADMINISTRADOR') {
+    return <span className="text-sm font-semibold text-slate-500">Todo el sistema</span>
+  }
+
+  if (!usuario.secciones || usuario.secciones.length === 0) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <Badge tone="slate">Su rol</Badge>
+        <span className="text-xs font-semibold text-slate-400">
+          las {seccionesDelRol('OPERADOR').length} secciones de operador
+        </span>
+      </div>
+    )
+  }
+
+  const nombres = usuario.secciones.map((href) => etiquetaDeSeccion.get(href) ?? href)
+  const visibles = nombres.slice(0, SECCIONES_VISIBLES)
+  const resto = nombres.length - visibles.length
+
+  return (
+    // El listado completo va en el `title`: en la tabla no caben seis nombres,
+    // pero quien quiera comprobarlos no deberia tener que abrir la ficha.
+    <div className="flex flex-col gap-0.5" title={nombres.join(', ')}>
+      <Badge tone="blue">{nombres.length} secciones</Badge>
+      <span className="text-xs font-semibold text-slate-400">
+        {visibles.join(', ')}
+        {resto > 0 ? ` y ${resto} mas` : ''}
+      </span>
+    </div>
+  )
+}
 
 const etiquetaRol: Record<RolUsuario, string> = {
   ADMINISTRADOR: 'Administrador',
@@ -63,7 +118,35 @@ function fechaCorta(iso: string) {
   )
 }
 
-export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: string }) {
+export default function UsuariosClient({
+  usuarioActualId,
+  esAdministrador,
+  seccionesPropias,
+}: {
+  usuarioActualId: string
+  esAdministrador: boolean
+  /** A que alcanza quien esta mirando. Es el tope de lo que puede repartir. */
+  seccionesPropias: string[]
+}) {
+  /**
+   * Las secciones que este funcionario PUEDE repartir.
+   *
+   * Un administrador reparte todo. A cualquier otro se le muestran solo las
+   * suyas, porque el servidor rechaza lo demas: ofrecerselo era hacerle
+   * rellenar la ficha entera para darle un error al guardar.
+   */
+  const gruposQuePuedeDar = esAdministrador
+    ? gruposDePermisos
+    : gruposDePermisos
+        .map(({ grupo, items }) => ({
+          grupo,
+          items: items.filter((item) => seccionesPropias.includes(item.href)),
+        }))
+        .filter(({ items }) => items.length > 0)
+
+  /** Cuantas hay para repartir, que es contra lo que se cuenta lo marcado. */
+  const seccionesRepartibles = gruposQuePuedeDar.flatMap(({ items }) => items)
+
   const [usuarios, setUsuarios] = useState<Usuario[]>([])
   const [cargando, setCargando] = useState(true)
   const [abierto, setAbierto] = useState(false)
@@ -130,13 +213,19 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
         if (formulario.password) cuerpo.password = formulario.password
 
         await pedir(`/api/usuarios/${editando.id}`, { method: 'PATCH', body: JSON.stringify(cuerpo) })
-        toast.success('Usuario actualizado', formulario.nombre)
+        // El aviso dice QUE QUEDO GUARDADO, no solo que se guardo: los permisos
+        // son lo que mas se revisa dos veces, y confirmarlos aqui evita tener
+        // que volver a abrir la ficha para comprobarlo.
+        toast.success('Usuario actualizado', `${formulario.nombre} · ${resumenDeAcceso(formulario)}`)
       } else {
         await pedir('/api/usuarios', {
           method: 'POST',
           body: JSON.stringify({ ...formulario, area: formulario.area || null, secciones }),
         })
-        toast.success('Usuario creado', `${formulario.nombre} ya puede iniciar sesion.`)
+        toast.success(
+          'Usuario creado',
+          `${formulario.nombre} ya puede iniciar sesion, con ${resumenDeAcceso(formulario)}.`,
+        )
       }
       setAbierto(false)
       await cargar()
@@ -193,6 +282,9 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
                       <Badge tone={usuario.rol === 'ADMINISTRADOR' ? 'blue' : 'slate'}>
                         {etiquetaRol[usuario.rol]}
                       </Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Acceso usuario={usuario} />
                     </td>
                     <td className="px-4 py-3 text-slate-600">{usuario.area ?? '—'}</td>
                     <td className="px-4 py-3 text-slate-500">{fechaCorta(usuario.fechaCreacion)}</td>
@@ -283,7 +375,14 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
                       ...f,
                       // Al pasar a manual, se parte de las secciones propias de
                       // su rol: quitarle todo de golpe seria un mal comienzo.
-                      secciones: valor ? null : seccionesDelRol('OPERADOR').map((s) => s.href),
+                      // Pero solo las que quien edita puede repartir, o el
+                      // formulario arrancaria ya con algo que el servidor va a
+                      // rechazar al guardar.
+                      secciones: valor
+                        ? null
+                        : seccionesDelRol('OPERADOR')
+                            .map((s) => s.href)
+                            .filter((href) => esAdministrador || seccionesPropias.includes(href)),
                     }))
                   }
                   etiqueta="Secciones de operador por defecto"
@@ -296,7 +395,27 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
                 </p>
               ) : (
                 <div className="mt-3 space-y-3">
-                  {gruposDePermisos.map(({ grupo, items }) => (
+                  {/*
+                    LO ELEGIDO, ARRIBA Y EN UNA LINEA. Con trece casillas
+                    repartidas en cuatro grupos, saber que quedo marcado obliga
+                    a recorrer la lista entera, y al volver a abrir la ficha
+                    para comprobar que se guardo pasa lo mismo. Aqui se lee de
+                    un vistazo, antes de guardar y despues.
+                  */}
+                  <div className="rounded-lg bg-slate-50 px-3 py-2">
+                    <p className="text-xs font-black text-brand-900">
+                      {formulario.secciones.length} de {seccionesRepartibles.length} secciones marcadas
+                    </p>
+                    <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                      {formulario.secciones.length === 0
+                        ? 'Marca al menos una: sin ninguna, el funcionario entra y no tiene a donde ir.'
+                        : formulario.secciones
+                            .map((href) => etiquetaDeSeccion.get(href) ?? href)
+                            .join(' · ')}
+                    </p>
+                  </div>
+
+                  {gruposQuePuedeDar.map(({ grupo, items }) => (
                     <div key={grupo}>
                       <p className="mb-1.5 text-[11px] font-black uppercase tracking-wide text-slate-400">
                         {grupo}
@@ -316,9 +435,19 @@ export default function UsuariosClient({ usuarioActualId }: { usuarioActualId: s
                                 onChange={(e) =>
                                   setFormulario((f) => {
                                     const actuales = f.secciones ?? []
-                                    const siguientes = e.target.checked
-                                      ? [...actuales, item.href]
-                                      : actuales.filter((href) => href !== item.href)
+                                    // Se rehace en el ORDEN DEL CATALOGO, no en
+                                    // el orden en que se fue marcando: asi el
+                                    // resumen y la tabla nombran las secciones
+                                    // como estan en el menu, y no en un orden
+                                    // que depende de por donde empezo cada
+                                    // administrador.
+                                    const siguientes = catalogoSecciones
+                                      .map((seccion) => seccion.href)
+                                      .filter((href) =>
+                                        href === item.href
+                                          ? e.target.checked
+                                          : actuales.includes(href),
+                                      )
                                     return { ...f, secciones: siguientes }
                                   })
                                 }

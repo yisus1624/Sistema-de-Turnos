@@ -125,7 +125,7 @@ test('la configuracion se guarda parcialmente', async () => {
   assert.equal(guardada.mensajePie, 'Hola')
   // Lo que no se envia no se pierde.
   assert.equal(guardada.audioActivo, inicial.audioActivo)
-  assert.equal(guardada.ultimosVisibles, inicial.ultimosVisibles)
+  assert.equal(guardada.duracionCitaMinutos, inicial.duracionCitaMinutos)
 })
 
 // El catalogo de ejemplo ya no trae filas de ventanilla (el hospital atiende

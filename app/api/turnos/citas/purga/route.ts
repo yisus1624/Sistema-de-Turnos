@@ -14,12 +14,12 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { limiteDeRetencion, previsualizarPurga, purgarDatosDePacientes } from '@/lib/citas/purga'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 import { apiError, requireRol } from '@/lib/permissions/session'
-import { prisma } from '@/lib/prisma'
 import { esFechaValida } from '@/lib/turnos/tiempo'
 
-/** Tipo del apunte. Se usa dos veces: en memoria y en la base. */
-const EVENTO = 'citas.datos.purgados'
+/** Tipo del apunte en el registro de actividad. */
+const EVENTO = EVENTOS.CITAS_DATOS_PURGADOS
 
 const cuerpo = z.object({
   limite: z.string().refine(esFechaValida, 'La fecha limite no es valida.'),
@@ -74,43 +74,24 @@ export async function POST(request: Request) {
       citas: resumen.citas,
       turnos: resumen.turnos,
     }
-    registrarEvento({
+    await registrarEvento({
       tipo: EVENTO,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: resumen.limite,
       ip,
       detalle,
     })
 
-    // Y ADEMAS A LA BASE DE DATOS, que es la excepcion y no la regla.
+    // Ya no se apunta aparte en la base.
     //
-    // `registrarEvento` guarda en memoria del proceso y se pierde al reiniciar
-    // (ver `lib/seguridad/registro.ts`: es temporal, a la espera de la fuente
-    // del hospital). Para casi todo el registro eso es un limite conocido; para
-    // esta operacion no puede serlo. Es la unica accion del sistema que no se
-    // deshace, y un reinicio no puede dejar al hospital sin forma de saber que
-    // alguien anonimizo medio año de agenda, cuando ni con que limite.
-    //
-    // Se hace aparte y no dentro de `registrarEvento` a proposito: llevar el
-    // registro entero a la base es un cambio con sus propias decisiones
-    // (cuanto se conserva, si la IP y el documento del paciente deben quedar
-    // escritos para siempre) y no algo que deba colarse aqui.
-    try {
-      await prisma.eventoSeguridad.create({
-        data: {
-          tipo: EVENTO,
-          exito: true,
-          usuarioId: session.user.id,
-          identificador: resumen.limite,
-          ip,
-          detalle,
-        },
-      })
-    } catch (fallo) {
-      // Que no se pueda apuntar no deshace lo ya hecho: se avisa y se sigue.
-      console.error('[purga] no se pudo guardar el apunte en la base', fallo)
-    }
+    // Antes esta ruta escribia ADEMAS su propia fila en `eventos_seguridad`,
+    // porque `registrarEvento` guardaba en memoria y esta es la unica accion
+    // del sistema que no se deshace: un reinicio no podia dejar al hospital sin
+    // forma de saber que alguien anonimizo medio año de agenda. Ahora el
+    // registro entero se guarda, asi que ese apunte doble solo dejaria la
+    // misma purga escrita dos veces en la pantalla.
 
     return NextResponse.json(resumen)
   } catch (error) {

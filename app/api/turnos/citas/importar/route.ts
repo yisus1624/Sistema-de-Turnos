@@ -16,6 +16,8 @@ import { NextResponse } from 'next/server'
 import { importarReporteDeCitas } from '@/lib/citas/importar-reporte'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento, contextoPeticion } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
+import { detalleDeImportacion } from '@/lib/citas/rastro-importacion'
 
 /**
  * Tope del archivo.
@@ -58,23 +60,17 @@ export async function POST(request: Request) {
     // ve todo el hospital, y es de las pocas acciones donde hay que poder
     // responder despues quien la hizo y a que hora.
     const { ip } = await contextoPeticion()
-    registrarEvento({
-      tipo: 'citas.importadas',
+    await registrarEvento({
+      tipo: EVENTOS.CITAS_IMPORTADAS,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: archivo.name,
       ip,
-      detalle: {
-        creadas: resumen.creadas,
-        actualizadas: resumen.actualizadas,
-        omitidas: resumen.omitidas,
-        errores: resumen.errores.length,
-        fechas: resumen.fechas,
-        // Cambiarle la jornada a un doctor cambia en que parte de la parrilla
-        // sale y a que horas se le puede agendar: tiene que quedar por escrito
-        // quien lo provoco y cuando, aunque lo dedujera el sistema.
-        jornadasAjustadas: resumen.jornadasAjustadas.map((a) => `${a.nombre}: ${a.jornada}`),
-      },
+      // El catalogo que la carga crea sola y las jornadas que corrige —con su
+      // valor anterior— van en el detalle: son cambios que hizo el sistema, no
+      // una persona, y son los que despues nadie sabe de donde salieron.
+      detalle: detalleDeImportacion(resumen),
     })
 
     return NextResponse.json(resumen)

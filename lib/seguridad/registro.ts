@@ -4,57 +4,44 @@
  * Cubre dos cosas: limitar los intentos de inicio de sesion y dejar un
  * "registro de actividades importantes".
  *
- * TEMPORAL: ambas cosas viven en memoria del proceso, igual que el resto de la
- * capa de datos, porque el sistema todavia no tiene una fuente persistente
- * (ver `lib/hospital/README.md`). Cuando se defina, el registro deberia
- * enviarse a esa fuente sin cambiar quien lo llama.
+ * EL REGISTRO SE GUARDA EN LA BASE. Antes vivia en un arreglo en memoria del
+ * proceso: se perdia entero en cada reinicio y en cada despliegue, y en un
+ * servidor con varias instancias cada una llevaba su propia lista, asi que la
+ * pantalla mostraba un trozo distinto segun a cual le tocara responder. Un
+ * registro de auditoria que desaparece al reiniciar no sirve para lo que
+ * existe: contestar quien hizo que, y cuando, semanas despues.
+ *
+ * El limite de intentos SI sigue en memoria, y ahi esta bien: es una ventana de
+ * minutos contra la fuerza bruta, no un dato que haya que conservar.
  */
 import { headers } from 'next/headers'
+import { prisma } from '@/lib/prisma'
+import { esFechaValida, instanteDeFranja } from '@/lib/turnos/tiempo'
+import type { EventoSeguridad, FiltroEventos } from './tipos'
 
-export interface EventoSeguridad {
-  fecha: string
-  tipo: string
-  exito: boolean
-  usuarioId?: string | null
-  identificador?: string | null
-  ip?: string | null
-  detalle?: Record<string, unknown>
-}
+export type { EventoSeguridad, FiltroEventos } from './tipos'
 
 /**
- * Cuantos eventos se conservan.
+ * Tope de lo que devuelve una consulta.
  *
- * Eran 500, y con eso no alcanzaba ni para un dia: entre citas, llegadas y
- * cierres, un hospital que atiende un par de cientos de pacientes barria el
- * registro antes de cerrar la jornada, y con el se iban los intentos de entrada
- * fallidos, que es lo que de verdad hay que poder revisar despues.
- *
- * NO SE AUDITA cada llamado ni cada repeticion: eso ya queda entero en el
- * propio turno (quien llamo, a que hora, cuantas veces, quien lo cerro), y
- * apuntarlo aqui solo serviria para desplazar lo demas.
- *
- * TEMPORAL, como el resto de la capa de datos: esto vive en memoria y se pierde
- * al reiniciar. Un registro de auditoria de verdad tiene que ir a la fuente
- * persistente del hospital (ver `lib/hospital/README.md`); mientras tanto, el
- * tope solo evita que el proceso crezca sin limite.
+ * El registro ya no se recorta al guardar —la base se queda con todo, que es
+ * de lo que se trata—, asi que el limite solo protege a la pantalla de pedir
+ * medio año de actividad en una sola tabla.
  */
-const MAX_EVENTOS = 5000
+const MAXIMO_POR_CONSULTA = 1000
 
 declare global {
-  var __turnosEventosSeguridad: EventoSeguridad[] | undefined
   var __turnosIntentos: Map<string, { conteo: number; expiraEn: number }> | undefined
 }
 
-const eventos: EventoSeguridad[] = globalThis.__turnosEventosSeguridad ?? []
 const intentos: Map<string, { conteo: number; expiraEn: number }> =
   globalThis.__turnosIntentos ?? new Map()
 
-// Se guardan SIEMPRE, tambien en produccion. Antes solo en desarrollo, y eso
+// Se guarda SIEMPRE, tambien en produccion. Antes solo en desarrollo, y eso
 // dejaba el limite de intentos sin efecto donde de verdad importa: si Next
 // evalua este modulo en otro contexto, el contador de intentos fallidos
 // arranca de cero y la proteccion contra fuerza bruta del inicio de sesion
 // deja de contar.
-globalThis.__turnosEventosSeguridad = eventos
 globalThis.__turnosIntentos = intentos
 
 /**
@@ -99,10 +86,20 @@ export async function contextoPeticion() {
   return { ip, agente }
 }
 
-export function registrarEvento(evento: Omit<EventoSeguridad, 'fecha'>) {
-  eventos.unshift({ ...evento, fecha: new Date().toISOString() })
-  if (eventos.length > MAX_EVENTOS) eventos.length = MAX_EVENTOS
-
+/**
+ * Deja constancia de una accion.
+ *
+ * HAY QUE ESPERARLA. Es `async` porque escribe en la base, y quien la llama
+ * tiene que hacer `await`: en un servidor sin estado la peticion puede
+ * terminar antes de que salga la escritura, y el evento que se pierde es justo
+ * el de la accion que alguien va a tener que explicar despues.
+ *
+ * NO TUMBA LA ACCION QUE AUDITA. Si la base falla al guardar el apunte, se
+ * grita por consola con el evento entero —que al menos queda en el registro del
+ * servidor— pero no se lanza el error: que no se pueda escribir la bitacora no
+ * puede impedir que se registre la llegada de un paciente.
+ */
+export async function registrarEvento(evento: Omit<EventoSeguridad, 'fecha'>) {
   if (!evento.exito) {
     console.warn('[seguridad]', evento.tipo, {
       identificador: evento.identificador,
@@ -110,10 +107,80 @@ export function registrarEvento(evento: Omit<EventoSeguridad, 'fecha'>) {
       ...evento.detalle,
     })
   }
+
+  try {
+    await prisma.eventoSeguridad.create({
+      data: {
+        tipo: evento.tipo,
+        exito: evento.exito,
+        usuarioId: evento.usuarioId ?? null,
+        usuarioNombre: evento.usuarioNombre ?? null,
+        identificador: evento.identificador ?? null,
+        ip: evento.ip ?? null,
+        detalle: (evento.detalle ?? undefined) as never,
+      },
+    })
+  } catch (error) {
+    console.error('[seguridad] no se pudo guardar el evento', evento, error)
+  }
 }
 
-export function listarEventos(limite = 100): EventoSeguridad[] {
-  return eventos.slice(0, limite)
+const UN_DIA_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Los dos extremos de un dia de Colombia, como instantes.
+ *
+ * La columna guarda un instante, no un dia. Comparando contra la medianoche
+ * del servidor, un equipo en otra zona partiria los dias por donde no es y la
+ * actividad de la tarde saldria fechada al dia siguiente.
+ */
+function rangoDelDia(dia: string) {
+  const inicio = new Date(instanteDeFranja(dia, '00:00'))
+  return { gte: inicio, lt: new Date(inicio.getTime() + UN_DIA_MS) }
+}
+
+/** Lee el registro, opcionalmente acotado a un dia, un tipo o solo los fallos. */
+export async function listarEventos(filtro: FiltroEventos = {}): Promise<EventoSeguridad[]> {
+  const limite = Math.min(Math.max(filtro.limite ?? 200, 1), MAXIMO_POR_CONSULTA)
+
+  const filas = await prisma.eventoSeguridad.findMany({
+    where: {
+      ...(filtro.tipo ? { tipo: filtro.tipo } : {}),
+      ...(filtro.soloFallidos ? { exito: false } : {}),
+      ...(filtro.fecha && esFechaValida(filtro.fecha) ? { fecha: rangoDelDia(filtro.fecha) } : {}),
+    },
+    orderBy: { fecha: 'desc' },
+    take: limite,
+  })
+
+  return filas.map((fila) => ({
+    fecha: fila.fecha.toISOString(),
+    tipo: fila.tipo,
+    exito: fila.exito,
+    usuarioId: fila.usuarioId,
+    usuarioNombre: fila.usuarioNombre,
+    identificador: fila.identificador,
+    ip: fila.ip,
+    detalle: (fila.detalle as Record<string, unknown> | null) ?? undefined,
+  }))
+}
+
+/**
+ * Los tipos de evento que hay guardados, para llenar el selector de la
+ * pantalla.
+ *
+ * Se preguntan a la base y no se sacan de la pagina que se esta viendo: con
+ * los tipos deducidos de los ultimos doscientos eventos, filtrar por "cita
+ * cancelada" era imposible los dias en que no se habia cancelado ninguna
+ * todavia, que es justo cuando se busca.
+ */
+export async function tiposDeEvento(): Promise<string[]> {
+  const filas = await prisma.eventoSeguridad.findMany({
+    distinct: ['tipo'],
+    select: { tipo: true },
+    orderBy: { tipo: 'asc' },
+  })
+  return filas.map((f) => f.tipo)
 }
 
 /**

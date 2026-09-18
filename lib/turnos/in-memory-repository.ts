@@ -15,9 +15,11 @@
  * no hay ni debe haber datos reales de pacientes en el repositorio.
  */
 import { createHash, randomBytes } from 'node:crypto'
+import { CONFIGURACION_INICIAL } from './configuracion-inicial'
 import { MINUTOS_ACCESO_MAXIMO, MINUTOS_ACCESO_MINIMO } from './repository'
 import type { TurnoRepository } from './repository'
 import type {
+  ActividadCatalogo,
   AccesoProfesional,
   BloqueHorario,
   CasillaPantalla,
@@ -25,9 +27,11 @@ import type {
   CitaEnHorario,
   ColumnaHorario,
   ComprobanteLlegada,
+  ConfiguracionGuardada,
   ConfiguracionSistema,
   HorarioDia,
   EstadisticasDia,
+  EstadoPantalla,
   EstadoAgendaItem,
   FiltroHistorico,
   ItemAgendaProfesional,
@@ -40,6 +44,10 @@ import type {
 } from './types'
 import { errorDeNegocio } from './errores'
 import { ordenAtencion, resumir } from './estadisticas'
+import { reunirActividad } from './actividad'
+import { modulosVisiblesEnPantalla } from './casillas'
+import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
+import { exigirConfiguracionAlDia, marcaSiguiente } from './configuracion-version'
 import {
   ETIQUETA_JORNADA,
   ahoraISO,
@@ -63,27 +71,13 @@ interface EstadoMemoria {
   citas: Cita[]
   turnos: Turno[]
   contadores: Record<string, number>
-  configuracion: ConfiguracionSistema
+  configuracion: ConfiguracionGuardada
   /**
    * Solo se guarda el hash del token, nunca el token en claro (seccion 17:
    * minimizar datos sensibles; un enlace filtrado del estado no sirve para
    * entrar).
    */
   accesosProfesional: Array<AccesoProfesional & { tokenHash: string }>
-}
-
-const CONFIGURACION_INICIAL: ConfiguracionSistema = {
-  audioActivo: true,
-  volumen: 1,
-  ultimosVisibles: 5,
-  mensajePie: 'Bienvenido a la ESE Hospital San Rafael de Chinu. Por favor espere a ser llamado.',
-  // Jornadas y duracion de consulta tipicas del hospital. El administrador las
-  // cambia desde "Pantalla y audio"; de aqui sale la parrilla del horario.
-  duracionCitaMinutos: 15,
-  jornadaMananaInicio: '07:00',
-  jornadaMananaFin: '12:00',
-  jornadaTardeInicio: '13:00',
-  jornadaTardeFin: '17:00',
 }
 
 function crearId() {
@@ -166,7 +160,7 @@ function sembrar(): EstadoMemoria {
     citas,
     turnos: [],
     contadores: {},
-    configuracion: { ...CONFIGURACION_INICIAL },
+    configuracion: { ...CONFIGURACION_INICIAL, actualizadoEn: ahoraISO() },
     accesosProfesional: [],
   }
 }
@@ -323,8 +317,13 @@ function jornadaActual(): 'MANANA' | 'TARDE' {
  * el de la jornada que corre; si ninguno encaja (por ejemplo fuera de horario)
  * se deja el primero activo, que es mejor que dejar la casilla sin nombre.
  */
-function profesionalDeTurnoEn(moduloId: string): Profesional | undefined {
-  const delModulo = estado.profesionales.filter((p) => p.activo && p.moduloId === moduloId)
+function profesionalDeTurnoEn(moduloId: string, soloEstos?: Set<string>): Profesional | undefined {
+  // `soloEstos` acota a los doctores que ese dia TIENEN pacientes: el medico
+  // que hoy no vino no puede rotular la puerta, o el paciente entra a preguntar
+  // por alguien que no esta.
+  const delModulo = estado.profesionales.filter(
+    (p) => p.activo && p.moduloId === moduloId && (!soloEstos || soloEstos.has(p.id)),
+  )
   if (delModulo.length <= 1) return delModulo[0]
 
   const bloque = jornadaActual()
@@ -645,7 +644,6 @@ function casillaDeTurno(turno: Turno): CasillaPantalla {
     servicioId: servicio.id,
     servicioNombre: servicio.nombre,
     profesionalNombre: profesional?.nombre ?? null,
-    turnoId: turno.id,
     codigo: turno.codigo,
     horaLlamado: turno.horaLlamado ?? null,
     vecesLlamado: turno.vecesLlamado,
@@ -779,10 +777,10 @@ export class InMemoryTurnoRepository implements TurnoRepository {
   async cancelarCita(citaId: string, datos: { usuarioId?: string; motivo?: string } = {}): Promise<Cita> {
     const cita = estado.citas.find((c) => c.id === citaId)
     if (!cita) errorDeNegocio('La cita indicada no existe.')
-    // Si el paciente ya llego, cancelarla dejaria un turno huerfano en la fila.
-    if (cita.estado === 'PRESENTADO') errorDeNegocio('El paciente ya registro su llegada; no se puede cancelar.')
-    if (cita.estado === 'CANCELADA') errorDeNegocio('Esta cita ya estaba cancelada.')
-    if (cita.estado === 'ATENDIDA') errorDeNegocio('Esta cita ya fue atendida; no se puede cancelar.')
+    // Los motivos viven en `cita-transiciones` porque la implementacion contra
+    // PostgreSQL tiene que dar exactamente los mismos avisos.
+    const impedimento = motivoQueImpideCancelar(cita.estado)
+    if (impedimento) errorDeNegocio(impedimento)
 
     cita.estado = 'CANCELADA'
     // Quien, cuando y por que. Antes cancelar dejaba el registro identico salvo
@@ -813,18 +811,8 @@ export class InMemoryTurnoRepository implements TurnoRepository {
   ): Promise<Cita> {
     const cita = estado.citas.find((c) => c.id === citaId)
     if (!cita) errorDeNegocio('La cita indicada no existe.')
-    if (cita.estado === 'CANCELADA') errorDeNegocio('La cita fue cancelada; no se puede reprogramar.')
-    if (cita.estado === 'ATENDIDA') errorDeNegocio('La cita ya fue atendida; no se puede reprogramar.')
-    if (cita.estado === 'PRESENTADO') {
-      // El paciente ya llego y su cita genero turno: esa cita ya se uso, y
-      // moverla dejaria el turno colgado de una hora que ya no existe. Vale
-      // tambien cuando el turno se cerro como AUSENTE, porque el turno sigue
-      // apuntando a esta cita en el historico. Para volver a citarlo se le
-      // agenda una cita nueva, que es lo que de verdad paso.
-      errorDeNegocio(
-        'Este paciente ya registro su llegada y su cita genero turno, asi que no se puede mover. Agendale una cita nueva.',
-      )
-    }
+    const impedimento = motivoQueImpideReprogramar(cita.estado)
+    if (impedimento) errorDeNegocio(impedimento)
 
     const profesional = buscarProfesional(datos.profesionalId ?? cita.profesionalId)
     if (!profesional.activo) errorDeNegocio('El profesional esta inactivo.')
@@ -1020,6 +1008,26 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     return jornadasSegunCitas(
       citas.map((c) => ({ profesionalId: c.profesionalId, hora: horaColombia(c.horaCita) })),
       estado.configuracion,
+    )
+  }
+
+  /** Ver `actividadDelCatalogo` en el contrato del repositorio. */
+  async actividadDelCatalogo(fecha: string): Promise<ActividadCatalogo> {
+    const citas = estado.citas.filter(
+      (c) => c.estado !== 'CANCELADA' && diaColombia(c.horaCita) === fecha,
+    )
+
+    // El consultorio sale del doctor, no de la cita: la cita guarda a quien
+    // atiende, y el consultorio es donde ese doctor esta puesto.
+    const moduloDelProfesional = new Map(estado.profesionales.map((p) => [p.id, p.moduloId ?? null]))
+
+    return reunirActividad(
+      fecha,
+      citas.map((cita) => ({
+        servicioId: cita.servicioId,
+        moduloId: moduloDelProfesional.get(cita.profesionalId) ?? null,
+        hora: horaColombia(cita.horaCita),
+      })),
     )
   }
 
@@ -1378,7 +1386,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
 
   // --- Pantalla de la sala de espera ---
 
-  async estadoPantalla(): Promise<CasillaPantalla[]> {
+  async estadoPantalla(): Promise<EstadoPantalla> {
     // SOLO turnos llamados HOY.
     //
     // Un turno queda en LLAMADO hasta que el doctor lo cierra, y al final de
@@ -1406,8 +1414,43 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       }
     }
 
-    return estado.modulos
-      .filter((m) => m.activo)
+    // QUE CONSULTORIOS SE VEN. El criterio vive en `./casillas`, puro y
+    // compartido con la implementacion contra Postgres: las dos cumplen el
+    // mismo contrato y tienen que mostrar lo mismo. Estuvo escrito solo en la
+    // otra, y esta se quedo enseñando una casilla por modulo activo; la prueba
+    // corria contra esta, asi que daba por bueno lo contrario de lo que hacia
+    // el hospital de verdad.
+    const modulosActivos = estado.modulos.filter((m) => m.activo)
+    const citasDeHoy = estado.citas.filter(
+      (c) => c.estado !== 'CANCELADA' && diaColombia(c.horaCita) === hoy,
+    )
+    // Las CANCELADAS tambien cuentan para saber si la agenda del dia se subio:
+    // ver la nota de `hayAgendaDelDia` en `./casillas`.
+    const citasRegistradasHoy = estado.citas.filter((c) => diaColombia(c.horaCita) === hoy).length
+    const moduloDelProfesional = new Map(estado.profesionales.map((p) => [p.id, p.moduloId ?? null]))
+    const profesionalesConCita = new Set(citasDeHoy.map((c) => c.profesionalId))
+
+    const visibles = modulosVisiblesEnPantalla({
+      modulos: modulosActivos.map((m) => ({ id: m.id, servicioId: m.servicioId ?? null })),
+      serviciosDeVentanilla: new Set(
+        estado.servicios.filter((s) => s.modoFila === 'COMPARTIDA').map((s) => s.id),
+      ),
+      conCitasHoy: new Set(
+        [...profesionalesConCita].map((id) => moduloDelProfesional.get(id)).filter(Boolean) as string[],
+      ),
+      conTurnosHoy: new Set(
+        estado.turnos
+          .filter((t) => t.moduloId && diaColombia(t.fechaGeneracion) === hoy)
+          .map((t) => t.moduloId!),
+      ),
+      conProfesionalAsignado: new Set(
+        estado.profesionales.filter((p) => p.activo && p.moduloId).map((p) => p.moduloId!) as string[],
+      ),
+      hayAgendaDelDia: citasRegistradasHoy > 0,
+    })
+
+    const casillas = modulosActivos
+      .filter((m) => visibles.has(m.id))
       .map((modulo) => {
         const turno = ultimoPorModulo.get(modulo.id)
 
@@ -1423,7 +1466,12 @@ export class InMemoryTurnoRepository implements TurnoRepository {
         // tarde; se cogia el primero de la lista, asi que el televisor mostraba
         // al de la mañana toda la tarde y el paciente entraba preguntando por un
         // doctor que ya se habia ido.
-        const profesional = profesionalDeTurnoEn(modulo.id)
+        // El dia sin agenda cargada es la excepcion: ahi nadie tiene citas, y
+        // recortar por ellas dejaria todas las puertas sin nombre.
+        const profesional = profesionalDeTurnoEn(
+          modulo.id,
+          citasRegistradasHoy > 0 ? profesionalesConCita : undefined,
+        )
 
         return {
           moduloId: modulo.id,
@@ -1431,29 +1479,13 @@ export class InMemoryTurnoRepository implements TurnoRepository {
           servicioId: servicio?.id ?? '',
           servicioNombre: servicio?.nombre ?? 'Ventanilla',
           profesionalNombre: profesional?.nombre ?? null,
-          turnoId: null,
           codigo: null,
           horaLlamado: null,
           vecesLlamado: 0,
         }
       })
-  }
 
-  /**
-   * Ultimos turnos llamados, en orden descendente. Alimenta la lista lateral
-   * de la pantalla; util cuando varios consultorios llaman casi al tiempo y el
-   * destacado principal alcanza a rotar antes de que el paciente lo vea.
-   */
-  async ultimosLlamados(limite = 5): Promise<CasillaPantalla[]> {
-    // Tambien solo los de hoy: en una mañana floja, la lista de "ultimos
-    // llamados" se rellenaba con turnos de ayer.
-    const hoy = diaColombia(ahoraISO())
-
-    return estado.turnos
-      .filter((t) => t.horaLlamado && t.moduloId && diaColombia(t.horaLlamado) === hoy)
-      .sort((a, b) => new Date(b.horaLlamado!).getTime() - new Date(a.horaLlamado!).getTime())
-      .slice(0, limite)
-      .map(casillaDeTurno)
+    return { casillas, configuracion: { ...estado.configuracion } }
   }
 
   // --- Historico y estadisticas ---
@@ -1511,7 +1543,16 @@ export class InMemoryTurnoRepository implements TurnoRepository {
 
   async crearServicio(datos: Omit<Servicio, 'id'>): Promise<Servicio> {
     validarPrefijoLibre(datos.prefijo)
-    const servicio: Servicio = { ...datos, prefijo: datos.prefijo.toUpperCase(), id: `srv-${crearId()}` }
+    validarNombreDeServicioLibre(datos.nombre)
+    // El nombre se guarda ya recortado, igual que en la implementacion contra
+    // Postgres: si una guarda " Odontologia " y la otra "Odontologia", las dos
+    // dejan de cumplir el mismo contrato.
+    const servicio: Servicio = {
+      ...datos,
+      nombre: datos.nombre.trim(),
+      prefijo: datos.prefijo.toUpperCase(),
+      id: `srv-${crearId()}`,
+    }
     estado.servicios.push(servicio)
     return servicio
   }
@@ -1524,7 +1565,10 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       // iba ese prefijo nuevo, no donde iba el anterior.
       servicio.prefijo = datos.prefijo.toUpperCase()
     }
-    if (datos.nombre !== undefined) servicio.nombre = datos.nombre
+    if (datos.nombre !== undefined) {
+      validarNombreDeServicioLibre(datos.nombre, id)
+      servicio.nombre = datos.nombre.trim()
+    }
     if (datos.modoFila !== undefined && datos.modoFila !== servicio.modoFila) {
       validarCambioDeModoFila(servicio, datos.modoFila)
       servicio.modoFila = datos.modoFila
@@ -1596,7 +1640,27 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     }
 
     if (datos.servicioId !== undefined) modulo.servicioId = datos.servicioId || null
-    if (datos.activo !== undefined) modulo.activo = datos.activo
+    if (datos.activo !== undefined) {
+      // Ver la nota de `validarModuloSinPacienteDentro` en la implementacion
+      // contra Postgres: apagarlo con un turno abierto borra del televisor la
+      // casilla donde el paciente acaba de ver su numero, y le bloquea al
+      // doctor el llamado desde ahi.
+      if (datos.activo === false) {
+        const hoy = diaColombia(ahoraISO())
+        const abierto = estado.turnos.find(
+          (t) =>
+            t.moduloId === id &&
+            diaColombia(t.fechaGeneracion) === hoy &&
+            (t.estado === 'LLAMADO' || t.estado === 'EN_ATENCION'),
+        )
+        if (abierto) {
+          errorDeNegocio(
+            `No se puede desactivar: el turno ${abierto.codigo} esta siendo atendido ahi. Espera a que el doctor lo cierre.`,
+          )
+        }
+      }
+      modulo.activo = datos.activo
+    }
     return modulo
   }
 
@@ -1608,6 +1672,8 @@ export class InMemoryTurnoRepository implements TurnoRepository {
   }): Promise<Profesional> {
     const nombre = datos.nombre.trim()
     if (!nombre) errorDeNegocio('Ingresa el nombre del profesional.')
+
+    validarNombreDeProfesionalLibre(nombre)
 
     const servicio = buscarServicio(datos.servicioId)
     validarServicioDeProfesional(servicio)
@@ -1641,6 +1707,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     if (datos.nombre !== undefined) {
       const nombre = datos.nombre.trim()
       if (!nombre) errorDeNegocio('Ingresa el nombre del profesional.')
+      validarNombreDeProfesionalLibre(nombre, id)
       profesional.nombre = nombre
     }
 
@@ -1734,11 +1801,16 @@ export class InMemoryTurnoRepository implements TurnoRepository {
 
   // --- Parametros generales ---
 
-  async configuracion(): Promise<ConfiguracionSistema> {
+  async configuracion(): Promise<ConfiguracionGuardada> {
     return { ...estado.configuracion }
   }
 
-  async guardarConfiguracion(datos: Partial<ConfiguracionSistema>): Promise<ConfiguracionSistema> {
+  async guardarConfiguracion(
+    datos: Partial<ConfiguracionSistema>,
+    opciones: { visto?: string } = {},
+  ): Promise<ConfiguracionGuardada> {
+    exigirConfiguracionAlDia(estado.configuracion.actualizadoEn, opciones.visto)
+
     const siguiente: ConfiguracionSistema = { ...estado.configuracion, ...datos }
 
     // Las cuatro horas de las jornadas se validan JUNTAS, no campo por campo:
@@ -1772,7 +1844,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       errorDeNegocio('La jornada de la tarde no puede empezar antes de que termine la de la mañana.')
     }
 
-    estado.configuracion = siguiente
+    estado.configuracion = { ...siguiente, actualizadoEn: marcaSiguiente(estado.configuracion.actualizadoEn) }
     return { ...estado.configuracion }
   }
 
@@ -1836,10 +1908,21 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     return profesional
   }
 
+  /** Ver `listarAccesosProfesional` en la implementacion contra Postgres. */
   async listarAccesosProfesional(): Promise<AccesoProfesional[]> {
-    return estado.accesosProfesional
+    const masRecientesPrimero = estado.accesosProfesional
       .map(({ tokenHash: _tokenHash, ...acceso }) => acceso)
       .sort((a, b) => new Date(b.creadoEn).getTime() - new Date(a.creadoEn).getTime())
+
+    // El ULTIMO de cada doctor, igual que la otra implementacion: como la lista
+    // viene de mas reciente a mas antigua, el primero que aparece de cada uno es
+    // el suyo.
+    const vistos = new Set<string>()
+    return masRecientesPrimero.filter((acceso) => {
+      if (vistos.has(acceso.profesionalId)) return false
+      vistos.add(acceso.profesionalId)
+      return true
+    })
   }
 
   async revocarAccesoProfesional(id: string): Promise<AccesoProfesional> {
@@ -1876,6 +1959,29 @@ function validarNombreDeModuloLibre(nombre: string, exceptoId?: string) {
     errorDeNegocio(
       `Ya existe "${nombre}". El paciente solo tiene ese nombre para saber por que puerta entrar, asi que no puede haber dos iguales.`,
     )
+  }
+}
+
+/**
+ * Ver las funciones del mismo nombre en la implementacion contra Postgres.
+ *
+ * Aqui faltaban las dos, y esa ausencia no era inofensiva: como las pruebas
+ * corren contra esta implementacion, la regla "dos servicios no pueden llamarse
+ * igual" —que la base SI exige— era inverificable, y una regresion en la otra
+ * implementacion no la hubiera detectado nadie.
+ */
+function validarNombreDeServicioLibre(nombre: string, exceptoId?: string) {
+  const buscado = nombre.trim().toLowerCase()
+  if (!buscado) errorDeNegocio('El nombre del servicio es obligatorio.')
+  if (estado.servicios.some((s) => s.id !== exceptoId && s.nombre.trim().toLowerCase() === buscado)) {
+    errorDeNegocio(`Ya existe un servicio llamado "${nombre}".`)
+  }
+}
+
+function validarNombreDeProfesionalLibre(nombre: string, exceptoId?: string) {
+  const buscado = nombre.trim().toLowerCase()
+  if (estado.profesionales.some((p) => p.id !== exceptoId && p.nombre.trim().toLowerCase() === buscado)) {
+    errorDeNegocio(`Ya existe un profesional llamado "${nombre}".`)
   }
 }
 

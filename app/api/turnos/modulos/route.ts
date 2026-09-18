@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireRol, requireSeccion, tieneSeccion } from '@/lib/permissions/session'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 
 export async function GET(request: Request) {
   try {
@@ -32,7 +34,7 @@ const moduloSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireSeccion('/admin/modulos')
+    const session = await requireSeccion('/admin/modulos')
 
     const body = await request.json().catch(() => null)
     const parsed = moduloSchema.safeParse(body)
@@ -45,6 +47,17 @@ export async function POST(request: Request) {
       servicioId: parsed.data.servicioId || null,
       activo: parsed.data.activo,
     })
+
+    const { ip } = await contextoPeticion()
+    await registrarEvento({
+      tipo: EVENTOS.MODULO_CREADO,
+      exito: true,
+      usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
+      identificador: modulo.nombre,
+      ip,
+    })
+
     return NextResponse.json({ modulo })
   } catch (error) {
     return apiError(error)

@@ -12,14 +12,10 @@ import { turnoRepository } from '@/lib/turnos/repositorio'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  // Antes tambien se calculaban y enviaban los "ultimos llamados", para una
-  // lista lateral que el rediseño de la pantalla quito: eran una ordenacion de
-  // todos los turnos del dia, en cada peticion, para un dato que ya no lee
-  // nadie. `ultimosLlamados` sigue en el repositorio por si esa lista vuelve.
-  const [casillas, configuracion] = await Promise.all([
-    turnoRepository.estadoPantalla(),
-    turnoRepository.configuracion(),
-  ])
+  // UNA sola llamada al repositorio. Antes se pedia aparte la configuracion,
+  // que `estadoPantalla` ya habia cargado por dentro: la misma fila leida dos
+  // veces en cada refresco de cada televisor encendido.
+  const { casillas, configuracion } = await turnoRepository.estadoPantalla()
 
   return NextResponse.json({ casillas, configuracion })
 }

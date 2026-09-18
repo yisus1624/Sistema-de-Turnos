@@ -31,6 +31,12 @@ import { prisma } from '@/lib/prisma'
 import { realtimeHub } from '@/lib/realtime/hub'
 import { errorDeNegocio } from './errores'
 import { ordenAtencion, resumir } from './estadisticas'
+import { reunirActividad } from './actividad'
+import { modulosVisiblesEnPantalla } from './casillas'
+import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
+import { esChoqueDeUnico, mensajeDeChoque } from './choques-unicos'
+import { CONFIGURACION_INICIAL } from './configuracion-inicial'
+import { CONFIGURACION_YA_CAMBIADA, exigirConfiguracionAlDia } from './configuracion-version'
 import {
   ETIQUETA_JORNADA,
   ahoraISO,
@@ -47,6 +53,7 @@ import {
 } from './tiempo'
 import type { TurnoRepository } from './repository'
 import type {
+  ActividadCatalogo,
   AccesoProfesional,
   BloqueHorario,
   CasillaPantalla,
@@ -54,9 +61,12 @@ import type {
   CitaEnHorario,
   ColumnaHorario,
   ComprobanteLlegada,
+  ConfiguracionGuardada,
   ConfiguracionSistema,
   EstadisticasDia,
+  EstadoPantalla,
   EstadoAgendaItem,
+  EstadoCita,
   FiltroHistorico,
   HorarioDia,
   ItemAgendaProfesional,
@@ -178,36 +188,24 @@ function aAcceso(fila: FilaAcceso): AccesoProfesional {
 
 const ID_CONFIGURACION = 'unica'
 
-const CONFIGURACION_INICIAL: ConfiguracionSistema = {
-  audioActivo: true,
-  volumen: 1,
-  ultimosVisibles: 5,
-  mensajePie: 'Bienvenido a la ESE Hospital San Rafael de Chinu. Por favor espere a ser llamado.',
-  duracionCitaMinutos: 15,
-  jornadaMananaInicio: '07:00',
-  jornadaMananaFin: '12:00',
-  jornadaTardeInicio: '13:00',
-  jornadaTardeFin: '17:00',
+/** La fila de configuracion tal como la devuelve Prisma. */
+type FilaConfiguracion = {
+  actualizadoEn: Date
+  audioActivo: boolean
+  volumen: number
+  mensajePie: string
+  duracionCitaMinutos: number
+  jornadaMananaInicio: string
+  jornadaMananaFin: string
+  jornadaTardeInicio: string
+  jornadaTardeFin: string
 }
 
-/**
- * La configuracion, creandola con los valores del hospital la primera vez.
- *
- * Se usa `upsert` y no "buscar, y si no hay crear": con dos peticiones en
- * paralelo el segundo camino intenta insertar dos veces la misma fila y una de
- * las dos peticiones falla sin motivo que el funcionario pueda entender.
- */
-async function cargarConfiguracion(ctx: Ctx = prisma): Promise<ConfiguracionSistema> {
-  const fila = await ctx.configuracion.upsert({
-    where: { id: ID_CONFIGURACION },
-    update: {},
-    create: { id: ID_CONFIGURACION, ...CONFIGURACION_INICIAL },
-  })
-
+function aConfiguracion(fila: FilaConfiguracion): ConfiguracionGuardada {
   return {
+    actualizadoEn: fila.actualizadoEn.toISOString(),
     audioActivo: fila.audioActivo,
     volumen: fila.volumen,
-    ultimosVisibles: fila.ultimosVisibles,
     mensajePie: fila.mensajePie,
     duracionCitaMinutos: fila.duracionCitaMinutos,
     jornadaMananaInicio: fila.jornadaMananaInicio,
@@ -215,6 +213,32 @@ async function cargarConfiguracion(ctx: Ctx = prisma): Promise<ConfiguracionSist
     jornadaTardeInicio: fila.jornadaTardeInicio,
     jornadaTardeFin: fila.jornadaTardeFin,
   }
+}
+
+/**
+ * La configuracion, creandola con los valores del hospital la primera vez.
+ *
+ * SE LEE, Y SOLO SE ESCRIBE EL DIA QUE NO EXISTE. Antes se resolvia con un
+ * `upsert` a secas, asi que cada LECTURA era una ESCRITURA; y esta es la
+ * consulta mas repetida del sistema, porque cuelga de la ruta de la pantalla
+ * publica, que cada televisor encendido resincroniza sola cada minuto. Eran dos
+ * escrituras por refresco contra una fila que no cambia en semanas.
+ *
+ * La creacion si va por `upsert`, que es lo que resuelve la carrera de dos
+ * peticiones estrenando el sistema a la vez: la segunda no puede fallar con un
+ * error de clave repetida que el funcionario no sabria interpretar.
+ */
+async function cargarConfiguracion(ctx: Ctx = prisma): Promise<ConfiguracionGuardada> {
+  const fila = await ctx.configuracion.findUnique({ where: { id: ID_CONFIGURACION } })
+  if (fila) return aConfiguracion(fila)
+
+  const creada = await ctx.configuracion.upsert({
+    where: { id: ID_CONFIGURACION },
+    update: {},
+    create: { id: ID_CONFIGURACION, ...CONFIGURACION_INICIAL },
+  })
+
+  return aConfiguracion(creada)
 }
 
 /**
@@ -262,6 +286,86 @@ async function exigirTurno(id: string, ctx: Ctx = prisma) {
   const turno = await ctx.turno.findUnique({ where: { id } })
   if (!turno) errorDeNegocio('El turno indicado no existe.')
   return turno
+}
+
+async function exigirCita(id: string, ctx: Ctx = prisma) {
+  const cita = await ctx.cita.findUnique({ where: { id } })
+  if (!cita) errorDeNegocio('La cita indicada no existe.')
+  return cita
+}
+
+/**
+ * La escritura condicionada no afecto a ninguna fila: alguien cambio la cita
+ * mientras el operador la tenia abierta. Se vuelve a leer para contarle QUE
+ * paso, en vez de un "no se pudo" que no le sirve de nada.
+ */
+async function rechazarPorCambioDeEstado(
+  citaId: string,
+  motivoQueLoImpide: (estado: EstadoCita) => string | null,
+): Promise<never> {
+  const cita = await exigirCita(citaId)
+  errorDeNegocio(
+    motivoQueLoImpide(cita.estado) ??
+      'Otra persona acaba de cambiar esta cita. Vuelve a abrirla para ver como quedo.',
+  )
+}
+
+/**
+ * Deja escribir la cita y, si el indice del cupo manual la rechaza, lo cuenta
+ * con las mismas palabras que la validacion previa.
+ *
+ * POR QUE UN INDICE Y NO UNA TRANSACCION. Meter "comprobar y crear" en una
+ * transaccion NO cierra la carrera: con el nivel de aislamiento por defecto de
+ * PostgreSQL (READ COMMITTED) las dos transacciones simultaneas leen la
+ * parrilla sin la cita de la otra, y las dos insertan. Haria falta SERIALIZABLE
+ * o bloquear la agenda del doctor, y eso frenaria la carga diaria del reporte
+ * entera. El indice unico PARCIAL sobre (fecha, profesional, hora) de las citas
+ * MANUALES no bloquea nada y es la unica garantia de verdad.
+ *
+ * Es PARCIAL a proposito: el hospital SI cita a dos pacientes con el mismo
+ * doctor a la misma hora en su reporte, y la parrilla los apila queriendo. Lo
+ * que no puede pasar es que un operador entregue a mano un cupo que ya esta
+ * dado. Las citas importadas siguen defendidas solo por la validacion previa,
+ * que basta: el reporte lo carga una persona a la vez.
+ */
+async function conCupoRespaldado<T>(
+  nombreProfesional: string,
+  horaCita: string,
+  escribir: () => Promise<T>,
+): Promise<T> {
+  return conUnicidadRespaldada(
+    { [INDICE_CUPO_MANUAL]: cupoOcupado(nombreProfesional, horaCita) },
+    escribir,
+  )
+}
+
+const cupoOcupado = (nombreProfesional: string, horaCita: string) =>
+  `${nombreProfesional} ya tiene un paciente a las ${horaColombia(horaCita)}. Elige otra hora.`
+
+/** Nombre del indice unico parcial de la migracion; Prisma lo informa tal cual. */
+const INDICE_CUPO_MANUAL = 'citas_cupo_manual_unico'
+
+/**
+ * Escribe y, si la base rechaza por repetido, lo cuenta con el mismo aviso que
+ * daria la validacion previa.
+ *
+ * Es el cierre de todas las reglas de unicidad de este archivo: la validacion
+ * previa existe para avisar ANTES y con claridad, pero entre ella y la
+ * escritura cabe otro operador. El indice es el que de verdad garantiza la
+ * regla; esto solo evita que, cuando salte, el funcionario vea un error
+ * tecnico.
+ */
+async function conUnicidadRespaldada<T>(
+  mensajes: Record<string, string>,
+  escribir: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await escribir()
+  } catch (error) {
+    const mensaje = mensajeDeChoque(error, mensajes)
+    if (mensaje) errorDeNegocio(mensaje)
+    throw error
+  }
 }
 
 /**
@@ -423,12 +527,6 @@ function exigirTurnoEnAtencion(turno: FilaTurno, accion: 'atendido' | 'ausente')
 async function siguienteCodigo(prefijo: string, fecha: string, ctx: Ctx) {
   const usados = await ctx.turno.count({ where: { fecha, codigo: { startsWith: `${prefijo}-` } } })
   return `${prefijo}-${String(usados + 1).padStart(3, '0')}`
-}
-
-const CHOQUE_DE_UNICO = 'P2002'
-
-function esChoqueDeUnico(error: unknown) {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === CHOQUE_DE_UNICO
 }
 
 /**
@@ -606,60 +704,57 @@ export class PrismaTurnoRepository implements TurnoRepository {
     validarServicioDeProfesional(await exigirServicio(profesional.servicioId))
     await validarFranjaDeCita({ horaCita: datos.horaCita, profesional })
 
-    const fila = await prisma.cita.create({
-      data: {
-        documentoPaciente: documento,
-        nombrePaciente: nombre,
-        profesionalId: profesional.id,
-        servicioId: profesional.servicioId,
-        horaCita: new Date(datos.horaCita),
-        fecha: diaColombia(datos.horaCita),
-        estado: 'PROGRAMADA',
-        origen: 'MANUAL',
-        creadaPor: datos.usuarioId ?? null,
-      },
-    })
+    const fila = await conCupoRespaldado(profesional.nombre, datos.horaCita, () =>
+      prisma.cita.create({
+        data: {
+          documentoPaciente: documento,
+          nombrePaciente: nombre,
+          profesionalId: profesional.id,
+          servicioId: profesional.servicioId,
+          horaCita: new Date(datos.horaCita),
+          fecha: diaColombia(datos.horaCita),
+          estado: 'PROGRAMADA',
+          origen: 'MANUAL',
+          creadaPor: datos.usuarioId ?? null,
+        },
+      }),
+    )
     return aCita(fila)
   }
 
   async cancelarCita(citaId: string, datos: { usuarioId?: string; motivo?: string } = {}): Promise<Cita> {
-    const cita = await prisma.cita.findUnique({ where: { id: citaId } })
-    if (!cita) errorDeNegocio('La cita indicada no existe.')
-    // Si el paciente ya llego, cancelarla dejaria un turno huerfano en la fila.
-    if (cita.estado === 'PRESENTADO') errorDeNegocio('El paciente ya registro su llegada; no se puede cancelar.')
-    if (cita.estado === 'CANCELADA') errorDeNegocio('Esta cita ya estaba cancelada.')
-    if (cita.estado === 'ATENDIDA') errorDeNegocio('Esta cita ya fue atendida; no se puede cancelar.')
+    const cita = await exigirCita(citaId)
+    const impedimento = motivoQueImpideCancelar(cita.estado)
+    if (impedimento) errorDeNegocio(impedimento)
 
-    const fila = await prisma.cita.update({
-      where: { id: citaId },
+    // LA ESCRITURA VA CONDICIONADA AL ESTADO, no a lo que se leyo arriba. El
+    // operador puede tener el detalle de la cita abierto mientras admisiones
+    // registra la llegada de ese mismo paciente: sin la condicion, la
+    // cancelacion pisaria el PRESENTADO y dejaria al paciente sentado en la
+    // sala con un turno en la fila del doctor y su cita cancelada.
+    const cancelada = await prisma.cita.updateMany({
+      where: { id: citaId, estado: 'PROGRAMADA' },
       data: {
         estado: 'CANCELADA',
-        // Quien, cuando y por que: los dos datos con los que se le responde
+        // Quien, cuando y por que: los datos con los que se le responde
         // despues al paciente que viene a reclamar.
         canceladaEn: new Date(),
         canceladaPor: datos.usuarioId ?? null,
         motivoCancelacion: datos.motivo?.trim() || null,
       },
     })
-    return aCita(fila)
+    if (cancelada.count === 0) await rechazarPorCambioDeEstado(citaId, motivoQueImpideCancelar)
+
+    return aCita(await exigirCita(citaId))
   }
 
   async reprogramarCita(
     citaId: string,
     datos: { horaCita: string; profesionalId?: string; motivo?: string; usuarioId?: string },
   ): Promise<Cita> {
-    const cita = await prisma.cita.findUnique({ where: { id: citaId } })
-    if (!cita) errorDeNegocio('La cita indicada no existe.')
-    if (cita.estado === 'CANCELADA') errorDeNegocio('La cita fue cancelada; no se puede reprogramar.')
-    if (cita.estado === 'ATENDIDA') errorDeNegocio('La cita ya fue atendida; no se puede reprogramar.')
-    if (cita.estado === 'PRESENTADO') {
-      // El paciente ya llego y su cita genero turno: moverla dejaria el turno
-      // colgado de una hora que ya no existe. Vale tambien cuando el turno se
-      // cerro como AUSENTE, porque sigue apuntando a esta cita en el historico.
-      errorDeNegocio(
-        'Este paciente ya registro su llegada y su cita genero turno, asi que no se puede mover. Agendale una cita nueva.',
-      )
-    }
+    const cita = await exigirCita(citaId)
+    const impedimento = motivoQueImpideReprogramar(cita.estado)
+    if (impedimento) errorDeNegocio(impedimento)
 
     const profesional = await exigirProfesional(datos.profesionalId ?? cita.profesionalId)
     if (!profesional.activo) errorDeNegocio('El profesional esta inactivo.')
@@ -673,23 +768,31 @@ export class PrismaTurnoRepository implements TurnoRepository {
       ignorarCitaId: cita.id,
     })
 
-    const fila = await prisma.cita.update({
-      where: { id: citaId },
-      data: {
-        // La ORIGINAL es la primera de todas, no la anterior: lo que hay que
-        // poder reconstruir es a que hora se le dijo al paciente que viniera
-        // la primera vez, por muchas veces que se le haya movido despues.
-        horaCitaOriginal: cita.horaCitaOriginal ?? cita.horaCita,
-        horaCita: new Date(datos.horaCita),
-        fecha: diaColombia(datos.horaCita),
-        profesionalId: profesional.id,
-        servicioId: profesional.servicioId,
-        vecesReprogramada: { increment: 1 },
-        reprogramadaEn: new Date(),
-        reprogramadaPor: datos.usuarioId ?? null,
-        motivoReprogramacion: datos.motivo?.trim() || null,
-      },
-    })
+    // Igual que al cancelar: entre la comprobacion y esta escritura cabe la
+    // llegada del paciente. Moverla de todas formas dejaria su turno de hoy
+    // colgado de una hora que ya no existe, y en otro dia.
+    const movida = await conCupoRespaldado(profesional.nombre, datos.horaCita, () =>
+      prisma.cita.updateMany({
+        where: { id: citaId, estado: 'PROGRAMADA' },
+        data: {
+          // La ORIGINAL es la primera de todas, no la anterior: lo que hay que
+          // poder reconstruir es a que hora se le dijo al paciente que viniera
+          // la primera vez, por muchas veces que se le haya movido despues.
+          horaCitaOriginal: cita.horaCitaOriginal ?? cita.horaCita,
+          horaCita: new Date(datos.horaCita),
+          fecha: diaColombia(datos.horaCita),
+          profesionalId: profesional.id,
+          servicioId: profesional.servicioId,
+          vecesReprogramada: { increment: 1 },
+          reprogramadaEn: new Date(),
+          reprogramadaPor: datos.usuarioId ?? null,
+          motivoReprogramacion: datos.motivo?.trim() || null,
+        },
+      }),
+    )
+    if (movida.count === 0) await rechazarPorCambioDeEstado(citaId, motivoQueImpideReprogramar)
+
+    const fila = await exigirCita(citaId)
     return aCita(fila)
   }
 
@@ -866,6 +969,31 @@ export class PrismaTurnoRepository implements TurnoRepository {
     return jornadasSegunCitas(
       citas.map((c) => ({ profesionalId: c.profesionalId, hora: horaColombia(c.horaCita) })),
       configuracion,
+    )
+  }
+
+  /** Ver `actividadDelCatalogo` en el contrato del repositorio. */
+  async actividadDelCatalogo(fecha: string): Promise<ActividadCatalogo> {
+    // Las canceladas no cuentan, igual que en las jornadas: un servicio cuyas
+    // citas se cancelaron todas es un servicio que ese dia no atendio.
+    const [citas, profesionales] = await Promise.all([
+      prisma.cita.findMany({
+        where: { fecha, estado: { not: 'CANCELADA' } },
+        select: { servicioId: true, profesionalId: true, horaCita: true },
+      }),
+      prisma.profesional.findMany({ select: { id: true, moduloId: true } }),
+    ])
+
+    // El consultorio no esta en la cita: esta en el doctor que la atiende.
+    const moduloDelProfesional = new Map(profesionales.map((p) => [p.id, p.moduloId]))
+
+    return reunirActividad(
+      fecha,
+      citas.map((cita) => ({
+        servicioId: cita.servicioId,
+        moduloId: moduloDelProfesional.get(cita.profesionalId) ?? null,
+        hora: horaColombia(cita.horaCita),
+      })),
     )
   }
 
@@ -1286,21 +1414,40 @@ export class PrismaTurnoRepository implements TurnoRepository {
   // --- Pantalla de la sala de espera ---
 
   /**
-   * Estado de la pantalla: una casilla por consultorio activo.
+   * Estado de la pantalla: una casilla por consultorio QUE TRABAJA HOY.
    *
    * SOLO turnos llamados HOY. Un turno queda en LLAMADO hasta que el doctor lo
    * cierra, y al final de la jornada es normal que el ultimo se quede sin
    * cerrar. Sin este filtro ese turno sigue pintado en el televisor a la
    * mañana siguiente, y el primer paciente del dia ve un numero que ya paso y
    * cree que le toca.
+   *
+   * NO BASTA CON QUE EL CONSULTORIO ESTE ACTIVO: quien decide que se ve es
+   * `modulosVisiblesEnPantalla`, en `./casillas`, que es puro y lo comparten
+   * las dos implementaciones del repositorio. Ahi esta explicado el criterio y
+   * por que.
    */
-  async estadoPantalla(): Promise<CasillaPantalla[]> {
+  async estadoPantalla(): Promise<EstadoPantalla> {
     const hoy = diaColombia(ahoraISO())
 
-    const [modulos, servicios, profesionales, llamados] = await Promise.all([
+    const [
+      todosLosModulos,
+      servicios,
+      todosLosProfesionales,
+      llamados,
+      citasDeHoy,
+      turnosDeHoy,
+      configuracion,
+      citasRegistradasHoy,
+    ] = await Promise.all([
       prisma.modulo.findMany({ where: { activo: true }, orderBy: { nombre: 'asc' } }),
       prisma.servicio.findMany(),
-      prisma.profesional.findMany({ where: { activo: true } }),
+      // TODOS, no solo los activos: el consultorio de una cita se resuelve por
+      // el doctor que la atiende, y con la lista recortada las citas de un
+      // doctor dado de baja no se contaban. Su consultorio desaparecia del
+      // televisor con sus pacientes ya en la sala. Para ROTULAR la casilla si
+      // se usan solo los activos, mas abajo.
+      prisma.profesional.findMany(),
       prisma.turno.findMany({
         where: {
           fecha: hoy,
@@ -1310,20 +1457,73 @@ export class PrismaTurnoRepository implements TurnoRepository {
         },
         orderBy: { horaLlamado: 'asc' },
       }),
+      prisma.cita.findMany({
+        where: { fecha: hoy, estado: { not: 'CANCELADA' } },
+        select: { profesionalId: true },
+      }),
+      prisma.turno.findMany({
+        where: { fecha: hoy, moduloId: { not: null } },
+        select: { moduloId: true },
+        distinct: ['moduloId'],
+      }),
+      cargarConfiguracion(),
+      // Las CANCELADAS tambien cuentan: ver la nota de `hayAgendaDelDia`. Lo
+      // que se pregunta es si la agenda del dia se subio, no si queda alguna
+      // cita viva.
+      prisma.cita.count({ where: { fecha: hoy } }),
     ])
 
     const servicioPorId = new Map(servicios.map((s) => [s.id, s]))
+    const profesionales = todosLosProfesionales.filter((p) => p.activo)
     const profesionalPorId = new Map(profesionales.map((p) => [p.id, p]))
+
+    // El consultorio de una cita sale del doctor: la cita no guarda modulo,
+    // guarda a quien atiende, y el consultorio es donde ese doctor esta puesto.
+    const moduloDelProfesional = new Map(todosLosProfesionales.map((p) => [p.id, p.moduloId]))
+    const profesionalesConCita = new Set(citasDeHoy.map((c) => c.profesionalId))
+    const modulosConCita = new Set(
+      [...profesionalesConCita].map((id) => moduloDelProfesional.get(id)).filter(Boolean) as string[],
+    )
+
+    const visibles = modulosVisiblesEnPantalla({
+      modulos: todosLosModulos,
+      serviciosDeVentanilla: new Set(
+        servicios.filter((s) => s.modoFila === 'COMPARTIDA').map((s) => s.id),
+      ),
+      conCitasHoy: modulosConCita,
+      conTurnosHoy: new Set(turnosDeHoy.map((t) => t.moduloId!)),
+      conProfesionalAsignado: new Set(
+        profesionales.map((p) => p.moduloId).filter(Boolean) as string[],
+      ),
+      hayAgendaDelDia: citasRegistradasHoy > 0,
+    })
+    const modulos = todosLosModulos.filter((modulo) => visibles.has(modulo.id))
+
+    // Los doctores que hoy NO tienen ni una cita no rotulan ninguna casilla.
+    // El nombre salia de la jornada habitual de la ficha, asi que el medico que
+    // hoy no vino aparecia igual con su nombre en la puerta y el paciente
+    // entraba a preguntar por alguien que no estaba.
+    //
+    // El dia sin agenda cargada es la excepcion: ahi nadie tiene citas y
+    // recortar por ellas dejaria todas las puertas sin nombre.
+    //
+    // Se pregunta al conjunto, no se recorre la lista de citas por cada doctor:
+    // con 40 doctores y 1.500 citas del dia eran 60.000 comparaciones en cada
+    // refresco de cada televisor, para una respuesta que el `Set` de arriba ya
+    // tiene resuelta.
+    const profesionalesDeHoy =
+      citasRegistradasHoy > 0
+        ? profesionales.filter((p) => profesionalesConCita.has(p.id))
+        : profesionales
 
     // El ultimo llamado de cada consultorio. La lista viene ascendente, asi que
     // el que quede en el mapa es el mas reciente.
     const ultimoPorModulo = new Map<string, FilaTurno>()
     for (const turno of llamados) ultimoPorModulo.set(turno.moduloId!, turno)
 
-    const configuracion = await cargarConfiguracion()
     const bloqueAhora = jornadaActual(configuracion)
 
-    return modulos.map((modulo) => {
+    const casillas = modulos.map((modulo) => {
       const turno = ultimoPorModulo.get(modulo.id)
       const servicio = turno
         ? servicioPorId.get(turno.servicioId)
@@ -1340,7 +1540,6 @@ export class PrismaTurnoRepository implements TurnoRepository {
           profesionalNombre: turno.profesionalId
             ? (profesionalPorId.get(turno.profesionalId)?.nombre ?? null)
             : null,
-          turnoId: turno.id,
           codigo: turno.codigo,
           horaLlamado: iso(turno.horaLlamado),
           vecesLlamado: turno.vecesLlamado,
@@ -1352,40 +1551,20 @@ export class PrismaTurnoRepository implements TurnoRepository {
         moduloNombre: modulo.nombre,
         servicioId: servicio?.id ?? '',
         servicioNombre: servicio?.nombre ?? 'Ventanilla',
-        // Solo profesionales ACTIVOS, y de ellos EL DE LA JORNADA QUE CORRE.
-        // Un consultorio suele compartirse entre un doctor de mañana y uno de
-        // tarde: cogiendo el primero de la lista, el televisor mostraba al de
-        // la mañana toda la tarde y el paciente entraba preguntando por alguien
-        // que ya se habia ido.
-        profesionalNombre: profesionalDeTurnoEn(modulo.id, profesionales, bloqueAhora)?.nombre ?? null,
-        turnoId: null,
+        // Solo profesionales ACTIVOS Y CON CITAS HOY, y de ellos EL DE LA
+        // JORNADA QUE CORRE. Un consultorio suele compartirse entre un doctor
+        // de mañana y uno de tarde: cogiendo el primero de la lista, el
+        // televisor mostraba al de la mañana toda la tarde y el paciente
+        // entraba preguntando por alguien que ya se habia ido.
+        profesionalNombre:
+          profesionalDeTurnoEn(modulo.id, profesionalesDeHoy, bloqueAhora)?.nombre ?? null,
         codigo: null,
         horaLlamado: null,
         vecesLlamado: 0,
       }
     })
-  }
 
-  /**
-   * Ultimos turnos llamados, en orden descendente. Alimenta la lista lateral de
-   * la pantalla; util cuando varios consultorios llaman casi al tiempo y el
-   * destacado principal alcanza a rotar antes de que el paciente lo vea.
-   *
-   * Tambien solo los de hoy: en una mañana floja, esa lista se rellenaba con
-   * turnos de ayer.
-   */
-  async ultimosLlamados(limite = 5): Promise<CasillaPantalla[]> {
-    const filas = await prisma.turno.findMany({
-      where: {
-        fecha: diaColombia(ahoraISO()),
-        horaLlamado: { not: null },
-        moduloId: { not: null },
-      },
-      orderBy: { horaLlamado: 'desc' },
-      take: limite,
-    })
-
-    return Promise.all(filas.map((fila) => casillaDeTurno(fila)))
+    return { casillas, configuracion }
   }
 
   // --- Historico y estadisticas ---
@@ -1462,10 +1641,19 @@ export class PrismaTurnoRepository implements TurnoRepository {
 
     const nombre = datos.nombre.trim()
     if (!nombre) errorDeNegocio('El nombre del servicio es obligatorio.')
+    await validarNombreDeServicioLibre(nombre)
 
-    const fila = await prisma.servicio.create({
-      data: { nombre, prefijo, modoFila: datos.modoFila, activo: datos.activo },
-    })
+    // El prefijo y el nombre los defiende la base, no solo las validaciones de
+    // arriba: dos administradores dando de alta servicios a la vez (o una carga
+    // del reporte corriendo en medio) pasaban las dos comprobaciones y dejaban
+    // dos servicios con la misma letra COMPARTIENDO la numeracion del dia.
+    const fila = await conUnicidadRespaldada(
+      { ...avisosDeNombreRepetido('servicio', nombre), prefijo: YA_EXISTE.prefijo(prefijo) },
+      () =>
+        prisma.servicio.create({
+          data: { nombre, prefijo, modoFila: datos.modoFila, activo: datos.activo },
+        }),
+    )
     return aServicio(fila)
   }
 
@@ -1480,14 +1668,24 @@ export class PrismaTurnoRepository implements TurnoRepository {
       // cambiarlo, la numeracion arranca donde iba el prefijo nuevo.
       cambios.prefijo = prefijo
     }
-    if (datos.nombre !== undefined) cambios.nombre = datos.nombre.trim()
+    if (datos.nombre !== undefined) {
+      const nombre = datos.nombre.trim()
+      await validarNombreDeServicioLibre(nombre, id)
+      cambios.nombre = nombre
+    }
     if (datos.modoFila !== undefined && datos.modoFila !== servicio.modoFila) {
       await validarCambioDeModoFila(servicio, datos.modoFila)
       cambios.modoFila = datos.modoFila
     }
     if (datos.activo !== undefined) cambios.activo = datos.activo
 
-    const fila = await prisma.servicio.update({ where: { id }, data: cambios })
+    const fila = await conUnicidadRespaldada(
+      {
+        ...avisosDeNombreRepetido('servicio', String(cambios.nombre ?? servicio.nombre)),
+        prefijo: YA_EXISTE.prefijo(String(cambios.prefijo ?? servicio.prefijo)),
+      },
+      () => prisma.servicio.update({ where: { id }, data: cambios }),
+    )
     return aServicio(fila)
   }
 
@@ -1537,14 +1735,16 @@ export class PrismaTurnoRepository implements TurnoRepository {
     const nombre = datos.nombre.trim()
     await validarNombreDeModuloLibre(nombre)
 
-    const fila = await prisma.modulo.create({
-      data: { nombre, servicioId: datos.servicioId ?? null, activo: datos.activo },
-    })
+    const fila = await conUnicidadRespaldada(avisosDeNombreRepetido('modulo', nombre), () =>
+      prisma.modulo.create({
+        data: { nombre, servicioId: datos.servicioId ?? null, activo: datos.activo },
+      }),
+    )
     return aModulo(fila)
   }
 
   async actualizarModulo(id: string, datos: Partial<Omit<Modulo, 'id'>>): Promise<Modulo> {
-    await exigirModulo(id)
+    const modulo = await exigirModulo(id)
     if (datos.servicioId) await exigirServicio(datos.servicioId)
 
     const cambios: Prisma.ModuloUncheckedUpdateInput = {}
@@ -1554,9 +1754,15 @@ export class PrismaTurnoRepository implements TurnoRepository {
       cambios.nombre = nombre
     }
     if (datos.servicioId !== undefined) cambios.servicioId = datos.servicioId || null
-    if (datos.activo !== undefined) cambios.activo = datos.activo
+    if (datos.activo !== undefined) {
+      if (datos.activo === false) await validarModuloSinPacienteDentro(id)
+      cambios.activo = datos.activo
+    }
 
-    const fila = await prisma.modulo.update({ where: { id }, data: cambios })
+    const fila = await conUnicidadRespaldada(
+      avisosDeNombreRepetido('modulo', String(cambios.nombre ?? modulo.nombre)),
+      () => prisma.modulo.update({ where: { id }, data: cambios }),
+    )
     return aModulo(fila)
   }
 
@@ -1573,18 +1779,19 @@ export class PrismaTurnoRepository implements TurnoRepository {
     validarServicioDeProfesional(servicio)
     if (datos.moduloId) await exigirModulo(datos.moduloId)
 
-    const repetido = await prisma.profesional.findUnique({ where: { nombre } })
-    if (repetido) errorDeNegocio(`Ya existe un profesional llamado ${nombre}.`)
+    await validarNombreDeProfesionalLibre(nombre)
 
-    const fila = await prisma.profesional.create({
-      data: {
-        nombre,
-        servicioId: servicio.id,
-        jornada: datos.jornada,
-        moduloId: datos.moduloId || null,
-        activo: true,
-      },
-    })
+    const fila = await conUnicidadRespaldada(avisosDeNombreRepetido('profesional', nombre), () =>
+      prisma.profesional.create({
+        data: {
+          nombre,
+          servicioId: servicio.id,
+          jornada: datos.jornada,
+          moduloId: datos.moduloId || null,
+          activo: true,
+        },
+      }),
+    )
     return aProfesional(fila)
   }
 
@@ -1604,6 +1811,11 @@ export class PrismaTurnoRepository implements TurnoRepository {
     if (datos.nombre !== undefined) {
       const nombre = datos.nombre.trim()
       if (!nombre) errorDeNegocio('Ingresa el nombre del profesional.')
+      // Faltaba al EDITAR: crear si comprobaba el nombre repetido y renombrar
+      // no, asi que corregirle el nombre a un doctor para dejarlo igual que
+      // otra ficha —muy probable despues de una carga, que crea fichas
+      // "X (importado)"— reventaba contra el indice de la base.
+      await validarNombreDeProfesionalLibre(nombre, id)
       cambios.nombre = nombre
     }
 
@@ -1681,19 +1893,30 @@ export class PrismaTurnoRepository implements TurnoRepository {
 
     if (datos.activo !== undefined) cambios.activo = datos.activo
 
-    const fila = await prisma.profesional.update({ where: { id }, data: cambios })
+    const fila = await conUnicidadRespaldada(
+      avisosDeNombreRepetido('profesional', String(cambios.nombre ?? profesional.nombre)),
+      () => prisma.profesional.update({ where: { id }, data: cambios }),
+    )
     return aProfesional(fila)
   }
 
   // --- Parametros generales ---
 
-  async configuracion(): Promise<ConfiguracionSistema> {
+  async configuracion(): Promise<ConfiguracionGuardada> {
     return cargarConfiguracion()
   }
 
-  async guardarConfiguracion(datos: Partial<ConfiguracionSistema>): Promise<ConfiguracionSistema> {
+  async guardarConfiguracion(
+    datos: Partial<ConfiguracionSistema>,
+    opciones: { visto?: string } = {},
+  ): Promise<ConfiguracionGuardada> {
     const actual = await cargarConfiguracion()
-    const siguiente: ConfiguracionSistema = { ...actual, ...datos }
+    // Aviso temprano, para no hacer trabajo en balde; el cierre de verdad es la
+    // escritura condicionada del final.
+    exigirConfiguracionAlDia(actual.actualizadoEn, opciones.visto)
+
+    const { actualizadoEn: _marcaAnterior, ...parametrosActuales } = actual
+    const siguiente: ConfiguracionSistema = { ...parametrosActuales, ...datos }
 
     // Las cuatro horas de las jornadas se validan JUNTAS, no campo por campo:
     // cada una por separado puede ser una hora perfectamente valida y aun asi
@@ -1726,12 +1949,19 @@ export class PrismaTurnoRepository implements TurnoRepository {
       errorDeNegocio('La jornada de la tarde no puede empezar antes de que termine la de la mañana.')
     }
 
-    await prisma.configuracion.upsert({
-      where: { id: ID_CONFIGURACION },
-      update: siguiente,
-      create: { id: ID_CONFIGURACION, ...siguiente },
+    // La escritura va condicionada a la marca que el administrador tenia
+    // delante: si otro guardo en medio, no se escribe nada. `cargarConfiguracion`
+    // ya creo la fila, asi que aqui solo se actualiza.
+    const guardado = await prisma.configuracion.updateMany({
+      where: {
+        id: ID_CONFIGURACION,
+        ...(opciones.visto ? { actualizadoEn: new Date(opciones.visto) } : {}),
+      },
+      data: siguiente,
     })
-    return siguiente
+    if (guardado.count === 0) errorDeNegocio(CONFIGURACION_YA_CAMBIADA)
+
+    return cargarConfiguracion()
   }
 
   // --- Acceso temporal de profesionales ---
@@ -1795,8 +2025,21 @@ export class PrismaTurnoRepository implements TurnoRepository {
     return aProfesional(acceso.profesional)
   }
 
+  /**
+   * EL ULTIMO ACCESO DE CADA DOCTOR, no todos los que se han generado.
+   *
+   * La pantalla de enlaces solo usa el ultimo de cada uno —es el que esta
+   * vigente, o el que hay que renovar— y esto devolvia el historial completo:
+   * con dieciocho doctores renovando enlace a diario son varios miles de filas
+   * al año viajando enteras al navegador en CADA carga de la pantalla, y
+   * creciendo para siempre. El historial de accesos de un doctor, si algun dia
+   * hace falta, esta en el registro de actividad.
+   */
   async listarAccesosProfesional(): Promise<AccesoProfesional[]> {
-    const filas = await prisma.accesoProfesional.findMany({ orderBy: { creadoEn: 'desc' } })
+    const filas = await prisma.accesoProfesional.findMany({
+      orderBy: { creadoEn: 'desc' },
+      distinct: ['profesionalId'],
+    })
     return filas.map(aAcceso)
   }
 
@@ -1832,7 +2075,6 @@ async function casillaDeTurno(turno: FilaTurno): Promise<CasillaPantalla> {
     servicioId: servicio?.id ?? '',
     servicioNombre: servicio?.nombre ?? 'Ventanilla',
     profesionalNombre: profesional?.nombre ?? null,
-    turnoId: turno.id,
     codigo: turno.codigo,
     horaLlamado: iso(turno.horaLlamado),
     vecesLlamado: turno.vecesLlamado,
@@ -1882,6 +2124,42 @@ function profesionalDeTurnoEn(
  * compara sin distinguir mayusculas ni espacios de sobra, que es como lo lee
  * una persona.
  */
+/**
+ * Los avisos de "ya existe", en un solo sitio.
+ *
+ * Los usan DOS caminos que tienen que decir lo mismo: la validacion que se hace
+ * antes de escribir y la traduccion del rechazo del indice unico cuando otro
+ * operador se adelanto. Con los textos copiados, el mismo choque se explicaba
+ * de dos maneras segun quien llegara primero.
+ */
+const YA_EXISTE = {
+  modulo: (nombre: string) =>
+    `Ya existe "${nombre}". El paciente solo tiene ese nombre para saber por que puerta entrar, asi que no puede haber dos iguales.`,
+  servicio: (nombre: string) => `Ya existe un servicio llamado "${nombre}".`,
+  profesional: (nombre: string) => `Ya existe un profesional llamado "${nombre}".`,
+  prefijo: (prefijo: string) => `El prefijo ${prefijo} ya lo usa otro servicio.`,
+}
+
+type Catalogo = 'modulo' | 'servicio' | 'profesional'
+
+/**
+ * Indices de la migracion que hacen cumplir la unicidad del nombre SIN
+ * distinguir mayusculas ni espacios, que es como la compara la regla de
+ * negocio y como lo lee el paciente. Estan escritos a mano sobre
+ * `lower(trim(nombre))`, asi que Prisma los informa por su nombre.
+ */
+const INDICE_NOMBRE: Record<Catalogo, string> = {
+  modulo: 'modulos_nombre_normalizado_unico',
+  servicio: 'servicios_nombre_normalizado_unico',
+  profesional: 'profesionales_nombre_normalizado_unico',
+}
+
+function avisosDeNombreRepetido(catalogo: Catalogo, nombre: string): Record<string, string> {
+  const aviso = YA_EXISTE[catalogo](nombre)
+  // `nombre` es el `@unique` exacto de Prisma; el otro, el indice normalizado.
+  return { nombre: aviso, [INDICE_NOMBRE[catalogo]]: aviso }
+}
+
 async function validarNombreDeModuloLibre(nombre: string, exceptoId?: string) {
   if (!nombre) errorDeNegocio('El nombre del consultorio o la ventanilla es obligatorio.')
 
@@ -1892,16 +2170,76 @@ async function validarNombreDeModuloLibre(nombre: string, exceptoId?: string) {
     },
     select: { id: true },
   })
-  if (repetido) {
+  if (repetido) errorDeNegocio(YA_EXISTE.modulo(nombre))
+}
+
+/**
+ * Un consultorio no se apaga con un paciente adentro.
+ *
+ * Apagarlo lo borra del televisor, y lo borra CON el turno ya llamado pintado
+ * en su casilla: el paciente se queda sin saber por que puerta entrar, mirando
+ * una pantalla donde su numero acaba de desaparecer. Y al doctor se le bloquea
+ * el llamado desde ahi (`validarModuloParaLlamar`), asi que tampoco puede
+ * cerrar al que tiene enfrente ni seguir con la fila.
+ *
+ * Es la misma idea que ya protege el modo de fila de un servicio: para dejar de
+ * usar algo esta el interruptor, pero no a mitad de una atencion.
+ */
+async function validarModuloSinPacienteDentro(moduloId: string) {
+  const abierto = await prisma.turno.findFirst({
+    where: {
+      moduloId,
+      fecha: diaColombia(ahoraISO()),
+      estado: { in: ['LLAMADO', 'EN_ATENCION'] },
+    },
+    select: { codigo: true },
+  })
+
+  if (abierto) {
     errorDeNegocio(
-      `Ya existe "${nombre}". El paciente solo tiene ese nombre para saber por que puerta entrar, asi que no puede haber dos iguales.`,
+      `No se puede desactivar: el turno ${abierto.codigo} esta siendo atendido ahi. Espera a que el doctor lo cierre.`,
     )
   }
 }
 
+/**
+ * Dos servicios no pueden llamarse igual, ni dos doctores.
+ *
+ * La base ya lo impide con un indice unico, pero reventar contra el indice no
+ * es lo mismo que validarlo: el error de Prisma llega en ingles y con el nombre
+ * de la columna dentro, y ahora `apiError` lo tapa entero con un mensaje
+ * generico de "problema del sistema", que para un nombre repetido es peor
+ * todavia. Se comprueba antes y se contesta en el idioma del funcionario.
+ *
+ * Se compara SIN distinguir mayusculas ni espacios, que es como lo lee una
+ * persona: "Odontologia" y "ODONTOLOGIA" son el mismo servicio, y la carga del
+ * reporte del hospital manda los nombres en mayusculas.
+ */
+async function validarNombreDeServicioLibre(nombre: string, exceptoId?: string) {
+  const repetido = await prisma.servicio.findFirst({
+    where: {
+      nombre: { equals: nombre, mode: 'insensitive' },
+      ...(exceptoId ? { id: { not: exceptoId } } : {}),
+    },
+    select: { id: true },
+  })
+  if (repetido) errorDeNegocio(YA_EXISTE.servicio(nombre))
+}
+
+async function validarNombreDeProfesionalLibre(nombre: string, exceptoId?: string) {
+  const repetido = await prisma.profesional.findFirst({
+    where: {
+      nombre: { equals: nombre, mode: 'insensitive' },
+      ...(exceptoId ? { id: { not: exceptoId } } : {}),
+    },
+    select: { id: true },
+  })
+  if (repetido) errorDeNegocio(YA_EXISTE.profesional(nombre))
+}
+
 async function validarPrefijoLibre(prefijo: string) {
   const repetido = await prisma.servicio.findFirst({ where: { prefijo }, select: { id: true } })
-  if (repetido) errorDeNegocio(`El prefijo ${prefijo} ya lo usa otro servicio.`)
+  if (repetido) errorDeNegocio(YA_EXISTE.prefijo(prefijo))
 }
 
 /**

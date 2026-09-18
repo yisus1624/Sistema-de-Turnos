@@ -93,7 +93,7 @@ function alVolverDeUnHueco(resincronizar: () => void): () => void {
   }
 }
 
-type ManejoDeCanal = {
+export type ManejoDeCanal = {
   alConectar: () => void
   alPerderse: () => void
   alCambiarLosDatos: (evento: EventoTurno) => void
@@ -112,8 +112,14 @@ type ManejoDeCanal = {
  * se rearma con cada mensaje recibido, incluido el latido del canal. Si se
  * cumple, es que no llega ni el latido, asi que la conexion se da por muerta y
  * se rehace; al reconectar, `alConectar` vuelve a poner los datos al dia.
+ *
+ * Se exporta para la pantalla publica del televisor, que no encaja en
+ * `useRecargaEnVivo`: no recarga entera con cada evento, aplica CADA evento a
+ * la casilla que le toca y hace sonar la campana. Necesita el mismo canal que
+ * se vigila a si mismo —el televisor lleva dias encendido, es el caso mas
+ * expuesto a que el SSE muera en silencio— pero no la recarga completa.
  */
-function crearCanalEnVivo(manejo: ManejoDeCanal) {
+export function crearCanalEnVivo(manejo: ManejoDeCanal) {
   let eventos: EventSource | null = null
 
   const vigia = crearEsperaRearmable(MS_SILENCIO_MAXIMO, () => {

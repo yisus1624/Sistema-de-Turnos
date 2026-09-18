@@ -18,10 +18,11 @@ import ConfirmModal from '@/components/ui/ConfirmModal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
+import { CeldaActividad, SelectorDeDia, useActividadDelDia } from '@/components/admin/ActividadDelDia'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { ModoFila, Servicio } from '@/lib/turnos/types'
 
-const COLUMNAS = ['Servicio', 'Prefijo', 'Modo de fila', 'Estado', '']
+const COLUMNAS = ['Servicio', 'Prefijo', 'Modo de fila', 'Ese dia', 'Estado', '']
 
 type Formulario = {
   nombre: string
@@ -45,6 +46,23 @@ export default function ServiciosClient() {
   const [guardando, setGuardando] = useState(false)
   const [aEliminar, setAEliminar] = useState<Servicio | null>(null)
   const [eliminando, setEliminando] = useState(false)
+
+  /**
+   * El dia que se esta mirando, y lo que atendio ese dia.
+   *
+   * Un dia el hospital atiende odontologia y consulta externa, y otro solo
+   * odontologia; los servicios registrados son los mismos, porque el catalogo
+   * lo llena la carga del reporte y de ahi nada se apaga. Sin esta columna la
+   * pantalla solo sabia decir cuales EXISTEN.
+   */
+  const {
+    fecha,
+    setFecha,
+    actividad,
+    cargando: cargandoActividad,
+    error: errorActividad,
+    esFutura,
+  } = useActividadDelDia('porServicio')
 
   const cargar = useCallback(async () => {
     try {
@@ -136,6 +154,14 @@ export default function ServiciosClient() {
 
   return (
     <>
+      <Card className="mb-5">
+        <SelectorDeDia
+          fecha={fecha}
+          onFecha={setFecha}
+          ayuda="Un servicio puede estar activo y no atender ese dia: 'Ese dia' sale de las citas cargadas, no del interruptor."
+        />
+      </Card>
+
       <Card padded={false}>
         <CardHeader>
           <CardTitle>Servicios de atencion ({servicios.length})</CardTitle>
@@ -170,6 +196,14 @@ export default function ServiciosClient() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-slate-600">{etiquetaModo[servicio.modoFila]}</td>
+                  <td className="px-4 py-3">
+                    <CeldaActividad
+                      actividad={actividad[servicio.id]}
+                      cargando={cargandoActividad}
+                      error={errorActividad}
+                      esFutura={esFutura}
+                    />
+                  </td>
                   <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-3">
                       <Interruptor

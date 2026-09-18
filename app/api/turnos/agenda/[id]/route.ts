@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 
 const SECCIONES_AGENDA = ['/admin/citas', '/operador/agenda', '/admin/pruebas'] as const
 
@@ -36,10 +37,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       usuarioId: session.user.id,
     })
 
-    registrarEvento({
-      tipo: 'CITA_REPROGRAMADA',
+    await registrarEvento({
+      tipo: EVENTOS.CITA_REPROGRAMADA,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: cita.documentoPaciente,
       detalle: {
         citaId: cita.id,
@@ -73,10 +75,11 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
 
     const cita = await turnoRepository.cancelarCita(id, { usuarioId: session.user.id, motivo })
 
-    registrarEvento({
-      tipo: 'CITA_CANCELADA',
+    await registrarEvento({
+      tipo: EVENTOS.CITA_CANCELADA,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: cita.documentoPaciente,
       detalle: { citaId: cita.id, horaCita: cita.horaCita, motivo: cita.motivoCancelacion },
     })

@@ -216,16 +216,29 @@ test('el historico de un operador sin secciones no deja ver los turnos de otra v
   const { GET } = await import('@/app/api/turnos/historico/route')
 
   // Ni preguntando de frente, ni nombrando en la query al funcionario ajeno.
+  //
+  // Antes esta ruta pedia ROL y respondia 200 con la lista recortada a lo que
+  // el propio funcionario hubiera llamado. No filtraba nada, pero una seccion
+  // retirada contestando 200 esconde quien puede entrar de verdad: ahora pide
+  // SECCION, como el resto del sistema, y a quien no tiene ninguna lo rechaza
+  // de entrada.
   for (const busqueda of ['', '?funcionarioId=usr-otra-ventanilla']) {
     const respuesta = await GET(new Request(`http://localhost/api/turnos/historico${busqueda}`))
-    assert.equal(respuesta.status, 200)
-    const { turnos } = await respuesta.json()
-    const codigos = turnos.map((t) => t.codigo)
-    assert.ok(
-      !codigos.includes(turno.codigo),
-      `un operador sin secciones vio un turno que llamo otra ventanilla (${busqueda || 'sin filtro'})`,
-    )
+    await assertRechazo(respuesta, `historico sin secciones (${busqueda || 'sin filtro'})`)
   }
+
+  // Y quien SI tiene una seccion de turnos entra, pero solo ve lo suyo: el
+  // recorte por funcionario sigue en pie para quien no administra.
+  sesion = {
+    user: { id: 'usr-con-operador', rol: 'OPERADOR', secciones: ['/operador'], nombre: 'Ventanilla' },
+  }
+  const suyo = await GET(new Request('http://localhost/api/turnos/historico'))
+  assert.equal(suyo.status, 200)
+  const { turnos } = await suyo.json()
+  assert.ok(
+    !turnos.map((t) => t.codigo).includes(turno.codigo),
+    'un operador vio un turno que llamo otra ventanilla',
+  )
 })
 
 test('las dos rutas publicas siguen abiertas y sin un solo dato del paciente', async () => {

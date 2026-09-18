@@ -70,3 +70,33 @@ test('solo recarga por la fila propia; lo demas pasa siempre', () => {
   assert.equal(afectaALaFila(cambio, { profesionalId: 'pro-2' }), false)
   assert.equal(afectaALaFila(LLAMADO, { servicioId: 'srv-2' }), true)
 })
+
+// Cada llamado de CUALQUIER consultorio hacia recargar a TODOS los demas: con
+// ocho consultorios trabajando, la pantalla de cada doctor pedia su fila ocho
+// veces por cada paciente que pasaba. Y la fila de un doctor son SUS pacientes:
+// que el de al lado llame al suyo no se la mueve.
+test('el llamado de otro consultorio no obliga a recargar la fila propia', () => {
+  const deOtro = { ...LLAMADO, casilla: { ...LLAMADO.casilla, moduloId: 'mod-8' } }
+
+  assert.equal(afectaALaFila(deOtro, { moduloId: 'mod-1' }), false)
+  assert.equal(
+    afectaALaFila(LLAMADO, { moduloId: 'mod-1' }),
+    true,
+    'el llamado del propio consultorio si: acaba de salir un paciente de la fila',
+  )
+})
+
+test('quien no dice en que consultorio esta sigue recibiendo todos los llamados', () => {
+  // La ventanilla comparte fila: que otra ventanilla llame al siguiente SI le
+  // quita gente de la suya. Sin consultorio declarado no se filtra nada.
+  assert.equal(afectaALaFila(LLAMADO, { servicioId: 'srv-2' }), true)
+  assert.equal(afectaALaFila(LLAMADO, {}), true)
+})
+
+test('un consultorio que queda libre le llega a todo el mundo', () => {
+  // La pantalla del televisor tiene que apagar esa casilla se mire desde donde
+  // se mire; no se filtra por fila.
+  const liberado = { tipo: 'modulo.liberado', moduloId: 'mod-8' }
+
+  assert.equal(afectaALaFila(liberado, { moduloId: 'mod-1' }), true)
+})

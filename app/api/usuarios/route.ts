@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { usuarioRepository } from '@/lib/usuarios/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
-import { registrarEvento } from '@/lib/seguridad/registro'
-import { seccionesDelRol } from '@/lib/permissions/rutas'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
+import { secciones as catalogoSecciones } from '@/lib/permissions/rutas'
+import { revisarAlta } from '@/lib/usuarios/politica-permisos'
 
 export async function GET() {
   try {
@@ -14,6 +16,22 @@ export async function GET() {
     return apiError(error)
   }
 }
+
+/**
+ * Las secciones tienen que existir en el catalogo.
+ *
+ * Antes era `z.array(z.string())` y entraba cualquier texto: se pudo crear una
+ * cuenta con `["/admin/no-existe"]` sin que nadie protestara. No daba acceso a
+ * nada —los guardas comparan el href exacto—, pero dejaba permisos basura en la
+ * base y, sobre todo, un administrador podia dejar sin acceso a un funcionario
+ * por una errata y no enterarse hasta que el otro no pudiera entrar.
+ */
+const hrefsValidos = catalogoSecciones.map((seccion) => seccion.href)
+const seccionesSchema = z
+  .array(z.string())
+  .refine((lista) => lista.every((href) => hrefsValidos.includes(href)), {
+    message: 'Alguna de las secciones indicadas no existe en el sistema.',
+  })
 
 const usuarioSchema = z.object({
   nombre: z.string().trim().min(3, 'Ingresa el nombre completo.').max(80),
@@ -26,7 +44,7 @@ const usuarioSchema = z.object({
   rol: z.enum(['ADMINISTRADOR', 'OPERADOR']),
   area: z.string().trim().max(60).nullable().optional(),
   password: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.'),
-  secciones: z.array(z.string()).nullable().optional(),
+  secciones: seccionesSchema.nullable().optional(),
 })
 
 export async function POST(request: Request) {
@@ -39,40 +57,48 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos invalidos.' }, { status: 400 })
     }
 
-    // Ver la nota del PATCH: repartir el rol de administrador es potestad de un
-    // administrador, no de un operador con la seccion de usuarios.
-    if (parsed.data.rol === 'ADMINISTRADOR' && session.user.rol !== 'ADMINISTRADOR') {
-      return NextResponse.json(
-        { error: 'Solo un administrador puede crear otro administrador.' },
-        { status: 403 },
-      )
+    const { ip } = await contextoPeticion()
+    const actor = {
+      id: session.user.id,
+      rol: session.user.rol,
+      secciones: session.user.secciones,
     }
 
-    if (parsed.data.rol === 'OPERADOR' && parsed.data.secciones && parsed.data.secciones.length === 0) {
-      return NextResponse.json({ error: 'Selecciona al menos una seccion para el operador.' }, { status: 400 })
-    }
-
-    // Nadie reparte permisos que no tiene: sin esto, un operador con la
-    // seccion de usuarios se creaba una cuenta con todas las secciones de
-    // administracion y entraba con ella.
-    if (session.user.rol !== 'ADMINISTRADOR') {
-      const propias = new Set(session.user.secciones ?? seccionesDelRol(session.user.rol).map((s) => s.href))
-      const ajenas = (parsed.data.secciones ?? []).filter((seccion) => !propias.has(seccion))
-      if (ajenas.length > 0) {
-        return NextResponse.json(
-          { error: 'No puedes dar acceso a secciones que tu no tienes.' },
-          { status: 403 },
-        )
-      }
+    // Quien puede darle que a quien se decide en `politica-permisos`, que es
+    // puro y esta probado caso por caso. Aqui solo se aplica el veredicto.
+    const rechazo = revisarAlta(actor, parsed.data)
+    if (rechazo) {
+      // El intento rechazado TAMBIEN se apunta: alguien tratando de crear una
+      // cuenta con mas acceso del que tiene es justo lo que hay que poder
+      // revisar despues.
+      await registrarEvento({
+        tipo: EVENTOS.USUARIO_CREADO,
+        exito: false,
+        usuarioId: session.user.id,
+        usuarioNombre: session.user.name ?? null,
+        identificador: parsed.data.usuario,
+        ip,
+        detalle: { motivo: rechazo.motivo, rol: parsed.data.rol },
+      })
+      return NextResponse.json({ error: rechazo.motivo }, { status: rechazo.estado })
     }
 
     const usuario = await usuarioRepository.crear(parsed.data)
-    registrarEvento({
-      tipo: 'USUARIO_CREADO',
+    await registrarEvento({
+      tipo: EVENTOS.USUARIO_CREADO,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: usuario.usuario,
-      detalle: { rol: usuario.rol },
+      ip,
+      // Con que secciones NACE la cuenta, no solo su rol: es el dato que hace
+      // falta para revisar despues si a alguien se le dio de mas.
+      detalle: {
+        objetivoId: usuario.id,
+        nombre: usuario.nombre,
+        rol: usuario.rol,
+        secciones: usuario.secciones ?? 'las de su rol',
+      },
     })
 
     return NextResponse.json({ usuario })

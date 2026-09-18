@@ -14,7 +14,9 @@
  *
  *   npm run db:seed
  */
-import bcrypt from 'bcryptjs'
+// La extension va explicita: el seed corre con `node --experimental-strip-types`,
+// que resuelve como ESM y no adivina extensiones como hace el bundler.
+import { cifrarContrasena } from '../lib/usuarios/contrasenas.ts'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -59,7 +61,7 @@ async function sembrarCuenta(params: {
     data: {
       nombre: params.nombre,
       usuario,
-      passwordHash: bcrypt.hashSync(params.password, 10),
+      passwordHash: await cifrarContrasena(params.password),
       rol: params.rol,
       area: params.area,
       activo: true,

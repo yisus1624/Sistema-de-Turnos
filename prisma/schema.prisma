@@ -7,6 +7,23 @@
 // repositorio contra Prisma tiene que leerse como una traduccion directa, no
 // como un modelo paralelo que haya que reinterpretar.
 //
+// HAY INDICES QUE ESTE ARCHIVO NO PUEDE DECLARAR. Tres reglas del negocio se
+// sostienen en indices escritos a mano en la migracion
+// `20260917103000_integridad_concurrencia`, porque Prisma no sabe expresar
+// indices parciales ni sobre una expresion:
+//
+//   - `modulos_nombre_normalizado_unico`, `servicios_nombre_normalizado_unico`
+//     y `profesionales_nombre_normalizado_unico`: unicidad del nombre sobre
+//     `lower(trim(nombre))`. El `@unique` de abajo distingue mayusculas y la
+//     regla de negocio no, asi que "Consultorio 3" y "CONSULTORIO 3" entraban
+//     los dos y el paciente leia dos casillas identicas en el televisor.
+//   - `citas_cupo_manual_unico`: un solo paciente por cupo en las citas creadas
+//     A MANO. Es parcial a proposito; el reporte del hospital si trae dos
+//     pacientes con el mismo doctor a la misma hora y eso se respeta.
+//
+// Al correr `prisma migrate dev` Prisma los vera como desviacion y querra
+// borrarlos: no se le hace caso, se conservan.
+//
 // Convencion, igual que en el resto del sistema: nada de datos clinicos ni de
 // datos del paciente que no hagan falta para operar el turno (requerimiento
 // seccion 17). Del reporte de citas del hospital solo se guarda con que
@@ -106,7 +123,12 @@ model Servicio {
   id       String   @id @default(cuid())
   nombre   String   @unique
   /// Prefijo del codigo de turno, ej: "O" para Odontologia (RF-002).
-  prefijo  String
+  ///
+  /// UNICO EN LA BASE, no solo en la validacion. Dos servicios con la misma
+  /// letra no sacan codigos repetidos (eso lo corta `@@unique([fecha, codigo])`
+  /// de Turno), pero COMPARTEN la numeracion del dia: Odontologia saca O-001 y
+  /// despues O-003 porque el otro servicio se llevo el O-002.
+  prefijo  String   @unique
   modoFila ModoFila @default(POR_PROFESIONAL)
   activo   Boolean  @default(true)
 
@@ -308,7 +330,17 @@ model Configuracion {
   id String @id @default("unica")
 
   audioActivo     Boolean @default(true)
+  /// Los valores con los que nace la fila los pone `CONFIGURACION_INICIAL`
+  /// (lib/turnos/configuracion-inicial.ts), que es la unica fuente de verdad:
+  /// estos `@default` no llegan a usarse nunca porque la aplicacion siempre
+  /// escribe las columnas al crearla. El de `volumen` decia 0.8 mientras el
+  /// codigo decia 1; se deja como esta porque corregirlo obliga a una
+  /// migracion que no aporta nada (ver el informe de la tanda 6).
   volumen         Float   @default(0.8)
+  /// EN DESUSO: lo leia la lista lateral de "ultimos llamados" de la pantalla,
+  /// que se quito en el rediseño. Ya no esta en `ConfiguracionSistema` ni se
+  /// admite al guardar; la columna se deja para no obligar a una migracion
+  /// destructiva.
   ultimosVisibles Int     @default(5)
   mensajePie      String  @default("")
 
@@ -327,18 +359,30 @@ model Configuracion {
 // Seguridad (requerimiento seccion 17)
 // ---------------------------------------------------------------------------
 
+/// Una accion importante que alguien hizo en el sistema.
+///
+/// SE GUARDA EL NOMBRE, NO SOLO EL ID. El id no dice nada al leer el registro
+/// un mes despues, y la cuenta puede cambiar de manos o darse de baja: el
+/// nombre de quien hizo la accion se copia AQUI, tal como estaba en ese
+/// momento, y no se resuelve luego por relacion. Esa copia es justo lo que
+/// hace util un registro de auditoria —lo que paso, quien lo hizo y cuando—
+/// aunque despues se renombre o se borre la cuenta.
 model EventoSeguridad {
   id            String   @id @default(cuid())
   fecha         DateTime @default(now())
   tipo          String
   exito         Boolean
   usuarioId     String?
+  /// Nombre de la persona en el momento de la accion. Null cuando la accion no
+  /// la hizo un usuario con sesion (un intento de entrada fallido, por ejemplo).
+  usuarioNombre String?
   identificador String?
   ip            String?
   detalle       Json?
 
   @@index([fecha])
   @@index([tipo, fecha])
+  @@index([usuarioId, fecha])
   @@map("eventos_seguridad")
 }
 

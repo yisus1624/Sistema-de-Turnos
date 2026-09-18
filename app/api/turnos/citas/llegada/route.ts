@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 import { avisarFilaCambiada } from '@/lib/realtime/avisos'
 
 const bodySchema = z.object({
@@ -35,10 +36,11 @@ export async function POST(request: Request) {
 
     // La llegada es el momento en que el paciente entra al sistema: es el
     // primer eslabon de la trazabilidad del turno.
-    registrarEvento({
-      tipo: 'LLEGADA_REGISTRADA',
+    await registrarEvento({
+      tipo: EVENTOS.LLEGADA_REGISTRADA,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: turno.codigo,
       detalle: { citaId: parsed.data.citaId, profesionalId: turno.profesionalId },
     })

@@ -18,11 +18,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Clock, CornersIn, CornersOut, SpeakerHigh, SpeakerX } from '@phosphor-icons/react/dist/ssr'
 import type { EventoTurno } from '@/lib/realtime/hub'
-import {
-  RUTA_EVENTOS_EN_VIVO,
-  esCambioDeDatos,
-  interpretarMensaje,
-} from '@/lib/realtime/canal'
+import { crearCanalEnVivo, type EstadoConexionEnVivo } from '@/lib/hooks'
+import { CONFIGURACION_INICIAL } from '@/lib/turnos/configuracion-inicial'
 import type { CasillaPantalla, ConfiguracionSistema } from '@/lib/turnos/types'
 import { CampanaDeLlamado, sonarCampana } from '@/lib/turnos/anuncio'
 import { Isotipo, NOMBRE_INSTITUCION, NOMBRE_SISTEMA } from '@/components/brand/Marca'
@@ -41,19 +38,16 @@ const MS_RESALTE = 8000
  */
 const MS_RESINCRONIZAR = 60000
 
-const CONFIGURACION_POR_DEFECTO: ConfiguracionSistema = {
-  audioActivo: true,
-  volumen: 1,
-  ultimosVisibles: 5,
-  mensajePie: '',
-  // La pantalla no usa los parametros de agenda, pero el tipo es el de la
-  // configuracion completa: se dejan los mismos valores iniciales del servidor.
-  duracionCitaMinutos: 15,
-  jornadaMananaInicio: '07:00',
-  jornadaMananaFin: '12:00',
-  jornadaTardeInicio: '13:00',
-  jornadaTardeFin: '17:00',
-}
+/**
+ * Con que arranca la pantalla hasta que el servidor conteste.
+ *
+ * Los mismos valores del servidor, no una copia a mano: el volumen de la
+ * campanita llego a valer una cosa aqui y otra en la base, asi que la primera
+ * campanada del televisor sonaba a un volumen distinto del que el
+ * administrador tenia configurado. Solo el mensaje al pie se deja vacio: es
+ * texto institucional que no se puede inventar antes de leerlo.
+ */
+const CONFIGURACION_POR_DEFECTO: ConfiguracionSistema = { ...CONFIGURACION_INICIAL, mensajePie: '' }
 
 /** Ancho minimo comodo de una tarjeta, en pixeles, para que se lea de lejos. */
 const ANCHO_MINIMO_TARJETA = 240
@@ -78,7 +72,6 @@ function distribucionEquilibrada(total: number, maxColumnas: number) {
 function casillaLibreDesde(casilla: CasillaPantalla): CasillaPantalla {
   return {
     ...casilla,
-    turnoId: null,
     codigo: null,
     horaLlamado: null,
     vecesLlamado: 0,
@@ -184,7 +177,7 @@ const Casilla = memo(function Casilla({ casilla, resaltada }: { casilla: Casilla
 
 export default function PantallaPublicaPage() {
   const [activo, setActivo] = useState(false)
-  const [conectado, setConectado] = useState(false)
+  const [conexion, setConexion] = useState<EstadoConexionEnVivo>('reconectando')
   const [sonidoActivo, setSonidoActivo] = useState(true)
   const [pantallaCompleta, setPantallaCompleta] = useState(false)
   // Ancho real de la pantalla donde esta puesta, para repartir las tarjetas.
@@ -252,12 +245,12 @@ export default function PantallaPublicaPage() {
     const eventosAlPedir = eventosAplicadosRef.current
 
     fetch('/api/turnos/pantalla')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.configuracion) setConfiguracion(data.configuracion)
+      .then((respuesta) => respuesta.json())
+      .then((estado) => {
+        if (estado.configuracion) setConfiguracion(estado.configuracion)
         if (eventosAplicadosRef.current !== eventosAlPedir) return
 
-        setCasillas(data.casillas ?? [])
+        setCasillas(estado.casillas ?? [])
       })
       .catch(() => {})
   }, [])
@@ -335,27 +328,42 @@ export default function PantallaPublicaPage() {
     }
   }, [campana, resaltar, cargarEstado])
 
+  /**
+   * El canal de eventos, el MISMO que vigila el resto del sistema.
+   *
+   * Aqui se abria un `EventSource` a mano que solo reaccionaba a `onerror`, y
+   * un SSE se muere en silencio mas a menudo de lo que parece: vence el NAT,
+   * un proxy se traga los paquetes, el televisor salta de wifi. El navegador
+   * deja la conexion en `OPEN` y no avisa nunca. En este televisor —encendido
+   * dias seguidos— ese es el fallo esperable, no el raro, y su consecuencia no
+   * es cosmetica: la resincronizacion del minuto repinta las casillas, PERO NO
+   * SUENA LA CAMPANA, porque la campana solo la dispara un evento de llamado.
+   * La sala de espera no levanta la vista y el paciente pierde su turno.
+   *
+   * `crearCanalEnVivo` trae el vigia que rehace la conexion cuando deja de
+   * llegar hasta el latido, y deja el indicador diciendo la verdad.
+   *
+   * LA CAMPANA SIGUE SONANDO SOLO CON UN LLAMADO NUEVO: lo que llega por
+   * `alCambiarLosDatos` son eventos (el latido queda filtrado dentro del
+   * canal), y `alConectar` solo resincroniza, que no suena.
+   */
   useEffect(() => {
     if (!activo) return
 
-    const es = new EventSource(RUTA_EVENTOS_EN_VIVO)
-    es.onopen = () => {
-      setConectado(true)
-      // Al reconectar puede haberse perdido algun evento: resincronizamos.
-      cargarEstado()
-    }
-    es.onerror = () => setConectado(false)
-    es.onmessage = (mensaje: MessageEvent<string>) => {
-      const recibido = interpretarMensaje(mensaje.data)
+    const canal = crearCanalEnVivo({
+      alConectar: () => {
+        setConexion('en-vivo')
+        // Al (re)conectar puede haberse perdido algun evento: resincronizamos.
+        cargarEstado()
+      },
+      alPerderse: () => setConexion('reconectando'),
+      alCambiarLosDatos: manejarEvento,
+    })
 
-      // El latido que mantiene viva la conexion NO es un cambio de turnos: si
-      // se tratara como uno, cada veinte segundos invalidaria la
-      // resincronizacion que venga en camino (ver `eventosAplicadosRef`) y la
-      // pantalla podria quedarse con casillas viejas.
-      if (recibido && esCambioDeDatos(recibido)) manejarEvento(recibido)
+    return () => {
+      canal.cerrar()
+      setConexion('reconectando')
     }
-
-    return () => es.close()
   }, [activo, manejarEvento, cargarEstado])
 
   /**
@@ -512,7 +520,7 @@ export default function PantallaPublicaPage() {
         </div>
 
         <div className="flex items-center gap-6">
-          <IndicadorConexion estado={conectado ? 'en-vivo' : 'reconectando'} />
+          <IndicadorConexion estado={conexion} />
           <Reloj />
           <button
             onClick={() => setSonidoActivo((v) => !v)}

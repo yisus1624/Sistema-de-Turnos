@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
+import { registrarLlamado } from '@/lib/turnos/rastro-llamado'
 
 const bodySchema = z
   .object({
@@ -33,6 +34,11 @@ export async function POST(request: Request) {
     if (!turno) {
       return NextResponse.json({ error: 'No hay pacientes en espera.' }, { status: 404 })
     }
+
+    await registrarLlamado(turno, {
+      usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
+    })
 
     return NextResponse.json({ turno })
   } catch (error) {

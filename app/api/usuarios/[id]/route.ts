@@ -2,8 +2,13 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { usuarioRepository } from '@/lib/usuarios/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
-import { registrarEvento } from '@/lib/seguridad/registro'
-import { seccionesDelRol } from '@/lib/permissions/rutas'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
+import { secciones as catalogoSecciones } from '@/lib/permissions/rutas'
+import { revisarCambio } from '@/lib/usuarios/politica-permisos'
+
+/** Ver la nota del POST: las secciones tienen que existir en el catalogo. */
+const hrefsValidos = catalogoSecciones.map((seccion) => seccion.href)
 
 const cambioSchema = z.object({
   nombre: z.string().trim().min(3).max(80).optional(),
@@ -18,7 +23,13 @@ const cambioSchema = z.object({
   area: z.string().trim().max(60).nullable().optional(),
   activo: z.boolean().optional(),
   password: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.').optional(),
-  secciones: z.array(z.string()).nullable().optional(),
+  secciones: z
+    .array(z.string())
+    .refine((lista) => lista.every((href) => hrefsValidos.includes(href)), {
+      message: 'Alguna de las secciones indicadas no existe en el sistema.',
+    })
+    .nullable()
+    .optional(),
 })
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -32,78 +43,86 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos invalidos.' }, { status: 400 })
     }
 
-    // Nadie puede quitarse a si mismo el acceso: dejaria al sistema sin
-    // administrador si es el unico que queda.
-    if (id === session.user.id && (parsed.data.activo === false || parsed.data.rol === 'OPERADOR')) {
-      return NextResponse.json(
-        { error: 'No puedes quitarte a ti mismo el acceso de administrador.' },
-        { status: 400 },
-      )
+    // La cuenta se lee ENTERA y de la lista completa, no con `buscarPorId`, que
+    // oculta las dadas de baja: sin eso, la jugada de reactivar una cuenta y
+    // tomarla en la misma peticion se saltaba la comprobacion. Ademas hace
+    // falta su estado actual para el registro (el antes y el despues) y para
+    // decidir si el actor puede tocarla.
+    const objetivo = (await usuarioRepository.listar()).find((usuario) => usuario.id === id)
+    if (!objetivo) {
+      return NextResponse.json({ error: 'El usuario indicado no existe.' }, { status: 404 })
     }
 
-    // Solo un administrador reparte roles y permisos. Un operador al que le
-    // dieron la seccion de usuarios administra cuentas, pero no puede
-    // ascenderse a si mismo ni ampliarse los permisos.
-    if (session.user.rol !== 'ADMINISTRADOR') {
-      if (parsed.data.rol === 'ADMINISTRADOR') {
-        return NextResponse.json(
-          { error: 'Solo un administrador puede asignar el rol de administrador.' },
-          { status: 403 },
-        )
-      }
-      if (id === session.user.id && (parsed.data.secciones !== undefined || parsed.data.rol !== undefined)) {
-        return NextResponse.json(
-          { error: 'No puedes cambiar tu propio rol ni tus propios permisos.' },
-          { status: 403 },
-        )
-      }
-
-      // NO SE TOCA LA CUENTA DE UN ADMINISTRADOR.
-      //
-      // Faltaba esto y era la via de escalada: las reglas de arriba miran que
-      // rol se ASIGNA, pero no sobre QUIEN se actua. Un operador con la
-      // seccion de usuarios podia hacerle PATCH al administrador cambiandole
-      // la contrasena y entrar como el. Se busca en la lista completa (no con
-      // `buscarPorId`, que oculta los desactivados) porque si no, la misma
-      // jugada valia contra un administrador dado de baja, reactivandolo en la
-      // misma peticion.
-      const todos = await usuarioRepository.listar()
-      const objetivo = todos.find((u) => u.id === id)
-      if (objetivo?.rol === 'ADMINISTRADOR') {
-        return NextResponse.json(
-          { error: 'Solo un administrador puede modificar la cuenta de otro administrador.' },
-          { status: 403 },
-        )
-      }
-
-      // Tampoco se reparten permisos que uno mismo no tiene: si no, bastaba
-      // con crearle a otro una cuenta con todas las secciones y entrar con
-      // ella.
-      const propias = new Set(session.user.secciones ?? seccionesDelRol(session.user.rol).map((s) => s.href))
-      const ajenas = (parsed.data.secciones ?? []).filter((seccion) => !propias.has(seccion))
-      if (ajenas.length > 0) {
-        return NextResponse.json(
-          { error: 'No puedes dar acceso a secciones que tu no tienes.' },
-          { status: 403 },
-        )
-      }
+    const { ip } = await contextoPeticion()
+    const actor = {
+      id: session.user.id,
+      rol: session.user.rol,
+      secciones: session.user.secciones,
     }
 
-    if (parsed.data.rol === 'OPERADOR' && parsed.data.secciones && parsed.data.secciones.length === 0) {
-      return NextResponse.json({ error: 'Selecciona al menos una seccion para el operador.' }, { status: 400 })
+    const rechazo = revisarCambio(actor, objetivo, parsed.data)
+    if (rechazo) {
+      // Un intento de tocar una cuenta que no se puede tocar es justo lo que
+      // hay que poder revisar despues, asi que se apunta como fallido.
+      await registrarEvento({
+        tipo: EVENTOS.USUARIO_ACTUALIZADO,
+        exito: false,
+        usuarioId: session.user.id,
+        usuarioNombre: session.user.name ?? null,
+        identificador: objetivo.usuario,
+        ip,
+        detalle: { motivo: rechazo.motivo, objetivoId: objetivo.id },
+      })
+      return NextResponse.json({ error: rechazo.motivo }, { status: rechazo.estado })
     }
 
     const usuario = await usuarioRepository.actualizar(id, parsed.data)
-    registrarEvento({
-      tipo: 'USUARIO_ACTUALIZADO',
+
+    await registrarEvento({
+      tipo: EVENTOS.USUARIO_ACTUALIZADO,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: usuario.usuario,
-      detalle: { cambios: Object.keys(parsed.data).filter((clave) => clave !== 'password') },
+      ip,
+      detalle: detalleDelCambio(objetivo, usuario, parsed.data.password !== undefined),
     })
 
     return NextResponse.json({ usuario })
   } catch (error) {
     return apiError(error)
   }
+}
+
+/**
+ * Que cambio de verdad, con el antes y el despues.
+ *
+ * Antes se guardaba `{ cambios: Object.keys(datos) }`, y eso no servia para
+ * auditar nada: decia `['secciones']` sin decir de que a que, y el filtro que
+ * quitaba la contraseña del detalle se llevaba por delante tambien EL HECHO de
+ * que hubiera cambiado. Un restablecimiento de la clave de otro funcionario
+ * —la escalada que habia que poder investigar— quedaba escrito como un cambio
+ * vacio.
+ *
+ * La contraseña sigue sin aparecer, ni en claro ni como hash: lo que se apunta
+ * es que se cambio.
+ */
+function detalleDelCambio(
+  antes: { rol: string; activo: boolean; secciones?: string[] | null },
+  despues: { rol: string; activo: boolean; secciones?: string[] | null },
+  passwordCambiada: boolean,
+) {
+  const detalle: Record<string, unknown> = {}
+
+  if (passwordCambiada) detalle.passwordCambiada = true
+  if (antes.rol !== despues.rol) detalle.rol = `${antes.rol} -> ${despues.rol}`
+  if (antes.activo !== despues.activo) detalle.estado = despues.activo ? 'activado' : 'desactivado'
+
+  const seccionesAntes = antes.secciones ?? 'las de su rol'
+  const seccionesDespues = despues.secciones ?? 'las de su rol'
+  if (JSON.stringify(seccionesAntes) !== JSON.stringify(seccionesDespues)) {
+    detalle.secciones = { antes: seccionesAntes, despues: seccionesDespues }
+  }
+
+  return detalle
 }

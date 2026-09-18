@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -11,10 +12,11 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     // Quien cierra la atencion queda grabado en el turno, no solo quien llamo.
     const turno = await turnoRepository.marcarAtendido(id, session.user.id)
 
-    registrarEvento({
-      tipo: 'TURNO_ATENDIDO',
+    await registrarEvento({
+      tipo: EVENTOS.TURNO_ATENDIDO,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: turno.codigo,
     })
 

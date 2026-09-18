@@ -105,6 +105,33 @@ export interface JornadaDelDia {
   hasta: string | null
 }
 
+/**
+ * Lo que un servicio o un consultorio movio UN DIA concreto.
+ *
+ * POR QUE HACE FALTA. En el catalogo todo esta "activo", porque ahi entra lo
+ * que menciona el reporte del hospital y nada lo vuelve a apagar. "Activo"
+ * quiere decir "existe", no "hoy atiende": el hospital puede tener registrados
+ * seis servicios y veinte consultorios, y un martes cualquiera trabajar solo
+ * odontologia en tres. Esto contesta lo segundo, y se deduce de las citas de
+ * ese dia, que es el unico dato que lo sabe.
+ */
+export interface ActividadDelDia {
+  /** Cuantas citas tiene ese dia. Cero no aparece: se responde con ausencia. */
+  citas: number
+  /** Primera y ultima hora con paciente, para poder mirarlo y creerlo. */
+  desde: string
+  hasta: string
+}
+
+/** Actividad de un dia, por servicio y por consultorio. */
+export interface ActividadCatalogo {
+  fecha: string
+  /** servicioId -> lo que movio. El que no esta, ese dia no atendio. */
+  porServicio: Record<string, ActividadDelDia>
+  /** moduloId -> lo que movio. El que no esta, ese dia no se uso. */
+  porModulo: Record<string, ActividadDelDia>
+}
+
 /** Un doctor al que un recalculo le corrigio la jornada habitual. */
 export interface AjusteDeJornada {
   nombre: string
@@ -491,7 +518,11 @@ export interface CasillaPantalla {
   servicioId: string
   servicioNombre: string
   profesionalNombre?: string | null
-  turnoId?: string | null
+  // NO lleva `turnoId`: esta ruta no tiene sesion (la abre el televisor de la
+  // sala de espera) y la pantalla identifica cada casilla por su `moduloId`.
+  // Mandar el identificador interno del turno era exponer sin necesidad la
+  // unica pieza que permite encadenar lo que se ve en el televisor con un
+  // paciente concreto (minimizacion de datos, requerimiento seccion 17).
   codigo?: string | null
   horaLlamado?: string | null
   /** Cuantas veces se llamo; la pantalla lo usa para repetir la animacion. */
@@ -531,8 +562,6 @@ export interface ConfiguracionSistema {
   audioActivo: boolean
   /** Volumen de la campanita del llamado, 0 a 1. */
   volumen: number
-  /** Cuantos llamados recientes se listan en la pantalla. */
-  ultimosVisibles: number
   /** Mensaje institucional que corre al pie de la pantalla. */
   mensajePie: string
 
@@ -555,6 +584,36 @@ export interface ConfiguracionSistema {
   jornadaTardeInicio: string
   /** Fin de la jornada de la tarde (exclusivo). */
   jornadaTardeFin: string
+}
+
+/**
+ * La configuracion tal como esta guardada, firmada con la hora de su ultimo
+ * cambio.
+ *
+ * La firma existe para que dos administradores no se pisen en silencio. La
+ * pantalla manda el objeto entero al guardar, asi que sin ella el segundo en
+ * pulsar guardar revierte lo que acababa de cambiar el primero —incluidas las
+ * jornadas, que le mueven la agenda a todo el hospital— sin que ninguno de los
+ * dos se entere. Quien guarda declara que version vio; si ya no es esa, se le
+ * pide que vuelva a mirar.
+ */
+export interface ConfiguracionGuardada extends ConfiguracionSistema {
+  /** Instante ISO de la ultima escritura. */
+  actualizadoEn: string
+}
+
+/**
+ * Todo lo que el televisor de la sala de espera necesita, en una sola lectura.
+ *
+ * Van juntos porque se piden juntos SIEMPRE: la pantalla no puede pintar las
+ * casillas sin saber a que volumen suena la campana ni que mensaje va al pie.
+ * Separados, la ruta mas consultada del sistema —cada televisor encendido la
+ * resincroniza sola, y el monitor del administrador con cada evento— cargaba
+ * dos veces la misma configuracion en cada peticion.
+ */
+export interface EstadoPantalla {
+  casillas: CasillaPantalla[]
+  configuracion: ConfiguracionGuardada
 }
 
 /** Indicadores de atencion (requerimiento seccion 19). */

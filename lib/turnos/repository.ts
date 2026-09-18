@@ -1,10 +1,12 @@
 import type {
+  ActividadCatalogo,
   AccesoProfesional,
-  CasillaPantalla,
   Cita,
   ComprobanteLlegada,
+  ConfiguracionGuardada,
   ConfiguracionSistema,
   EstadisticasDia,
+  EstadoPantalla,
   FiltroHistorico,
   HorarioDia,
   ItemAgendaProfesional,
@@ -102,6 +104,16 @@ export interface TurnoRepository {
   jornadasDelDia(fecha: string): Promise<JornadaDelDia[]>
 
   /**
+   * Que servicios y que consultorios atendieron UN DIA concreto.
+   *
+   * La misma idea que `jornadasDelDia`, para el resto del catalogo: el campo
+   * `activo` dice que algo existe en el hospital, no que hoy este funcionando,
+   * y las pantallas de administracion necesitan poder distinguirlo para
+   * cualquier dia, no solo para hoy.
+   */
+  actividadDelCatalogo(fecha: string): Promise<ActividadCatalogo>
+
+  /**
    * TEMPORAL (solo pruebas): borra las citas y los turnos de hoy para que el
    * panel de simulacion de carga pueda arrancar de cero. Sin esto, las citas
    * ya usadas quedan como PRESENTADO/ATENDIDA y la siguiente corrida se queda
@@ -177,12 +189,11 @@ export interface TurnoRepository {
   // --- Pantalla de la sala de espera (seccion 10) ---
   /**
    * Estado completo de la pantalla: una casilla por consultorio o ventanilla
-   * activa, con el turno que esta atendiendo. Ya viene enmascarado, porque la
-   * pantalla no tiene sesion.
+   * activa, con el turno que esta atendiendo, mas la configuracion con la que
+   * se pinta y se suena. Ya viene enmascarado, porque la pantalla no tiene
+   * sesion.
    */
-  estadoPantalla(): Promise<CasillaPantalla[]>
-  /** Ultimos turnos llamados, para la lista lateral de la pantalla. */
-  ultimosLlamados(limite?: number): Promise<CasillaPantalla[]>
+  estadoPantalla(): Promise<EstadoPantalla>
 
   // --- Historico / estadisticas (secciones 18 y 19) ---
   historico(filtro: FiltroHistorico): Promise<Turno[]>
@@ -224,8 +235,20 @@ export interface TurnoRepository {
   ): Promise<Profesional>
 
   // --- Parametros generales (secciones 6.1 y 11) ---
-  configuracion(): Promise<ConfiguracionSistema>
-  guardarConfiguracion(datos: Partial<ConfiguracionSistema>): Promise<ConfiguracionSistema>
+  configuracion(): Promise<ConfiguracionGuardada>
+  /**
+   * Guarda los parametros generales.
+   *
+   * `visto` es la marca `actualizadoEn` que tenia la configuracion cuando el
+   * administrador abrio la pantalla. Si ya no coincide, alguien guardo en
+   * medio y la escritura se rechaza en vez de revertirle el cambio al otro.
+   * Es opcional para los usos sin pantalla (siembra, scripts), que no compiten
+   * con nadie.
+   */
+  guardarConfiguracion(
+    datos: Partial<ConfiguracionSistema>,
+    opciones?: { visto?: string },
+  ): Promise<ConfiguracionGuardada>
 
   // --- Acceso temporal de profesionales (enlace de 24h, sin usuario/clave) ---
   /**

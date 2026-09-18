@@ -15,10 +15,22 @@
  * entraron, cuantas se dejaron como estaban, que se creo en el catalogo y
  * —sobre todo— que filas se rechazaron y por que, con el numero de fila del
  * archivo para poder ir a mirarlas.
+ *
+ * POR QUE SE ABRE UNA VENTANA ANTES DE ELEGIR EL ARCHIVO. El boton llevaba
+ * directo al explorador de archivos, y ahi el funcionario ya no tiene delante
+ * ninguna instruccion: elige el primer reporte que ve, sube el que no es y se
+ * entera cuando la carga falla o —peor— cuando entra a medias. La ventana dice
+ * ANTES que archivo sirve y que tiene que traer dentro.
  */
 
 import { useRef, useState } from 'react'
-import { UploadSimple, Warning, CheckCircle } from '@phosphor-icons/react/dist/ssr'
+import {
+  UploadSimple,
+  Warning,
+  CheckCircle,
+  FileCode,
+  Prohibit,
+} from '@phosphor-icons/react/dist/ssr'
 import { Button } from '@/components/ui/Button'
 import Modal from '@/components/ui/Modal'
 import { mensajeDeError } from '@/lib/api/cliente'
@@ -54,10 +66,63 @@ const ETIQUETA_JORNADA: Record<'MANANA' | 'TARDE' | 'COMPLETA', string> = {
 /** Cuantos rechazos se listan antes de resumir el resto. */
 const ERRORES_VISIBLES = 20
 
+/**
+ * Extensiones que el explorador ofrece y que la ventana acepta.
+ *
+ * EL FORMATO QUE SE PIDE ES EL XML del servidor de informes, y es lo que dice
+ * la ventana. Pero se aceptan tres:
+ *
+ *   - `.xml`, el que conviene pedir.
+ *   - `.xls`, porque ESE MISMO XML se descarga a veces con ese nombre —el
+ *     informe lo bautiza asi, no es un Excel— y rechazarlo por el nombre
+ *     dejaria fuera el archivo que el hospital de verdad usa.
+ *   - `.xlsx`, el mismo informe exportado a Excel. El servidor lo lee desde
+ *     siempre y ese camino tiene sus propias pruebas; prohibirlo aqui dejaba
+ *     codigo vivo y mantenido que ninguna pantalla podia alcanzar, y le decia
+ *     "ese archivo no sirve" a un funcionario cuyo archivo si servia. El dia
+ *     que el servidor de informes falle y alguien tenga que sacar la agenda
+ *     por Excel, esa puerta tiene que estar abierta.
+ *
+ * Lo que hay DENTRO lo comprueba el servidor mirando los bytes, no la
+ * extension: esta lista solo evita gastarle al funcionario una subida entera
+ * con un archivo que a simple vista no es el reporte.
+ */
+const EXTENSIONES = ['.xml', '.xls', '.xlsx']
+
+/** Que se rechaza aqui mismo, sin gastarle al funcionario una subida entera. */
+function extensionNoValida(nombre: string) {
+  return !EXTENSIONES.some((extension) => nombre.toLowerCase().endsWith(extension))
+}
+
+/** Los datos que cada cita tiene que traer para poder entrar. */
+const DATOS_OBLIGATORIOS = [
+  'Fecha y hora de la cita',
+  'Documento del paciente',
+  'Nombre del paciente',
+  'Nombre del profesional',
+  'Consultorio y procedimiento',
+]
+
 export default function CargarReporteCitas({ alTerminar }: { alTerminar: () => void }) {
   const entrada = useRef<HTMLInputElement>(null)
   const [subiendo, setSubiendo] = useState(false)
   const [resumen, setResumen] = useState<ResumenCarga | null>(null)
+
+  /** La ventana de instrucciones, que es por donde se entra a la carga. */
+  const [abierto, setAbierto] = useState(false)
+  const [arrastrando, setArrastrando] = useState(false)
+
+  function elegir(archivo: File | undefined) {
+    if (!archivo) return
+    if (extensionNoValida(archivo.name)) {
+      toast.error(
+        'Ese archivo no sirve',
+        `"${archivo.name}" no es el reporte de citas. Se acepta ${EXTENSIONES.join(', ')}: vuelve al servidor de informes y exportalo como XML.`,
+      )
+      return
+    }
+    subir(archivo)
+  }
 
   async function subir(archivo: File) {
     setSubiendo(true)
@@ -75,6 +140,9 @@ export default function CargarReporteCitas({ alTerminar }: { alTerminar: () => v
       if (!respuesta.ok) throw new Error(datos?.error ?? 'No se pudo cargar el archivo.')
 
       setResumen(datos as ResumenCarga)
+      // La ventana de instrucciones ya cumplio: se cierra para dejar sitio al
+      // resumen, que es lo que de verdad hay que leer.
+      setAbierto(false)
       alTerminar()
     } catch (error) {
       toast.error('No se pudo cargar la agenda', mensajeDeError(error))
@@ -94,16 +162,110 @@ export default function CargarReporteCitas({ alTerminar }: { alTerminar: () => v
         type="file"
         accept=".xml,.xls,.xlsx,text/xml,application/xml,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         className="hidden"
-        onChange={(evento) => {
-          const archivo = evento.target.files?.[0]
-          if (archivo) subir(archivo)
-        }}
+        onChange={(evento) => elegir(evento.target.files?.[0])}
       />
 
-      <Button variant="secondary" loading={subiendo} onClick={() => entrada.current?.click()}>
+      <Button variant="secondary" loading={subiendo} onClick={() => setAbierto(true)}>
         <UploadSimple size={17} weight="bold" />
         {subiendo ? 'Cargando agenda...' : 'Cargar agenda del hospital'}
       </Button>
+
+      {/* --- Que archivo se puede subir, ANTES de abrir el explorador --- */}
+      <Modal
+        open={abierto}
+        onClose={() => {
+          // Mientras sube no se cierra: cerrar aqui dejaria la carga en marcha
+          // sin nada en pantalla que lo diga, y el funcionario volveria a
+          // pulsar el boton creyendo que no paso nada.
+          if (!subiendo) setAbierto(false)
+        }}
+        size="lg"
+        title="Cargar agenda del hospital"
+        description="El Reporte de citas asignadas que se exporta desde el servidor de informes."
+        headerIcon={
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700">
+            <UploadSimple size={20} weight="bold" />
+          </span>
+        }
+      >
+        <div className="space-y-4">
+          {/*
+            La regla del formato va primera y sola. Es la causa de casi todas
+            las cargas fallidas y no puede quedar como una linea mas dentro de
+            un parrafo que nadie lee con el explorador de archivos abierto.
+          */}
+          <div className="rounded-xl border border-brand-200 bg-brand-50 p-4">
+            <p className="flex items-center gap-2 text-sm font-black text-brand-900">
+              <FileCode size={18} weight="fill" />
+              Exportalo en XML
+            </p>
+            <p className="mt-1.5 text-sm leading-6 text-brand-900/80">
+              En el servidor de informes, exporta el <strong className="font-black">Reporte de citas
+              asignadas</strong> con la opcion <strong className="font-black">XML</strong>. Si el informe lo
+              descarga con nombre <strong className="font-black">.xls</strong>, sirve igual: por dentro es
+              ese mismo XML. El mismo reporte exportado a{' '}
+              <strong className="font-black">Excel (.xlsx)</strong> tambien se puede subir, aunque el XML
+              es mas limpio y da menos problemas.
+            </p>
+            <p className="mt-2 flex items-start gap-2 text-sm font-bold leading-6 text-brand-900/70">
+              <Prohibit size={17} weight="bold" className="mt-0.5 shrink-0" />
+              No sirve ningun otro informe, ni PDF ni CSV: tiene que ser el Reporte de citas asignadas.
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 p-4">
+            <p className="text-sm font-black text-brand-950">Cada cita del archivo debe traer</p>
+            <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+              {DATOS_OBLIGATORIOS.map((dato) => (
+                <li key={dato} className="flex items-start gap-2 text-sm leading-6 text-slate-600">
+                  <CheckCircle size={16} weight="fill" className="mt-1 shrink-0 text-emerald-600" />
+                  {dato}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              Del reporte solo se guarda eso. La edad, el sexo, el telefono, la EPS y las observaciones no
+              entran al sistema. Subir dos veces el mismo archivo no duplica pacientes, y las citas de quien
+              ya registro su llegada se dejan como estan.
+            </p>
+          </div>
+
+          {/*
+            Zona de soltar ademas del boton: el reporte se acaba de descargar y
+            suele estar a la vista en la barra del navegador, asi que arrastrarlo
+            ahorra recorrer el explorador de archivos.
+          */}
+          <div
+            onDragOver={(evento) => {
+              evento.preventDefault()
+              if (!subiendo) setArrastrando(true)
+            }}
+            onDragLeave={() => setArrastrando(false)}
+            onDrop={(evento) => {
+              evento.preventDefault()
+              setArrastrando(false)
+              if (!subiendo) elegir(evento.dataTransfer.files?.[0])
+            }}
+            className={`flex flex-col items-center gap-3 rounded-xl border-2 border-dashed px-5 py-8 text-center transition-colors ${
+              arrastrando ? 'border-brand-400 bg-brand-50' : 'border-slate-200 bg-slate-50'
+            }`}
+          >
+            <span className="grid h-11 w-11 place-items-center rounded-xl bg-white text-brand-700 shadow-sm">
+              <FileCode size={22} weight="duotone" />
+            </span>
+            <div>
+              <p className="text-sm font-black text-brand-950">Arrastra aqui el archivo</p>
+              <p className="mt-0.5 text-xs font-semibold text-slate-500">
+                o eligelo desde el equipo · maximo 10 MB
+              </p>
+            </div>
+            <Button loading={subiendo} onClick={() => entrada.current?.click()}>
+              <UploadSimple size={17} weight="bold" />
+              {subiendo ? 'Cargando agenda...' : 'Elegir archivo'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={resumen !== null}

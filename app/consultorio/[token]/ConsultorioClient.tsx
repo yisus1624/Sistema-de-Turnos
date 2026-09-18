@@ -178,7 +178,11 @@ export default function ConsultorioClient({ token }: { token: string }) {
    */
   const conexion = useRecargaEnVivo(refrescarSiNoHayAccion, {
     activo: !tokenInvalido,
-    interesa: (evento) => afectaALaFila(evento, { profesionalId: profesional?.id }),
+    // Con el consultorio declarado, los llamados de los demas consultorios ya
+    // no obligan a recargar: no mueven la fila de este doctor (ver
+    // `afectaALaFila`). Sus propias acciones si recargan, por su propio camino.
+    interesa: (evento) =>
+      afectaALaFila(evento, { profesionalId: profesional?.id, moduloId: moduloId || null }),
   })
 
   async function ejecutar(nombre: Accion, tarea: () => Promise<void>) {

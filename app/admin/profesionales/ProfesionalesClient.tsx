@@ -87,14 +87,39 @@ const tonoJornada: Record<Jornada, 'amber' | 'blue' | 'green'> = {
  * El rango de horas debajo esta para poder mirar el veredicto y creerlo sin
  * abrir la parrilla.
  */
-function EseDia({ jornada, cargando }: { jornada?: JornadaDelDia; cargando: boolean }) {
+function EseDia({
+  jornada,
+  cargando,
+  error,
+  esFutura,
+}: {
+  jornada?: JornadaDelDia
+  cargando: boolean
+  /** No se pudo consultar: no es lo mismo que "no trabaja". */
+  error?: boolean
+  esFutura?: boolean
+}) {
   if (cargando) return <span className="text-sm font-semibold text-slate-300">…</span>
+
+  // UN FALLO DE LA CONSULTA NO ES UNA RESPUESTA. El estado de error dejaba el
+  // mapa vacio, y la ausencia se pintaba como "No trabaja": ante un corte de
+  // red la tabla afirmaba, fila por fila, que ese dia no vino nadie.
+  if (error) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <Badge tone="amber">Sin dato</Badge>
+        <span className="text-xs font-semibold text-slate-400">no se pudo consultar</span>
+      </div>
+    )
+  }
 
   if (!jornada?.jornada) {
     return (
       <div className="flex flex-col gap-0.5">
-        <Badge tone="slate">No trabaja</Badge>
-        <span className="text-xs font-semibold text-slate-400">sin citas ese dia</span>
+        <Badge tone="slate">{esFutura ? 'Sin agenda' : 'No trabaja'}</Badge>
+        <span className="text-xs font-semibold text-slate-400">
+          {esFutura ? 'todavia sin citas' : 'sin citas ese dia'}
+        </span>
       </div>
     )
   }
@@ -131,6 +156,7 @@ export default function ProfesionalesClient() {
   const [fecha, setFecha] = useState(hoyEnColombia())
   const [jornadasDelDia, setJornadasDelDia] = useState<Map<string, JornadaDelDia>>(new Map())
   const [cargandoJornadas, setCargandoJornadas] = useState(true)
+  const [errorJornadas, setErrorJornadas] = useState(false)
 
   // Recalculo de la jornada habitual, sobre el periodo que elija quien lo pide.
   const [recalculoAbierto, setRecalculoAbierto] = useState(false)
@@ -164,9 +190,13 @@ export default function ProfesionalesClient() {
         `/api/turnos/profesionales/jornadas?fecha=${dia}`,
       )
       setJornadasDelDia(new Map(jornadas.map((j) => [j.profesionalId, j])))
+      setErrorJornadas(false)
     } catch (error) {
       toast.error('No se pudo cargar lo que trabajaron ese dia', mensajeDeError(error))
+      // Se marca el error en vez de dejar el mapa vacio: vacio significa
+      // "nadie trabajo", y eso seria afirmar algo que no se sabe.
       setJornadasDelDia(new Map())
+      setErrorJornadas(true)
     } finally {
       setCargandoJornadas(false)
     }
@@ -400,7 +430,12 @@ export default function ProfesionalesClient() {
                   <td className="px-4 py-3 font-black text-brand-950">{profesional.nombre}</td>
                   <td className="px-4 py-3 text-slate-600">{nombreServicio(profesional.servicioId)}</td>
                   <td className="px-4 py-3">
-                    <EseDia jornada={jornadasDelDia.get(profesional.id)} cargando={cargandoJornadas} />
+                    <EseDia
+                      jornada={jornadasDelDia.get(profesional.id)}
+                      cargando={cargandoJornadas}
+                      error={errorJornadas}
+                      esFutura={fecha > hoyEnColombia()}
+                    />
                   </td>
                   <td className="px-4 py-3">
                     <Badge tone={tonoJornada[profesional.jornada]}>

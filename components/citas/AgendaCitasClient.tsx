@@ -40,13 +40,15 @@ import {
   Sun,
   Warning,
   MoonStars,
+  Eye,
+  EyeSlash,
+  CaretDown,
 } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import ConfirmModal from '@/components/ui/ConfirmModal'
-import EmptyState from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Loader'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Seleccion } from '@/components/admin/Campos'
@@ -121,6 +123,31 @@ const COLORES_SERVICIO = [
   'bg-cyan-600',
 ]
 
+type Jornada = 'MANANA' | 'TARDE'
+
+/**
+ * La jornada que se esta viviendo ahora mismo en Colombia.
+ *
+ * Con las dos parrillas desplegadas a la vez, la de la tarde empieza mas abajo
+ * del borde de la pantalla y la de la mañana solo se ve por la mitad: hay que
+ * desplazarse dos veces para mirar una agenda. En el mostrador se trabaja sobre
+ * UNA jornada durante horas —la de la mañana hasta el almuerzo, la de la tarde
+ * despues—, asi que se abre esa y la otra queda plegada a un clic.
+ *
+ * El corte es a la una, el mismo que usa el servidor para repartir a los
+ * doctores entre las dos jornadas.
+ */
+function jornadaDeAhora(): Jornada {
+  const hora = Number(
+    new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit',
+      hour12: false,
+      timeZone: 'America/Bogota',
+    }).format(new Date()),
+  )
+  return hora < 13 ? 'MANANA' : 'TARDE'
+}
+
 type CeldaSeleccionada = { profesionalId: string; profesionalNombre: string; hora: string }
 
 export default function AgendaCitasClient() {
@@ -149,6 +176,15 @@ export default function AgendaCitasClient() {
    * doctor hay que poder llegar a su columna.
    */
   const [verSinCitas, setVerSinCitas] = useState(false)
+
+  /**
+   * Jornadas desplegadas. Arranca con la que corresponde a la hora.
+   *
+   * Se guardan las abiertas y no "la abierta" porque plegar las dos, o abrir
+   * las dos para comparar a un doctor de dia completo, son cosas que se hacen;
+   * forzar que siempre haya exactamente una abierta quitaria las dos.
+   */
+  const [jornadasAbiertas, setJornadasAbiertas] = useState<Jornada[]>(() => [jornadaDeAhora()])
 
   // Alta de cita sobre una franja libre.
   const [celda, setCelda] = useState<CeldaSeleccionada | null>(null)
@@ -211,6 +247,18 @@ export default function AgendaCitasClient() {
   useEffect(() => {
     cargar(fecha)
   }, [cargar, fecha])
+
+  /**
+   * Al cambiar de dia se vuelve a la jornada que toca por la hora.
+   *
+   * Cambiar de fecha es empezar a mirar otra cosa, y arrastrar ahi lo que se
+   * hubiera plegado para el dia anterior deja la pantalla en un estado que
+   * nadie pidio. En un dia que no es hoy la hora no dice nada, asi que se abre
+   * la mañana, que es por donde se empieza a leer una agenda.
+   */
+  useEffect(() => {
+    setJornadasAbiertas([fecha === hoyEnColombia() ? jornadaDeAhora() : 'MANANA'])
+  }, [fecha])
 
   /**
    * Servicios presentes hoy, para el selector.
@@ -308,6 +356,16 @@ export default function AgendaCitasClient() {
     setCelda({ profesionalId, profesionalNombre, hora })
     setDocumento('')
     setNombre('')
+  }, [])
+
+  // Estables a proposito: la parrilla esta memoizada y una funcion nueva en
+  // cada render la haria repintarse entera sin que nada haya cambiado.
+  const mostrarSinCitas = useCallback(() => setVerSinCitas(true), [])
+
+  const alternarJornada = useCallback((jornada: Jornada) => {
+    setJornadasAbiertas((abiertas) =>
+      abiertas.includes(jornada) ? abiertas.filter((j) => j !== jornada) : [...abiertas, jornada],
+    )
   }, [])
 
   async function agendar(evento: React.FormEvent) {
@@ -498,14 +556,13 @@ export default function AgendaCitasClient() {
           </div>
 
           {horario ? (
-            <div className="flex flex-wrap items-center gap-4 text-sm">
-              <span className="font-bold text-slate-600">
-                <strong className="text-lg font-black text-brand-900">{totalCitas}</strong> cita(s)
-                agendadas
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="inline-flex items-baseline gap-1.5 rounded-xl bg-brand-50 px-3 py-1.5 text-xs font-bold text-brand-800">
+                <strong className="text-base font-black leading-none text-brand-900">{totalCitas}</strong>
+                citas agendadas
               </span>
-              <span className="text-slate-400">·</span>
-              <span className="font-semibold text-slate-500">
-                Franjas para agendar a mano: cada {horario.duracionCitaMinutos} minutos
+              <span className="inline-flex items-center rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-500">
+                Franjas cada {horario.duracionCitaMinutos} min
               </span>
 
               {/*
@@ -513,20 +570,30 @@ export default function AgendaCitasClient() {
                 cuantos son y se pueden traer: esconderlos en silencio haria
                 que quien busca a uno concreto creyera que no esta registrado
                 y lo diera de alta otra vez, duplicando el catalogo.
+
+                Es un boton de verdad y no un enlace subrayado: enciende y
+                apaga algo de la pantalla, y con el estado escrito dentro del
+                boton se ve de un vistazo si la parrilla esta completa.
               */}
               {columnasOcultas > 0 ? (
-                <>
-                  <span className="text-slate-400">·</span>
-                  <button
-                    type="button"
-                    onClick={() => setVerSinCitas((antes) => !antes)}
-                    className="font-bold text-brand-700 underline decoration-brand-300 underline-offset-4 transition-colors hover:text-brand-900"
-                  >
-                    {verSinCitas
-                      ? `Ocultar las ${columnasOcultas} columna(s) sin citas`
-                      : `${columnasOcultas} columna(s) sin citas de hoy, ocultas · Mostrar`}
-                  </button>
-                </>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setVerSinCitas((antes) => !antes)}
+                  aria-pressed={verSinCitas}
+                  title={
+                    verSinCitas
+                      ? 'Dejar en la parrilla solo a los doctores con pacientes hoy'
+                      : 'Traer a la parrilla los doctores que hoy no tienen ninguna cita'
+                  }
+                >
+                  {verSinCitas ? (
+                    <EyeSlash size={16} weight="bold" className="text-slate-500" />
+                  ) : (
+                    <Eye size={16} weight="bold" className="text-slate-500" />
+                  )}
+                  {verSinCitas ? 'Ocultar' : 'Mostrar'} {columnasOcultas} sin citas
+                </Button>
               ) : null}
             </div>
           ) : null}
@@ -620,6 +687,12 @@ export default function AgendaCitasClient() {
               bloque={bloque}
               filtrando={filtrando}
               ocultandoSinCitas={!verSinCitas && columnasOcultas > 0}
+              onMostrarSinCitas={mostrarSinCitas}
+              abierta={jornadasAbiertas.includes(bloque.jornada)}
+              // Con una sola jornada desplegada la parrilla se estira: es justo
+              // el sitio que deja libre la que esta plegada.
+              aSolas={jornadasAbiertas.length === 1}
+              onAlternar={alternarJornada}
               soloLectura={esPasado}
               onLibre={abrirNueva}
               onOcupada={setDetalle}
@@ -914,6 +987,10 @@ const Parrilla = memo(function Parrilla({
   bloque,
   filtrando,
   ocultandoSinCitas,
+  onMostrarSinCitas,
+  abierta,
+  aSolas,
+  onAlternar,
   soloLectura,
   onLibre,
   onOcupada,
@@ -922,6 +999,13 @@ const Parrilla = memo(function Parrilla({
   filtrando: boolean
   /** Se estan escondiendo los doctores que no tienen citas en esta jornada. */
   ocultandoSinCitas: boolean
+  /** Trae a la parrilla los doctores sin citas, desde la jornada vacia. */
+  onMostrarSinCitas: () => void
+  /** Jornada desplegada: plegada solo se ve el encabezado con su resumen. */
+  abierta: boolean
+  /** Es la unica jornada desplegada, asi que la parrilla puede ocupar mas alto. */
+  aSolas: boolean
+  onAlternar: (jornada: 'MANANA' | 'TARDE') => void
   /** Dia ya pasado: se consulta, no se agenda. */
   soloLectura: boolean
   onLibre: (profesionalId: string, profesionalNombre: string, hora: string) => void
@@ -941,59 +1025,106 @@ const Parrilla = memo(function Parrilla({
 
   return (
     <Card padded={false}>
-      <CardHeader>
-        <div className="flex min-w-0 items-center gap-3">
+      {/*
+        Todo el encabezado es el boton de plegar, no un icono pequeño en una
+        esquina: es un blanco grande, y plegar y desplegar jornadas es lo que
+        mas se hace en esta pantalla a lo largo del dia.
+
+        El titulo va en un `span` y no en `CardTitle`: dentro de un boton solo
+        puede ir contenido de linea, y un encabezado ahi es HTML invalido.
+      */}
+      <button
+        type="button"
+        onClick={() => onAlternar(bloque.jornada)}
+        aria-expanded={abierta}
+        className={`flex w-full flex-wrap items-center justify-between gap-3 px-5 py-3.5 text-left transition-colors hover:bg-slate-50 ${
+          abierta ? 'border-b border-slate-100' : ''
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-3">
           <span
-            className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${
+            className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${
               bloque.jornada === 'MANANA' ? 'bg-amber-100 text-amber-700' : 'bg-brand-50 text-brand-700'
             }`}
           >
-            <Icono size={20} weight="fill" />
+            <Icono size={17} weight="fill" />
           </span>
-          <div className="min-w-0">
-            <CardTitle>{bloque.etiqueta}</CardTitle>
-            <p className="text-xs font-bold text-slate-500">
+          <span className="min-w-0">
+            <span className="block text-sm font-black tracking-[-0.02em] text-brand-950">
+              {bloque.etiqueta}
+            </span>
+            <span className="block text-xs font-semibold text-slate-500">
               {bloque.desde} a {bloque.hasta} · {bloque.columnas.length} doctor(es)
               {filtrando ? ' que coinciden con el filtro' : ''}
-            </p>
-          </div>
-        </div>
-        <span className="shrink-0 text-sm font-black text-slate-500">
-          {agendadas} cita(s)
+            </span>
+          </span>
         </span>
-      </CardHeader>
 
+        <span className="flex shrink-0 items-center gap-2.5">
+          {/* El conteo se queda tambien plegada: es lo que deja decidir si hace
+              falta abrirla. */}
+          <span className="rounded-lg bg-slate-50 px-2.5 py-1 text-xs font-black tabular-nums text-slate-600">
+            {agendadas} citas
+          </span>
+          <span className="text-xs font-bold text-slate-500">{abierta ? 'Ocultar' : 'Mostrar'}</span>
+          <CaretDown
+            size={16}
+            weight="bold"
+            className={`text-slate-400 transition-transform ${abierta ? 'rotate-180' : ''}`}
+          />
+        </span>
+      </button>
+
+      {/*
+        Plegada no se pinta: una parrilla de treinta columnas por cuarenta
+        filas son mas de mil celdas, y tenerlas montadas para no verlas hace
+        lento cada cambio de la pantalla.
+      */}
+      {!abierta ? null : (
       <CardContent padded={false}>
         {bloque.columnas.length === 0 || bloque.filas.length === 0 ? (
-          <div className="p-5">
-            <EmptyState
-              icon={CalendarPlus}
-              title={
-                bloque.filas.length === 0
+          // Vacio COMPACTO, no el cartel de pantalla entera: aqui la jornada
+          // vacia es una tarjeta entre otras, y un bloque de casi 300px de
+          // alto empujaba la jornada siguiente fuera de la pantalla sin decir
+          // nada mas. Y cuando la salida es traer a los doctores sin citas, el
+          // boton esta aqui mismo y no arriba.
+          <div className="flex flex-col items-center gap-3 px-5 py-8 text-center sm:flex-row sm:gap-4 sm:text-left">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-400">
+              <CalendarPlus size={20} weight="duotone" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-black text-brand-950">
+                {bloque.filas.length === 0
                   ? 'Jornada sin franjas'
                   : filtrando
                     ? 'Ningun doctor coincide'
                     : ocultandoSinCitas
                       ? 'Nadie tiene citas en esta jornada'
-                      : 'Sin doctores en esta jornada'
-              }
-              description={
-                bloque.filas.length === 0
+                      : 'Sin doctores en esta jornada'}
+              </p>
+              <p className="mt-0.5 text-sm leading-6 text-slate-500">
+                {bloque.filas.length === 0
                   ? 'Las horas configuradas para esta jornada no dejan espacio para ninguna consulta. Revisalas en Pantalla y audio.'
                   : filtrando
                     ? 'En esta jornada no hay doctores que coincidan con lo que buscas. Prueba con otro nombre o quita el filtro.'
                     : ocultandoSinCitas
-                      ? 'Ningun doctor tiene pacientes agendados en esta jornada, asi que la parrilla esta vacia. Para agendar el primero, muestra arriba los doctores sin citas.'
-                      : 'Ningun doctor activo atiende en esta jornada. Asignale la jornada a un doctor en Profesionales.'
-              }
-            />
+                      ? 'Ningun doctor tiene pacientes agendados aqui. Para agendar el primero, trae a los doctores sin citas.'
+                      : 'Ningun doctor activo atiende en esta jornada. Asignale la jornada a un doctor en Profesionales.'}
+              </p>
+            </div>
+            {bloque.filas.length > 0 && !filtrando && ocultandoSinCitas ? (
+              <Button variant="secondary" size="sm" className="shrink-0" onClick={onMostrarSinCitas}>
+                <Eye size={16} weight="bold" className="text-slate-500" />
+                Mostrar doctores sin citas
+              </Button>
+            ) : null}
           </div>
         ) : (
           // Ventana propia con desplazamiento en los dos ejes: la fila de
           // doctores queda congelada arriba y la columna de horas a la
           // izquierda, como en una hoja de calculo. El alto se limita para que
           // los encabezados tengan contra que quedarse fijos.
-          <div className="max-h-[70vh] overflow-auto">
+          <div className={`overflow-auto ${aSolas ? 'max-h-[calc(100dvh-13rem)]' : 'max-h-[70vh]'}`}>
             <table className="w-full border-separate border-spacing-0 text-sm">
               <thead>
                 <tr>
@@ -1005,20 +1136,16 @@ const Parrilla = memo(function Parrilla({
                   {bloque.columnas.map((columna) => (
                     <th
                       key={columna.profesionalId}
-                      className={`sticky top-0 z-20 min-w-[210px] border-b border-l border-white/20 px-3.5 py-2.5 text-left text-white ${colorDeServicio(
+                      className={`sticky top-0 z-20 min-w-[186px] border-b border-l border-white/20 px-3 py-2 text-left text-white ${colorDeServicio(
                         columna.servicioNombre,
                       )}`}
                     >
-                      <span className="block truncate text-lg font-black leading-tight">
+                      <span className="block truncate text-sm font-black leading-tight">
                         {columna.profesionalNombre}
                       </span>
-                      {columna.moduloNombre ? (
-                        <span className="mt-0.5 block truncate text-base font-bold leading-tight text-white">
-                          {columna.moduloNombre}
-                        </span>
-                      ) : null}
-                      <span className="mt-1 block truncate text-xs font-semibold text-white/75">
-                        {columna.servicioNombre} · {columna.citas} cita(s)
+                      <span className="mt-0.5 block truncate text-[11px] font-semibold leading-tight text-white/80">
+                        {columna.moduloNombre ? `${columna.moduloNombre} · ` : ''}
+                        {columna.servicioNombre} · {columna.citas} citas
                       </span>
                     </th>
                   ))}
@@ -1104,6 +1231,7 @@ const Parrilla = memo(function Parrilla({
           </div>
         )}
       </CardContent>
+      )}
     </Card>
   )
 })

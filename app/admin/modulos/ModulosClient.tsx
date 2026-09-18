@@ -13,13 +13,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
+import { CeldaActividad, SelectorDeDia, useActividadDelDia } from '@/components/admin/ActividadDelDia'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { Modulo, Servicio } from '@/lib/turnos/types'
 
-const COLUMNAS = ['Modulo', 'Servicio', 'Estado']
+const COLUMNAS = ['Modulo', 'Servicio', 'Ese dia', 'Estado']
 
 type Formulario = { nombre: string; servicioId: string }
 
@@ -33,6 +35,26 @@ export default function ModulosClient() {
   const [editando, setEditando] = useState<Modulo | null>(null)
   const [formulario, setFormulario] = useState<Formulario>(FORMULARIO_VACIO)
   const [guardando, setGuardando] = useState(false)
+  // Que consultorio esta a punto de apagarse, esperando confirmacion.
+  const [aDesactivar, setADesactivar] = useState<Modulo | null>(null)
+  const [desactivando, setDesactivando] = useState(false)
+
+  /**
+   * El dia que se esta mirando, y lo que se uso ese dia.
+   *
+   * El catalogo lo va llenando la carga del reporte del hospital y ahi todo
+   * entra activo y ahi se queda, asi que "Activo" acaba queriendo decir "existe
+   * en el hospital". La pregunta de todos los dias es otra —"que consultorios
+   * trabajan hoy"— y sin esto la tabla no la podia contestar.
+   */
+  const {
+    fecha,
+    setFecha,
+    actividad,
+    cargando: cargandoActividad,
+    error: errorActividad,
+    esFutura,
+  } = useActividadDelDia('porModulo')
 
   const cargar = useCallback(async () => {
     try {
@@ -91,7 +113,27 @@ export default function ModulosClient() {
     }
   }
 
+  /**
+   * Se avisa ANTES de apagarlo, no despues. Desactivar un consultorio lo borra
+   * del televisor de la sala de espera, que es por donde el paciente sabe a que
+   * puerta entrar; el servidor ademas lo rechaza si hay un turno siendo
+   * atendido ahi, pero el resto de las veces el efecto es silencioso y el
+   * interruptor no lo deja ver.
+   *
+   * Con el `ConfirmModal` del sistema, no con el cuadro del navegador: era la
+   * unica confirmacion del sistema que se salia del patron, y la del navegador
+   * ni se puede leer con el estilo del resto ni respeta el foco de la pantalla.
+   */
   async function cambiarEstado(modulo: Modulo, activo: boolean) {
+    if (!activo) {
+      setADesactivar(modulo)
+      return
+    }
+
+    await aplicarEstado(modulo, true)
+  }
+
+  async function aplicarEstado(modulo: Modulo, activo: boolean) {
     try {
       await pedir(`/api/turnos/modulos/${modulo.id}`, { method: 'PATCH', body: JSON.stringify({ activo }) })
       setModulos((previos) => previos.map((m) => (m.id === modulo.id ? { ...m, activo } : m)))
@@ -101,8 +143,28 @@ export default function ModulosClient() {
     }
   }
 
+  async function confirmarDesactivar() {
+    if (!aDesactivar) return
+
+    setDesactivando(true)
+    try {
+      await aplicarEstado(aDesactivar, false)
+      setADesactivar(null)
+    } finally {
+      setDesactivando(false)
+    }
+  }
+
   return (
     <>
+      <Card className="mb-5">
+        <SelectorDeDia
+          fecha={fecha}
+          onFecha={setFecha}
+          ayuda="Un consultorio puede estar activo en el catalogo y no usarse ese dia: 'Ese dia' sale de las citas, no del interruptor."
+        />
+      </Card>
+
       <Card padded={false}>
         <CardHeader>
           <CardTitle>Consultorios y ventanillas ({modulos.length})</CardTitle>
@@ -132,6 +194,14 @@ export default function ModulosClient() {
                 >
                   <td className="px-4 py-3 font-black text-brand-950">{modulo.nombre}</td>
                   <td className="px-4 py-3 text-slate-600">{nombreServicio(modulo.servicioId)}</td>
+                  <td className="px-4 py-3">
+                    <CeldaActividad
+                      actividad={actividad[modulo.id]}
+                      cargando={cargandoActividad}
+                      error={errorActividad}
+                      esFutura={esFutura}
+                    />
+                  </td>
                   <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-3">
                       <Interruptor
@@ -205,6 +275,17 @@ export default function ModulosClient() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmModal
+        open={!!aDesactivar}
+        onClose={() => setADesactivar(null)}
+        onConfirm={confirmarDesactivar}
+        loading={desactivando}
+        title={`Desactivar ${aDesactivar?.nombre ?? ''}`}
+        description="Deja de aparecer en la pantalla de la sala de espera y no se le podran asignar turnos. El historico no se pierde y se puede volver a activar cuando haga falta."
+        confirmLabel="Desactivar"
+        danger
+      />
     </>
   )
 }

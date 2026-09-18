@@ -5,14 +5,32 @@
  * `lib/turnos/in-memory-repository.ts`, `crearAccesoProfesional`). Estas
  * rutas NO usan `requireRol`: la sesion aqui es el token de la URL.
  *
- * Se limitan los intentos por token para que no se pueda adivinar por fuerza
- * bruta (el token es aleatorio de 32 bytes, pero igual se acota el ritmo de
- * peticiones fallidas).
+ * SE CUENTAN FALLOS, NO USOS. El limite estaba puesto sobre el token y sin
+ * limpiarlo al entrar bien, asi que no medía "cuantas veces han fallado" sino
+ * "cuantas peticiones ha hecho este enlace": pasadas 30 en cinco minutos el
+ * enlace dejaba de responder a media jornada. La pantalla del consultorio se
+ * recarga con cada evento del hospital, de modo que ese tope se alcanza solo en
+ * hora pico, y al medico le salia "el enlace no es valido" con el enlace bueno
+ * en la mano.
+ *
+ * Y contra la fuerza bruta, un contador POR TOKEN no sirve de nada: quien
+ * intenta adivinar usa un token distinto en cada intento y estrena contador. Lo
+ * que si acota una avalancha es el ORIGEN, y solo cuando la IP es de fiar, es
+ * decir con un proxy declarado delante (ver `contextoPeticion`). Sin el, la IP
+ * la escribe el propio cliente: bloquear por ella no protegeria de nada y
+ * podria dejar fuera a todo el hospital, que sale por una sola salida.
  */
 import { NextResponse } from 'next/server'
 import { turnoRepository } from './repositorio'
 import type { Profesional } from './types'
-import { contextoPeticion, limitarIntentos, registrarEvento } from '@/lib/seguridad/registro'
+import {
+  contextoPeticion,
+  limitarIntentos,
+  limpiarIntentos,
+  registrarEvento,
+} from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
+import { apiError } from '@/lib/permissions/session'
 
 export class AccesoInvalidoError extends Error {
   readonly status = 401
@@ -21,6 +39,29 @@ export class AccesoInvalidoError extends Error {
     super('El enlace no es valido o ya vencio. Pide un enlace nuevo a la oficina de sistemas.')
     this.name = 'AccesoInvalidoError'
   }
+}
+
+/** Ventana de los dos limites. */
+const MS_VENTANA = 5 * 60 * 1000
+
+/**
+ * Fallos seguidos del MISMO enlace antes de dejar de atenderlo. Ya no cuenta
+ * usos, solo fallos, asi que puede ser holgado: un enlace bueno nunca llega.
+ */
+const INTENTOS_POR_TOKEN = 30
+
+/**
+ * Fallos seguidos desde el MISMO origen. Mas alto que el del token porque
+ * detras de una IP puede haber todo el hospital cuando hay proxy: tiene que
+ * cortar la avalancha de tokens al azar sin estorbar a un consultorio que
+ * reabre su enlace vencido un par de veces.
+ */
+const INTENTOS_POR_IP = 50
+
+/** Deja el rechazo apuntado y devuelve el error, para lanzarlo en el sitio. */
+async function rechazoRegistrado(ip: string | null, motivo: string) {
+  await registrarEvento({ tipo: EVENTOS.ACCESO_PROFESIONAL, exito: false, ip, detalle: { motivo } })
+  return new AccesoInvalidoError()
 }
 
 /**
@@ -32,21 +73,27 @@ export class AccesoInvalidoError extends Error {
 export async function requireProfesionalPorToken(token: string): Promise<Profesional> {
   const { ip } = await contextoPeticion()
 
-  const limite = limitarIntentos('token_consultorio', token, 30, 5 * 60 * 1000)
-  if (!limite.permitido) {
-    registrarEvento({ tipo: 'ACCESO_PROFESIONAL', exito: false, ip, detalle: { motivo: 'demasiados_intentos' } })
-    throw new AccesoInvalidoError()
+  if (ip && !limitarIntentos('acceso_consultorio_ip', ip, INTENTOS_POR_IP, MS_VENTANA).permitido) {
+    throw await rechazoRegistrado(ip, 'demasiados_intentos_ip')
+  }
+
+  // Un mismo enlace fallando una y otra vez si tiene tope: es el enlace vencido
+  // que quedo abierto en un televisor o en la pestaña de alguien, recargando.
+  if (!limitarIntentos('token_consultorio', token, INTENTOS_POR_TOKEN, MS_VENTANA).permitido) {
+    throw await rechazoRegistrado(ip, 'demasiados_intentos')
   }
 
   const profesional = await turnoRepository.validarAccesoProfesional(token)
-  if (!profesional) {
-    registrarEvento({ tipo: 'ACCESO_PROFESIONAL', exito: false, ip, detalle: { motivo: 'token_invalido' } })
-    throw new AccesoInvalidoError()
-  }
+  if (!profesional) throw await rechazoRegistrado(ip, 'token_invalido')
+
+  // Entro bien: se le borra la cuenta al enlace y al origen. Sin esto el limite
+  // cuenta peticiones en vez de fallos y el doctor se bloquea a si mismo.
+  limpiarIntentos('token_consultorio', token)
+  if (ip) limpiarIntentos('acceso_consultorio_ip', ip)
 
   if (debeRegistrarAcceso(profesional.id)) {
-    registrarEvento({
-      tipo: 'ACCESO_PROFESIONAL',
+    await registrarEvento({
+      tipo: EVENTOS.ACCESO_PROFESIONAL,
       exito: true,
       ip,
       identificador: profesional.id,
@@ -92,12 +139,23 @@ function debeRegistrarAcceso(profesionalId: string): boolean {
   return true
 }
 
-/** Mismo formato de error que `apiError`, para las rutas del consultorio. */
+/**
+ * El error de las rutas del consultorio.
+ *
+ * DELEGA EN `apiError`, no lo reimplementa. Tenia su propia copia de la misma
+ * logica, y cuando `apiError` dejo de devolver hacia fuera el mensaje de los
+ * fallos inesperados, esta copia se quedo como estaba: las cinco rutas del
+ * consultorio seguian pintandole al medico —delante del paciente— el volcado
+ * crudo de Prisma, con nombres de tabla, de columna y rutas del servidor. Y
+ * justo en la unica puerta del sistema que no pasa por usuario y contraseña.
+ *
+ * Lo unico propio es el 401 del enlace invalido, que es el caso que esta
+ * funcion existe para tratar: un mensaje escrito para el doctor, sin distinguir
+ * si el enlace no existe, vencio o lo revocaron.
+ */
 export function errorConsultorio(error: unknown) {
   if (error instanceof AccesoInvalidoError) {
     return NextResponse.json({ error: error.message }, { status: 401 })
   }
-  const status = typeof error === 'object' && error && 'status' in error ? Number((error as { status: unknown }).status) : 500
-  const message = error instanceof Error ? error.message : 'Ocurrio un error inesperado.'
-  return NextResponse.json({ error: message }, { status: Number.isFinite(status) ? status : 500 })
+  return apiError(error)
 }

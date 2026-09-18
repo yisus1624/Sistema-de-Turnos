@@ -9,6 +9,8 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireRol, requireSeccion, tieneSeccion } from '@/lib/permissions/session'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 
 export async function GET(request: Request) {
   try {
@@ -40,7 +42,7 @@ const profesionalSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireSeccion('/admin/profesionales')
+    const session = await requireSeccion('/admin/profesionales')
 
     const body = await request.json().catch(() => null)
     const parsed = profesionalSchema.safeParse(body)
@@ -49,6 +51,18 @@ export async function POST(request: Request) {
     }
 
     const profesional = await turnoRepository.crearProfesional(parsed.data)
+
+    const { ip } = await contextoPeticion()
+    await registrarEvento({
+      tipo: EVENTOS.PROFESIONAL_CREADO,
+      exito: true,
+      usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
+      identificador: profesional.nombre,
+      ip,
+      detalle: { jornada: profesional.jornada },
+    })
+
     return NextResponse.json({ profesional })
   } catch (error) {
     return apiError(error)

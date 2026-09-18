@@ -521,7 +521,7 @@ export async function leerReporteDelHospital(datos: Uint8Array): Promise<Reporte
         {
           fila: 0,
           motivo:
-            'El archivo es un Excel antiguo (.xls binario), que este sistema no lee. En el reporte del hospital, exportalo como XML o como Excel (.xlsx) y vuelve a subirlo.',
+            'El archivo es un Excel antiguo (.xls binario), que este sistema no lee. Vuelve a exportar el Reporte de citas asignadas como XML, o abrelo en Excel y guardalo como .xlsx.',
         },
       ],
       fechas: [],

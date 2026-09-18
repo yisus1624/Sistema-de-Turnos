@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { errorConsultorio, requireProfesionalPorToken } from '@/lib/turnos/acceso-consultorio'
 import { verificarTurnoDelProfesional } from '@/lib/turnos/acceso-consultorio-turno'
-import { registrarEvento } from '@/lib/seguridad/registro'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 
 export async function POST(_request: Request, context: { params: Promise<{ token: string; turnoId: string }> }) {
   try {
@@ -14,10 +15,14 @@ export async function POST(_request: Request, context: { params: Promise<{ token
     // como responsable del cierre.
     const turno = await turnoRepository.marcarAtendido(turnoId, profesional.id)
 
-    registrarEvento({
-      tipo: 'TURNO_ATENDIDO',
+    // Mismo origen que el resto del rastro del consultorio: sin la IP no se
+    // puede saber desde que equipo se cerro el turno.
+    const { ip } = await contextoPeticion()
+    await registrarEvento({
+      tipo: EVENTOS.TURNO_ATENDIDO,
       exito: true,
       identificador: turno.codigo,
+      ip,
       detalle: { profesional: profesional.nombre },
     })
 

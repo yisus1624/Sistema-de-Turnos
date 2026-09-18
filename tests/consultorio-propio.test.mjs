@@ -161,6 +161,35 @@ test('un turno sin cerrar de un dia anterior no bloquea el consultorio', async (
   assert.equal(deHoy.moduloId, a.modulo.id)
 })
 
+// Un consultorio no se apaga con un paciente adentro.
+//
+// Apagarlo borra su casilla del televisor, y la borra CON el turno ya llamado
+// pintado ahi: el paciente se queda mirando una pantalla donde su numero acaba
+// de desaparecer, sin saber por que puerta entrar. Y al doctor se le bloquea el
+// llamado desde ese consultorio, asi que tampoco puede cerrar al que tiene
+// enfrente.
+test('no se puede desactivar un consultorio con un turno en atencion', async () => {
+  const { doctor, modulo } = await doctorConConsultorio()
+  await pacienteEnEspera(doctor.id, '09:00')
+  await repo.llamarSiguiente({
+    profesionalId: doctor.id,
+    moduloId: modulo.id,
+    funcionarioId: 'usuario-prueba',
+  })
+
+  await assert.rejects(
+    () => repo.actualizarModulo(modulo.id, { activo: false }),
+    /esta siendo atendido/i,
+  )
+
+  // Y en cuanto el doctor lo cierra, ya se puede apagar.
+  const enAtencion = await repo.turnoEnAtencion(doctor.id, HOY)
+  await repo.marcarAtendido(enAtencion.id, 'usuario-prueba')
+
+  const apagado = await repo.actualizarModulo(modulo.id, { activo: false })
+  assert.equal(apagado.activo, false)
+})
+
 // Un consultorio lo comparten dos doctores: uno de mañana y otro de tarde.
 //
 // La casilla libre del televisor rotulaba SIEMPRE al primero de la lista, asi
@@ -187,6 +216,11 @@ test('la pantalla rotula al doctor de la jornada que corre, no al primero', asyn
     moduloId: modulo.id,
   })
 
+  // Los dos con pacientes HOY: el televisor solo rotula a quien de verdad
+  // atiende ese dia, asi que sin citas la casilla ni siquiera se pintaria.
+  await pacienteEnEspera(manana.id, '08:00')
+  await pacienteEnEspera(tarde.id, '14:00')
+
   // Se calcula aparte con la misma regla del dominio, para que la prueba valga
   // a cualquier hora a la que se ejecute.
   const configuracion = await repo.configuracion()
@@ -200,7 +234,7 @@ test('la pantalla rotula al doctor de la jornada que corre, no al primero', asyn
   const esManana = aMinutos(ahora) < aMinutos(configuracion.jornadaMananaFin)
   const esperado = esManana ? manana.nombre : tarde.nombre
 
-  const casillas = await repo.estadoPantalla()
+  const { casillas } = await repo.estadoPantalla()
   const casilla = casillas.find((c) => c.moduloId === modulo.id)
 
   assert.equal(casilla.profesionalNombre, esperado)

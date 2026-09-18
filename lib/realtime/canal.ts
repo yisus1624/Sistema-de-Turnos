@@ -59,15 +59,36 @@ export function esCambioDeDatos(mensaje: MensajeEnVivo): mensaje is EventoTurno 
   return mensaje.tipo !== LATIDO.tipo
 }
 
-type Fila = { servicioId?: string; profesionalId?: string }
+type Fila = {
+  servicioId?: string
+  profesionalId?: string
+  /**
+   * En que consultorio se esta atendiendo esa fila, si es de uno solo. Las
+   * ventanillas NO lo declaran: comparten fila, asi que lo que llame una le
+   * quita gente a las demas.
+   */
+  moduloId?: string | null
+}
 
 /**
  * Si el evento obliga a recargar a quien atiende esa fila.
  *
- * Los eventos que no son de fila (un llamado, un consultorio liberado) pasan
- * siempre: cambian el estado general y le interesan a cualquiera que mire.
+ * Los eventos que no son de fila pasan casi siempre: cambian el estado general
+ * y le interesan a cualquiera que mire.
+ *
+ * La excepcion es el LLAMADO DE OTRO CONSULTORIO cuando quien pregunta atiende
+ * una fila propia. Antes pasaban todos, asi que cada paciente que entraba en
+ * cualquier consultorio hacia que las pantallas de los otros siete pidieran su
+ * fila entera para pintar exactamente lo mismo. Y no le cambia nada: la fila de
+ * un doctor son SUS pacientes. El llamado del propio consultorio si pasa,
+ * porque ahi acaba de salir uno de la fila.
  */
 export function afectaALaFila(evento: EventoTurno, fila: Fila): boolean {
+  if (evento.tipo === 'turno.llamado') {
+    if (!fila.moduloId || !evento.casilla.moduloId) return true
+    return evento.casilla.moduloId === fila.moduloId
+  }
+
   if (evento.tipo !== 'fila.cambiada') return true
 
   const esDelServicio = !fila.servicioId || evento.servicioId === fila.servicioId

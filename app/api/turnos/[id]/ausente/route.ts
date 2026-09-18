@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -12,10 +13,11 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
 
     // Dar a alguien por ausente le cuenta como inasistencia: tiene que quedar
     // constancia de quien lo hizo.
-    registrarEvento({
-      tipo: 'TURNO_AUSENTE',
+    await registrarEvento({
+      tipo: EVENTOS.TURNO_AUSENTE,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: turno.codigo,
     })
 

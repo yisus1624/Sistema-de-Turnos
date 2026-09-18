@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
-import { registrarEvento } from '@/lib/seguridad/registro'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
+import { nombreDeProfesional } from '@/lib/turnos/catalogo-nombres'
 
 // 15 minutos a 72 horas: mismo rango que valida el repositorio. Se repite
 // aqui para devolver un mensaje en espanol antes de tocar el dominio.
@@ -46,11 +48,20 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params
     const { acceso, token } = await turnoRepository.crearAccesoProfesional(id, duracionMinutos)
 
-    registrarEvento({
-      tipo: 'ACCESO_PROFESIONAL_GENERADO',
+    // Cuanto tiempo estuvo abierta esa llave, y de quien era. Sin la vigencia,
+    // al revisar el registro semanas despues no se puede acotar en que ventana
+    // pudo entrar alguien con ese enlace. El token NO se escribe nunca: quien
+    // lea el registro no puede quedarse con la llave.
+    const { ip } = await contextoPeticion()
+    const doctor = (await nombreDeProfesional(id)) ?? id
+    await registrarEvento({
+      tipo: EVENTOS.ACCESO_PROFESIONAL_GENERADO,
       exito: true,
       usuarioId: session.user.id,
-      identificador: id,
+      usuarioNombre: session.user.name ?? null,
+      identificador: doctor,
+      ip,
+      detalle: { profesional: doctor, expiraEn: acceso.expiraEn, duracionMinutos },
     })
 
     // Url absoluta armada con el origin de la peticion: PENDIENTE DE CONFIRMACION

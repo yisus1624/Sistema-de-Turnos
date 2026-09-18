@@ -81,6 +81,18 @@ export default function TurnosEnCursoClient() {
   const resumen = contar(turnos)
   const ocupados = casillas.filter((c) => c.codigo)
 
+  /**
+   * Los servicios que hoy estan funcionando.
+   *
+   * Se deducen de los turnos del dia y de las casillas de la pantalla, que es
+   * lo que de verdad se movio hoy, no del catalogo: ahi figuran tambien los que
+   * el hospital atiende otros dias. Si todavia no ha pasado nada —a primera
+   * hora— se muestran todos, porque un tablero vacio al abrir se lee como que
+   * el sistema no cargo.
+   */
+  const idsDeHoy = new Set([...turnos.map((t) => t.servicioId), ...casillas.map((c) => c.servicioId)])
+  const serviciosDeHoy = idsDeHoy.size > 0 ? servicios.filter((s) => idsDeHoy.has(s.id)) : servicios
+
   if (cargando) {
     return (
       <div className="space-y-6" aria-busy="true" aria-label="Cargando la operacion del dia">
@@ -190,7 +202,14 @@ export default function TurnosEnCursoClient() {
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {servicios.map((servicio) => {
+            {/*
+              SOLO LOS SERVICIOS QUE HOY TIENEN ALGO. El catalogo lo va llenando
+              la carga del reporte del hospital y de ahi nada se apaga, asi que
+              listarlos todos llenaba el tablero de tarjetas en cero de
+              servicios que hoy no atienden: el numero que importa —donde hay
+              cola— quedaba escondido entre ceros.
+            */}
+            {serviciosDeHoy.map((servicio) => {
               const enEspera = turnos.filter((t) => t.servicioId === servicio.id && t.estado === 'EN_ESPERA')
               return (
                 <div key={servicio.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3">

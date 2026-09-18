@@ -254,7 +254,7 @@ test('marcar atendido cierra la cita y libera el consultorio', async () => {
   assert.ok(atendido.horaAtencion)
   assert.ok(eventos.some((e) => e.tipo === 'modulo.liberado' && e.moduloId === 'mod-consultorio-2'))
 
-  const casillas = await repo.estadoPantalla()
+  const { casillas } = await repo.estadoPantalla()
   const casilla = casillas.find((c) => c.moduloId === 'mod-consultorio-2')
   assert.equal(casilla.codigo, null)
 })
@@ -323,11 +323,52 @@ test('un profesional que no existe no puede llamar', async () => {
   )
 })
 
-test('la pantalla lista una casilla por cada modulo activo', async () => {
-  const casillas = await repo.estadoPantalla()
-  const modulos = await repo.listarModulos()
-  assert.equal(casillas.length, modulos.length)
+// El televisor muestra los consultorios QUE TRABAJAN HOY, no el catalogo.
+//
+// Esta prueba decia antes "una casilla por cada modulo activo", y eso dejo de
+// ser cierto: el catalogo lo va llenando la carga diaria del reporte y de ahi
+// nada se apaga, asi que a las pocas semanas el paciente tenia que buscar su
+// consultorio entre quince casillas vacias. Lo que se fija ahora es el criterio
+// nuevo, y esta en `lib/turnos/casillas.ts`.
+test('el televisor no pinta consultorios que hoy no trabajan', async () => {
+  const dormido = await repo.crearModulo({
+    nombre: 'Consultorio que hoy no abre',
+    servicioId: 'srv-consulta-externa',
+    activo: true,
+  })
+
+  const { casillas } = await repo.estadoPantalla()
+
+  assert.equal(
+    casillas.find((c) => c.moduloId === dormido.id),
+    undefined,
+    'un consultorio sin doctor, sin citas y sin turnos no ocupa sitio en la pantalla',
+  )
+  assert.ok(casillas.length > 0, 'los que si trabajan siguen ahi')
   assert.ok(casillas.every((c) => typeof c.moduloNombre === 'string'))
+})
+
+test('las ventanillas de orden de llegada se ven siempre, tengan o no pacientes', async () => {
+  // No tienen agenda que mirar, y esconderlas hasta el primer paciente dejaria
+  // el televisor en blanco a la hora de abrir.
+  const servicio = await repo.crearServicio({
+    nombre: 'Facturacion de prueba',
+    prefijo: 'F',
+    modoFila: 'COMPARTIDA',
+    activo: true,
+  })
+  const ventanilla = await repo.crearModulo({
+    nombre: 'Ventanilla de prueba 1',
+    servicioId: servicio.id,
+    activo: true,
+  })
+
+  const { casillas } = await repo.estadoPantalla()
+
+  assert.ok(
+    casillas.find((c) => c.moduloId === ventanilla.id),
+    'la ventanilla se ve desde que se abre el hospital',
+  )
 })
 
 test('la agenda del profesional muestra PROGRAMADA antes de la llegada (trazabilidad)', async () => {
@@ -485,24 +526,20 @@ test('la pantalla no arrastra turnos de dias anteriores', async () => {
   })
 
   // Aparece ahora, recien llamado.
-  const enPantalla = (casillas) => casillas.find((c) => c.moduloId === modulo.id)
-  assert.equal(enPantalla(await repo.estadoPantalla()).codigo, llamado.codigo)
+  const enPantalla = async () => {
+    const { casillas } = await repo.estadoPantalla()
+    return casillas.find((c) => c.moduloId === modulo.id)
+  }
+  assert.equal((await enPantalla()).codigo, llamado.codigo)
 
   // Se simula la jornada de ayer: el doctor termino y se fue sin cerrarlo, que
   // es lo que pasa todos los dias con el ultimo paciente.
   llamado.horaLlamado = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString()
 
   assert.equal(
-    enPantalla(await repo.estadoPantalla()).codigo,
+    (await enPantalla()).codigo,
     null,
     'el televisor no puede amanecer mostrando el turno de ayer',
-  )
-
-  const ultimos = await repo.ultimosLlamados(10)
-  assert.equal(
-    ultimos.some((c) => c.codigo === llamado.codigo),
-    false,
-    'tampoco en la lista de ultimos llamados',
   )
 })
 

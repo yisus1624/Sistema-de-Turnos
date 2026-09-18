@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 
 export async function GET(request: Request) {
   try {
@@ -45,10 +46,11 @@ export async function POST(request: Request) {
 
     const cita = await turnoRepository.crearCita({ ...parsed.data, usuarioId: session.user.id })
 
-    registrarEvento({
-      tipo: 'CITA_CREADA',
+    await registrarEvento({
+      tipo: EVENTOS.CITA_CREADA,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: cita.documentoPaciente,
       detalle: { citaId: cita.id, horaCita: cita.horaCita, profesionalId: cita.profesionalId },
     })

@@ -35,6 +35,8 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { errorDeNegocio } from '@/lib/turnos/errores'
+import { claveDelChoque } from '@/lib/turnos/choques-unicos'
+import { claveDeCita, decidirFila } from './plan-de-carga'
 import { recalcularJornadas } from './jornadas'
 import type { AjusteDeJornada } from '@/lib/turnos/types'
 import { leerReporteDelHospital, type ErrorFila, type FilaReporte } from './reporte-hospital'
@@ -220,10 +222,7 @@ async function asegurarCatalogo(filas: FilaReporte[]): Promise<Catalogo> {
     // Si el prefijo ya lo usa otro servicio se busca el siguiente libre: el
     // codigo del turno tiene que ser unico en la sala de espera, y fallar la
     // carga entera por una letra ocupada seria desproporcionado.
-    const prefijo = await prefijoLibre(servicio.prefijo)
-    const creado = await prisma.servicio.create({
-      data: { nombre, prefijo, modoFila: 'POR_PROFESIONAL', activo: true },
-    })
+    const creado = await crearServicioConPrefijoLibre(nombre, servicio.prefijo)
     catalogo.servicios.set(nombre, creado.id)
     catalogo.serviciosNuevos.push(nombre)
   }
@@ -282,6 +281,24 @@ async function asegurarCatalogo(filas: FilaReporte[]): Promise<Catalogo> {
     const existente = await prisma.profesional.findUnique({ where: { claveExterna: clave } })
     if (existente) {
       catalogo.profesionales.set(clave, existente.id)
+
+      // EL CONSULTORIO SE ACTUALIZA, no solo se pone al crear.
+      //
+      // Faltaba, y el efecto llegaba hasta la pantalla del paciente: si el
+      // hospital movia a un doctor del consultorio 1 al 2, el sistema lo seguia
+      // creyendo en el 1, asi que el televisor rotulaba su nombre en la puerta
+      // equivocada, la actividad del dia se le atribuia al consultorio que no
+      // era, y aparecia una casilla vacia en el 1 mientras la del 2 no salia.
+      //
+      // Solo cuando el reporte trae consultorio: una fila sin el no significa
+      // que al doctor se lo hayan quitado, significa que ese dia no venia en el
+      // archivo.
+      if (datos.moduloId && existente.moduloId !== datos.moduloId) {
+        await prisma.profesional.update({
+          where: { id: existente.id },
+          data: { moduloId: datos.moduloId },
+        })
+      }
       continue
     }
 
@@ -304,33 +321,95 @@ async function asegurarCatalogo(filas: FilaReporte[]): Promise<Catalogo> {
   return catalogo
 }
 
-async function prefijoLibre(deseado: string) {
-  const letras = [deseado, ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')]
-  for (const letra of letras) {
-    const ocupado = await prisma.servicio.findFirst({ where: { prefijo: letra }, select: { id: true } })
-    if (!ocupado) return letra
+/**
+ * Crea el servicio de la carga con la primera letra que quede libre.
+ *
+ * SE INTENTA INSERTAR, NO SOLO CONSULTAR. Antes se preguntaba que letras estan
+ * ocupadas y despues se insertaba; entre las dos cosas cabe un administrador
+ * dando de alta un servicio a mano, y los dos servicios acababan con la misma
+ * letra compartiendo la numeracion del dia (Odontologia sacando O-001 y luego
+ * O-003 porque el otro se llevo el O-002). Ahora la letra la adjudica el indice
+ * unico de la base: si la rechaza, se prueba la siguiente.
+ */
+async function crearServicioConPrefijoLibre(nombre: string, deseado: string) {
+  for (const prefijo of await prefijosLibres(deseado)) {
+    try {
+      return await prisma.servicio.create({
+        data: { nombre, prefijo, modoFila: 'POR_PROFESIONAL', activo: true },
+      })
+    } catch (error) {
+      // Solo el choque de prefijo se reintenta con otra letra. Cualquier otro
+      // (el nombre repetido, por ejemplo) no se arregla cambiando de letra.
+      if (claveDelChoque(error) !== 'prefijo') throw error
+    }
   }
   errorDeNegocio('No quedan prefijos de turno libres. Revisa los servicios en la administracion.')
 }
 
-async function nombreDeModuloLibre(deseado: string) {
-  const ocupado = await prisma.modulo.findUnique({ where: { nombre: deseado }, select: { id: true } })
-  return ocupado ? `${deseado} (importado)` : deseado
+/** Letras a probar, en orden: la que propone el reporte y luego el alfabeto. */
+async function prefijosLibres(deseado: string) {
+  const servicios = await prisma.servicio.findMany({ select: { prefijo: true } })
+  const ocupados = new Set(servicios.map((servicio) => servicio.prefijo))
+  const candidatos = new Set([deseado, ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'])
+  return [...candidatos].filter((prefijo) => !ocupados.has(prefijo))
 }
 
-async function nombreDeProfesionalLibre(deseado: string) {
-  const ocupado = await prisma.profesional.findUnique({ where: { nombre: deseado }, select: { id: true } })
-  return ocupado ? `${deseado} (importado)` : deseado
+/**
+ * Un nombre que no choque con ninguno que ya exista.
+ *
+ * SE COMPARA SIN MAYUSCULAS NI ESPACIOS, igual que la validacion que usa el
+ * administrador. Antes esta comprobacion era `findUnique` por nombre exacto, y
+ * esa diferencia se veia en la pantalla del paciente: si existia "Consultorio
+ * 1" hecho a mano y el reporte traia "CONSULTORIO 1" con otra clave, el choque
+ * no se detectaba y nacia un segundo consultorio. El televisor acababa con dos
+ * casillas que el paciente lee identicas, y el nombre del consultorio deja de
+ * servir para lo unico que sirve: saber por que puerta entrar.
+ *
+ * El sufijo se reintenta numerado, porque un segundo choque contra "(importado)"
+ * tumbaba la carga entera con un error de clave repetida.
+ */
+async function nombreLibre(
+  deseado: string,
+  buscar: (nombre: string) => Promise<{ id: string } | null>,
+) {
+  if (!(await buscar(deseado))) return deseado
+
+  for (let intento = 1; intento < 50; intento += 1) {
+    const candidato = intento === 1 ? `${deseado} (importado)` : `${deseado} (importado ${intento})`
+    if (!(await buscar(candidato))) return candidato
+  }
+
+  // Cincuenta variantes ocupadas no es un caso real; si pasara, es preferible
+  // un nombre feo pero unico a tumbar la carga del dia entera.
+  return `${deseado} (importado ${Date.now()})`
+}
+
+function nombreDeModuloLibre(deseado: string) {
+  return nombreLibre(deseado, (nombre) =>
+    prisma.modulo.findFirst({
+      where: { nombre: { equals: nombre, mode: 'insensitive' } },
+      select: { id: true },
+    }),
+  )
+}
+
+function nombreDeProfesionalLibre(deseado: string) {
+  return nombreLibre(deseado, (nombre) =>
+    prisma.profesional.findFirst({
+      where: { nombre: { equals: nombre, mode: 'insensitive' } },
+      select: { id: true },
+    }),
+  )
 }
 
 // ---------------------------------------------------------------------------
 // Citas
 // ---------------------------------------------------------------------------
 
-/** Como se identifica una cita entre la agenda del hospital y la nuestra. */
-function claveDeCita(fecha: string, documento: string, profesionalId: string, horaCitaIso: string) {
-  return `${fecha}|${documento}|${profesionalId}|${horaCitaIso}`
-}
+// `claveDeCita` y la decision de que hacer con cada fila viven en
+// `./plan-de-carga`, que es puro y esta probado caso por caso: son las reglas de
+// mas riesgo de la carga y aqui dentro, enredadas con Prisma, no habia forma de
+// fijarlas con una prueba.
 
 interface Aplicado {
   creadas: number
@@ -393,18 +472,27 @@ async function aplicarCitas(filas: FilaReporte[], catalogo: Catalogo, cargaId: s
     }
 
     const clave = claveDeCita(fila.fecha, fila.documentoPaciente, profesionalId, fila.horaCita)
+    const yaVista = resultado.vistas.has(clave)
+    resultado.vistas.add(clave)
 
-    // El mismo archivo puede traer la fila repetida. La segunda no es un error
-    // ni una cita nueva: es la misma.
-    if (resultado.vistas.has(clave)) {
+    const decision = decidirFila({
+      fila: {
+        nombrePaciente: fila.nombrePaciente,
+        tipoDocumento: fila.tipoDocumento,
+        procedimiento: fila.procedimiento,
+        cups: fila.cups,
+        servicioId,
+      },
+      existente: porClave.get(clave),
+      yaVista,
+    })
+
+    if (decision.accion === 'omitir') {
       resultado.omitidas += 1
       continue
     }
-    resultado.vistas.add(clave)
 
-    const existente = porClave.get(clave)
-
-    if (!existente) {
+    if (decision.accion === 'crear') {
       nuevas.push({
         documentoPaciente: fila.documentoPaciente,
         tipoDocumento: fila.tipoDocumento,
@@ -424,30 +512,7 @@ async function aplicarCitas(filas: FilaReporte[], catalogo: Catalogo, cargaId: s
       continue
     }
 
-    // El paciente ya llego (o ya lo atendieron), o alguien cancelo la cita
-    // aqui: en los tres casos la carga no manda. Reescribirla podria moverlo de
-    // fila o dejarlo sin el turno que tiene en la mano.
-    if (existente.estado !== 'PROGRAMADA') {
-      resultado.omitidas += 1
-      continue
-    }
-
-    const datos: Record<string, unknown> = {}
-    if (existente.nombrePaciente !== fila.nombrePaciente) datos.nombrePaciente = fila.nombrePaciente
-    if (existente.tipoDocumento !== fila.tipoDocumento) datos.tipoDocumento = fila.tipoDocumento
-    if (existente.procedimiento !== fila.procedimiento) datos.procedimiento = fila.procedimiento
-    if (existente.cups !== fila.cups) datos.cups = fila.cups
-    if (existente.servicioId !== servicioId) datos.servicioId = servicioId
-
-    if (Object.keys(datos).length === 0) {
-      // Ya estaba igual: ni creada ni cambiada. Es el caso normal cuando se
-      // vuelve a subir el mismo archivo.
-      resultado.omitidas += 1
-      continue
-    }
-
-    datos.cargaId = cargaId
-    cambios.push({ id: existente.id, datos })
+    cambios.push({ id: decision.id, datos: { ...decision.datos, cargaId } })
   }
 
   if (nuevas.length > 0) {

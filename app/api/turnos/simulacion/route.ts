@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 
 /**
  * Fuera de desarrollo hay que habilitarla explicitamente. La variable se pone
@@ -40,10 +41,11 @@ export async function POST() {
     }
 
     // Borrar la jornada es de las cosas que hay que poder rastrear despues.
-    registrarEvento({
-      tipo: 'SIMULACION_REINICIO_DEL_DIA',
+    await registrarEvento({
+      tipo: EVENTOS.SIMULACION_REINICIO_DEL_DIA,
       exito: true,
       usuarioId: session.user.id,
+      usuarioNombre: session.user.name ?? null,
       identificador: session.user.usuario,
     })
 

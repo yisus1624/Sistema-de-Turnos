@@ -34,10 +34,17 @@ import ConfirmModal from '@/components/ui/ConfirmModal'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
-import { mensajeDeError, pedir } from '@/lib/api/cliente'
-import type { AccesoProfesional, Jornada, Modulo, Profesional, Servicio } from '@/lib/turnos/types'
+import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
+import type {
+  AccesoProfesional,
+  Jornada,
+  JornadaDelDia,
+  Modulo,
+  Profesional,
+  Servicio,
+} from '@/lib/turnos/types'
 
-const COLUMNAS = ['Profesional', 'Servicio', 'Jornada', 'Consultorio', 'Enlace', '']
+const COLUMNAS = ['Profesional', 'Servicio', 'Ese dia', 'Consultorio', 'Enlace', '']
 
 const etiquetaJornada: Record<Jornada, string> = {
   MANANA: 'Mañana',
@@ -165,6 +172,64 @@ function limpiarEnlaceCacheado(profesionalId: string) {
   }
 }
 
+/**
+ * Lo que ese doctor trabaja EL DIA que se esta mirando.
+ *
+ * Antes esta columna mostraba la jornada de su ficha, que es lo que ese medico
+ * SUELE hacer. Para repartir enlaces hace falta la del dia: las horas dicen
+ * cuanto tiene que durar el enlace, y ademas el mismo medico hace el lunes
+ * completo, el martes solo la mañana y el miercoles no viene.
+ */
+function JornadaDeEseDia({
+  delDia,
+  habitual,
+  cargando,
+  error,
+  esFutura,
+}: {
+  delDia?: JornadaDelDia
+  habitual: Jornada
+  cargando: boolean
+  /** No se pudo consultar: no es lo mismo que "no trabaja". */
+  error?: boolean
+  /** El dia elegido todavia no ha llegado: lo que hay es agenda, no trabajo hecho. */
+  esFutura?: boolean
+}) {
+  if (cargando) return <span className="text-sm font-semibold text-slate-300">…</span>
+
+  // Un fallo de la consulta no es una respuesta. Con el mapa vacio, la tabla
+  // afirmaba fila por fila que ese dia no trabajaba nadie —y con el filtro del
+  // dia puesto, ademas, se quedaba sin una sola fila que mostrar.
+  if (error) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <Badge tone="amber">Sin dato</Badge>
+        <span className="text-xs font-semibold text-slate-400">no se pudo consultar</span>
+      </div>
+    )
+  }
+
+  if (!delDia?.jornada) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <Badge tone="slate">{esFutura ? 'Sin agenda' : 'No trabaja'}</Badge>
+        <span className="text-xs font-semibold text-slate-400">
+          {esFutura ? 'todavia sin citas' : `suele hacer ${etiquetaJornada[habitual].toLowerCase()}`}
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      <Badge tone={tonoJornada[delDia.jornada]}>{etiquetaJornada[delDia.jornada]}</Badge>
+      <span className="text-xs font-semibold text-slate-400">
+        {delDia.citas} cita(s) · {delDia.desde}–{delDia.hasta}
+      </span>
+    </div>
+  )
+}
+
 export default function EnlacesClient() {
   const [profesionales, setProfesionales] = useState<Profesional[]>([])
   const [servicios, setServicios] = useState<Servicio[]>([])
@@ -180,6 +245,30 @@ export default function EnlacesClient() {
   const [busqueda, setBusqueda] = useState('')
   const [jornadaFiltro, setJornadaFiltro] = useState<'' | Jornada>('')
   const [consultorioFiltro, setConsultorioFiltro] = useState('')
+
+  /**
+   * El dia que se esta repartiendo, y quien trabaja ESE dia.
+   *
+   * POR QUE NO SE LISTAN LOS DIECIOCHO. El catalogo de doctores lo va llenando
+   * la carga diaria del reporte y crece con el tiempo, pero un dia cualquiera
+   * atiende una parte: hoy ocho, cuatro en la mañana y cuatro en la tarde. Con
+   * los dieciocho en la tabla, repartir los enlaces del dia es ir cazando ocho
+   * nombres entre dieciocho, y cada fila de las otras diez ofrece un boton de
+   * "Generar enlace" para alguien que hoy no viene.
+   *
+   * Quien trabaja ese dia lo dicen sus citas, no su ficha: la jornada de la
+   * ficha es lo que ese medico SUELE hacer, y no sabe si hoy vino.
+   */
+  const [fecha, setFecha] = useState(hoyEnColombia)
+  const [jornadasDelDia, setJornadasDelDia] = useState<Map<string, JornadaDelDia>>(new Map())
+  const [cargandoJornadas, setCargandoJornadas] = useState(true)
+  const [errorJornadas, setErrorJornadas] = useState(false)
+
+  /**
+   * Se ven solo los del dia. Se puede apagar, porque a veces hay que darle el
+   * enlace a un doctor que entra a cubrir a otro y todavia no tiene citas.
+   */
+  const [soloDelDia, setSoloDelDia] = useState(true)
 
   // Modal de generacion.
   const [profesionalActivo, setProfesionalActivo] = useState<Profesional | null>(null)
@@ -224,12 +313,68 @@ export default function EnlacesClient() {
     cargar()
   }, [cargar])
 
-  // El "faltan X min" se queda viejo si no se refresca la vista.
+  /**
+   * Solo los accesos, que es lo unico que otra persona puede cambiar mientras
+   * esta pantalla esta abierta. En silencio: es un refresco de fondo y un aviso
+   * de error cada treinta segundos seria peor que el problema.
+   */
+  const cargarAccesos = useCallback(async () => {
+    try {
+      const { accesos: lista } = await pedir<{ accesos: AccesoProfesional[] }>(
+        '/api/profesionales/accesos',
+      )
+      setAccesos(lista)
+    } catch {
+      // Se queda la lista anterior: es mas util que vaciarla.
+    }
+  }, [])
+
+  const cargarJornadas = useCallback(async (dia: string) => {
+    setCargandoJornadas(true)
+    try {
+      const { jornadas } = await pedir<{ jornadas: JornadaDelDia[] }>(
+        `/api/turnos/profesionales/jornadas?fecha=${dia}`,
+      )
+      setJornadasDelDia(new Map(jornadas.map((j) => [j.profesionalId, j])))
+      setErrorJornadas(false)
+    } catch (error) {
+      // Aqui NO es silencioso: si no se sabe quien trabaja hoy, la tabla se
+      // queda vacia con el filtro puesto, y el operador tiene que entender por
+      // que en vez de creer que hoy no viene nadie.
+      toast.error('No se pudo saber quien trabaja ese dia', mensajeDeError(error))
+      setJornadasDelDia(new Map())
+      setErrorJornadas(true)
+    } finally {
+      setCargandoJornadas(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    cargarJornadas(fecha)
+  }, [cargarJornadas, fecha])
+
+  /**
+   * Refresco periodico: la cuenta atras Y los accesos.
+   *
+   * Antes solo repintaba, para que el "faltan 3 h 20 min" no se quedara viejo.
+   * Eso dejaba un hueco con consecuencia real: si el administrador revocaba un
+   * enlace desde su equipo, en el mostrador la fila seguia diciendo "Vigente"
+   * durante horas, y como ademas ese mostrador conserva la copia en su
+   * navegador, se la podia volver a mostrar y entregar. El doctor perdia su
+   * jornada intentando entrar con un enlace muerto.
+   *
+   * Se vuelven a pedir los accesos, que es lo que puede haber cambiado en otro
+   * equipo. Las jornadas del dia no: esas dependen de la fecha elegida y de la
+   * agenda, que no se mueve sola cada treinta segundos.
+   */
   const [, forzarRefresco] = useState(0)
   useEffect(() => {
-    const id = setInterval(() => forzarRefresco((n) => n + 1), 30_000)
+    const id = setInterval(() => {
+      forzarRefresco((n) => n + 1)
+      cargarAccesos()
+    }, 30_000)
     return () => clearInterval(id)
-  }, [])
+  }, [cargarAccesos])
 
   const nombreServicio = useMemo(() => {
     const mapa = new Map(servicios.map((s) => [s.id, s.nombre]))
@@ -269,7 +414,21 @@ export default function EnlacesClient() {
   const visibles = useMemo(() => {
     const texto = busqueda.trim().toLowerCase()
     return profesionales.filter((profesional) => {
-      if (jornadaFiltro && profesional.jornada !== jornadaFiltro) return false
+      const delDia = jornadasDelDia.get(profesional.id)
+
+      // El que ese dia no tiene ni un paciente no sale: no hay a quien darle el
+      // enlace, y su fila solo estorba entre las que si hay que repartir.
+      //
+      // Si la consulta del dia FALLO no se filtra nada: con el mapa vacio, el
+      // filtro dejaba la tabla sin una sola fila y el mostrador se quedaba sin
+      // poder repartir enlaces por un corte de red.
+      if (soloDelDia && !errorJornadas && !delDia?.jornada) return false
+
+      // El filtro de jornada mira LA DEL DIA cuando se sabe, y la de la ficha
+      // solo cuando no hay citas. "Los de la mañana" significa los que hoy
+      // atienden en la mañana, no los que suelen hacerlo.
+      const jornadaQueCuenta = delDia?.jornada ?? profesional.jornada
+      if (jornadaFiltro && jornadaQueCuenta !== jornadaFiltro) return false
       if (consultorioFiltro === SIN_CONSULTORIO) {
         if (profesional.moduloId) return false
       } else if (consultorioFiltro && profesional.moduloId !== consultorioFiltro) {
@@ -285,7 +444,23 @@ export default function EnlacesClient() {
         .toLowerCase()
       return buscable.includes(texto)
     })
-  }, [profesionales, busqueda, jornadaFiltro, consultorioFiltro, nombreServicio, nombreModulo])
+  }, [
+    profesionales,
+    busqueda,
+    jornadaFiltro,
+    consultorioFiltro,
+    nombreServicio,
+    nombreModulo,
+    jornadasDelDia,
+    soloDelDia,
+    errorJornadas,
+  ])
+
+  /** Cuantos doctores trabajan el dia que se esta mirando. */
+  const trabajanEseDia = useMemo(
+    () => profesionales.filter((p) => jornadasDelDia.get(p.id)?.jornada).length,
+    [profesionales, jornadasDelDia],
+  )
 
   function limpiarFiltros() {
     setBusqueda('')
@@ -389,9 +564,33 @@ export default function EnlacesClient() {
 
   return (
     <>
+      {/*
+        EL DIA, ANTES QUE LA TABLA. Repartir enlaces es una tarea de un dia
+        concreto —el de hoy, casi siempre—, y la tabla contesta a "quien
+        trabaja ese dia". Poder mover la fecha ademas deja mirar hacia atras
+        quien atendio ayer sin tener que deducirlo de otra pantalla.
+      */}
+      <Card className="mb-5">
+        <div className="flex flex-wrap items-end gap-3">
+          <Campo etiqueta="Dia" className="w-44">
+            <Entrada type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+          </Campo>
+          {fecha !== hoyEnColombia() ? (
+            <Button variant="secondary" size="sm" onClick={() => setFecha(hoyEnColombia())}>
+              Hoy
+            </Button>
+          ) : null}
+          <p className="pb-2 text-xs leading-5 text-slate-500">
+            Quien trabaja ese dia sale de sus citas, no de la jornada de su ficha.
+          </p>
+        </div>
+      </Card>
+
       <Card padded={false}>
         <CardHeader>
-          <CardTitle>Doctores ({profesionales.length})</CardTitle>
+          <CardTitle>
+            {soloDelDia ? `Doctores del dia (${trabajanEseDia})` : `Doctores (${profesionales.length})`}
+          </CardTitle>
           <span className="text-sm font-bold text-slate-500">
             {vigentes} con enlace vigente
           </span>
@@ -401,7 +600,12 @@ export default function EnlacesClient() {
           doctores estorba y no ahorra nada; pasada la decena es la unica forma
           de llegar al que se busca sin recorrer la tabla entera.
         */}
-        {!cargando && profesionales.length > 6 ? (
+        {/*
+          La barra aparece tambien cuando el filtro del dia esta escondiendo a
+          alguien, aunque haya pocos doctores: si no, en un hospital chico el
+          boton para ver el catalogo completo quedaria sin sitio donde vivir.
+        */}
+        {!cargando && (profesionales.length > 6 || trabajanEseDia < profesionales.length) ? (
           <div className="flex flex-wrap items-end gap-3 border-b border-slate-100 px-5 py-4">
             <Campo etiqueta="Buscar doctor, servicio o consultorio" className="w-full max-w-xs">
               <div className="relative">
@@ -452,13 +656,28 @@ export default function EnlacesClient() {
 
             <div className="flex items-center gap-3 pb-0.5">
               <span className="text-sm font-bold text-slate-500">
-                {visibles.length} de {profesionales.length} doctores
+                {visibles.length} de {soloDelDia ? trabajanEseDia : profesionales.length} doctores
               </span>
               {filtrando ? (
                 <Button variant="secondary" size="sm" onClick={limpiarFiltros}>
-                  Ver todos
+                  Quitar filtros
                 </Button>
               ) : null}
+              {/*
+                Se dice CUANTOS quedan fuera, no se esconden en silencio: quien
+                busca a un doctor concreto y no lo ve tiene que poder entender
+                por que, o va a creer que no esta registrado.
+              */}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSoloDelDia((antes) => !antes)}
+                aria-pressed={soloDelDia}
+              >
+                {soloDelDia
+                  ? `Ver los ${profesionales.length} del catalogo`
+                  : `Solo los ${trabajanEseDia} de ese dia`}
+              </Button>
             </div>
           </div>
         ) : null}
@@ -476,14 +695,34 @@ export default function EnlacesClient() {
             </div>
           ) : visibles.length === 0 ? (
             <div className="p-5">
+              {/*
+                La tabla vacia por el dia y la tabla vacia por el filtro son dos
+                cosas distintas, y decir "ningun doctor coincide" cuando lo que
+                pasa es que ese dia no hay agenda cargada manda a buscar el
+                problema donde no esta.
+              */}
               <EmptyState
-                icon={MagnifyingGlass}
-                title="Ningun doctor coincide"
-                description="Prueba con otro nombre o quita los filtros para ver a todos los doctores."
+                icon={soloDelDia && trabajanEseDia === 0 ? IdentificationCard : MagnifyingGlass}
+                title={
+                  soloDelDia && trabajanEseDia === 0
+                    ? 'Ningun doctor trabaja ese dia'
+                    : 'Ningun doctor coincide'
+                }
+                description={
+                  soloDelDia && trabajanEseDia === 0
+                    ? 'Ninguno tiene citas ese dia. Si la agenda todavia no se ha cargado, subela en Citas; si necesitas darle el enlace a alguien igualmente, muestra el catalogo completo.'
+                    : 'Prueba con otro nombre o quita los filtros para ver a todos los doctores.'
+                }
                 action={
-                  <Button variant="secondary" onClick={limpiarFiltros}>
-                    Ver todos
-                  </Button>
+                  soloDelDia && trabajanEseDia === 0 ? (
+                    <Button variant="secondary" onClick={() => setSoloDelDia(false)}>
+                      Ver los {profesionales.length} del catalogo
+                    </Button>
+                  ) : (
+                    <Button variant="secondary" onClick={limpiarFiltros}>
+                      Quitar filtros
+                    </Button>
+                  )
                 }
               />
             </div>
@@ -501,9 +740,13 @@ export default function EnlacesClient() {
                     <td className="px-4 py-3 font-black text-brand-950">{profesional.nombre}</td>
                     <td className="px-4 py-3 text-slate-600">{nombreServicio(profesional.servicioId)}</td>
                     <td className="px-4 py-3">
-                      <Badge tone={tonoJornada[profesional.jornada]}>
-                        {etiquetaJornada[profesional.jornada]}
-                      </Badge>
+                      <JornadaDeEseDia
+                        delDia={jornadasDelDia.get(profesional.id)}
+                        habitual={profesional.jornada}
+                        cargando={cargandoJornadas}
+                        error={errorJornadas}
+                        esFutura={fecha > hoyEnColombia()}
+                      />
                     </td>
                     <td className="px-4 py-3 text-slate-600">{nombreModulo(profesional.moduloId)}</td>
                     <td className="px-4 py-3">
@@ -527,7 +770,21 @@ export default function EnlacesClient() {
                           }}
                         >
                           <LinkIcon size={16} weight="bold" />
-                          {estado === 'vigente' ? 'Ver enlace' : 'Generar enlace'}
+                          {/*
+                            "Ver enlace" SOLO si la copia esta en este
+                            navegador. El servidor guarda el hash, no el enlace:
+                            si se genero en otro equipo o se cerro la pestaña,
+                            no hay nada que enseñar y la unica salida es generar
+                            otro, que tumba el que el doctor este usando. Decia
+                            "Ver enlace" en todas las filas vigentes, asi que el
+                            operador descubria el callejon sin salida DESPUES de
+                            abrir; el boton lo dice antes.
+                          */}
+                          {estado !== 'vigente'
+                            ? 'Generar enlace'
+                            : leerEnlaceCacheado(profesional.id)
+                              ? 'Ver enlace'
+                              : 'Regenerar'}
                         </Button>
                         {estado === 'vigente' && acceso ? (
                           <Button

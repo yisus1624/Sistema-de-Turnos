@@ -15,7 +15,7 @@
  *   TURNOS_ADMIN_USUARIO / TURNOS_ADMIN_PASSWORD
  *   TURNOS_OPERADOR_USUARIO / TURNOS_OPERADOR_PASSWORD
  */
-import bcrypt from 'bcryptjs'
+import { cifrarContrasena, cifrarContrasenaAlSembrar, contrasenaCoincide } from './contrasenas'
 import { errorDeNegocio } from '@/lib/turnos/errores'
 import type { UsuarioRepository } from './repository'
 import type { DatosUsuario, RolUsuario, Usuario } from './types'
@@ -37,12 +37,36 @@ function sinPassword(registro: RegistroUsuario): Usuario {
   return usuario
 }
 
+/**
+ * Una lista VACIA se guarda como `null`.
+ *
+ * Es el mismo criterio que la implementacion contra Postgres, y tiene que
+ * serlo: las dos cumplen el mismo contrato. Alli `[]` se traducia a `null` al
+ * leer y aqui se conservaba, asi que la MISMA peticion dejaba al operador con
+ * todas las secciones de su rol contra la base de verdad y sin ni una contra la
+ * de memoria. Con dos comportamientos opuestos, ninguna prueba dice nada util
+ * sobre lo que de verdad pasa en produccion.
+ *
+ * `null` significa "las de su rol". "Ninguna seccion" no es un estado valido, y
+ * lo rechaza la politica de permisos antes de llegar hasta aqui.
+ */
+function normalizarSecciones(secciones: string[] | null | undefined): string[] | null {
+  return secciones && secciones.length > 0 ? secciones : null
+}
+
+/**
+ * Recibe el HASH ya calculado, no la contraseña.
+ *
+ * Asi este constructor sigue siendo sincrono —lo necesita el sembrado, que
+ * corre al cargar el modulo— mientras que dar de alta una cuenta de verdad
+ * cifra con la version asincrona, que no bloquea el servidor.
+ */
 function crearRegistro(params: {
   nombre: string
   usuario: string
   rol: RolUsuario
   area: string | null
-  password: string
+  passwordHash: string
   secciones?: string[] | null
 }): RegistroUsuario {
   return {
@@ -53,13 +77,13 @@ function crearRegistro(params: {
     area: params.area,
     activo: true,
     fechaCreacion: new Date().toISOString(),
-    passwordHash: bcrypt.hashSync(params.password, 10),
+    passwordHash: params.passwordHash,
     // Un administrador siempre ve todo, igual que en `actualizar`: el campo
     // solo aplica a OPERADOR. Sin esto se podia crear por API un administrador
     // con una lista recortada (o vacia), y ese usuario quedaba sin una sola
     // pantalla a la que entrar: el guarda lo devolvia al login y el login lo
     // mandaba de vuelta, en bucle.
-    secciones: params.rol === 'ADMINISTRADOR' ? null : (params.secciones ?? null),
+    secciones: params.rol === 'ADMINISTRADOR' ? null : normalizarSecciones(params.secciones),
   }
 }
 
@@ -70,14 +94,14 @@ function sembrar(): RegistroUsuario[] {
       usuario: process.env.TURNOS_ADMIN_USUARIO ?? 'admin',
       rol: 'ADMINISTRADOR',
       area: 'Sistemas',
-      password: process.env.TURNOS_ADMIN_PASSWORD ?? 'admin1234',
+      passwordHash: cifrarContrasenaAlSembrar(process.env.TURNOS_ADMIN_PASSWORD ?? 'admin1234'),
     }),
     crearRegistro({
       nombre: 'Operador de ventanilla',
       usuario: process.env.TURNOS_OPERADOR_USUARIO ?? 'operador',
       rol: 'OPERADOR',
       area: 'Facturacion',
-      password: process.env.TURNOS_OPERADOR_PASSWORD ?? 'operador1234',
+      passwordHash: cifrarContrasenaAlSembrar(process.env.TURNOS_OPERADOR_PASSWORD ?? 'operador1234'),
     }),
   ]
 }
@@ -105,7 +129,7 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
   async verificarCredenciales(usuario: string, password: string): Promise<Usuario | null> {
     const registro = usuarios.find((u) => u.usuario === normalizarUsuario(usuario))
     if (!registro || !registro.activo) return null
-    if (!bcrypt.compareSync(password, registro.passwordHash)) return null
+    if (!(await contrasenaCoincide(password, registro.passwordHash))) return null
     return sinPassword(registro)
   }
 
@@ -129,7 +153,7 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
       usuario: datos.usuario,
       rol: datos.rol,
       area: datos.area ?? null,
-      password: datos.password,
+      passwordHash: await cifrarContrasena(datos.password),
       secciones: datos.secciones,
     })
     usuarios.push(registro)
@@ -150,8 +174,8 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
     if (datos.rol !== undefined) registro.rol = datos.rol
     if (datos.area !== undefined) registro.area = datos.area ?? null
     if (datos.activo !== undefined) registro.activo = datos.activo
-    if (datos.password) registro.passwordHash = bcrypt.hashSync(datos.password, 10)
-    if (datos.secciones !== undefined) registro.secciones = datos.secciones
+    if (datos.password) registro.passwordHash = await cifrarContrasena(datos.password)
+    if (datos.secciones !== undefined) registro.secciones = normalizarSecciones(datos.secciones)
     // Un administrador siempre ve todo; el campo solo aplica a OPERADOR.
     if (registro.rol === 'ADMINISTRADOR') registro.secciones = null
 

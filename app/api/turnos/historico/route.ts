@@ -1,13 +1,26 @@
 import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
-import { apiError, requireRol, tieneSeccion } from '@/lib/permissions/session'
+import { apiError, requireSeccion, tieneSeccion } from '@/lib/permissions/session'
 import type { EstadoTurno } from '@/lib/turnos/types'
 
 const ESTADOS: EstadoTurno[] = ['EN_ESPERA', 'LLAMADO', 'EN_ATENCION', 'ATENDIDO', 'AUSENTE', 'CANCELADO']
 
 export async function GET(request: Request) {
   try {
-    const session = await requireRol(['OPERADOR', 'ADMINISTRADOR'])
+    // POR SECCION, no por rol. Es lo que usa el resto del sistema, y la
+    // diferencia importa: con `requireRol` un operador cuyas secciones ya no
+    // incluyen ninguna pantalla de turnos seguia entrando y recibiendo un 200.
+    // No llegaba a ver nada ajeno —abajo se le fija el filtro a lo que el mismo
+    // llamo, y el turno no lleva datos del paciente—, pero una seccion retirada
+    // tiene que responder 403, no lista vacia: si no, el dia que se reabra
+    // alguna, nadie sabe quien podia entrar realmente.
+    const session = await requireSeccion(
+      '/admin/turnos',
+      '/admin/historico',
+      '/admin/reportes',
+      '/operador',
+      '/operador/historico',
+    )
     const { searchParams } = new URL(request.url)
 
     const estado = searchParams.get('estado')
