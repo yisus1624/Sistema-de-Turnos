@@ -32,7 +32,7 @@ export default function BottomSheet({ open, onClose, title, children }: BottomSh
         </div>
         {title ? (
           <header className="flex items-center justify-between gap-4 px-5 py-4">
-            <h2 className="text-lg font-black tracking-[-0.02em] text-brand-950">{title}</h2>
+            <h2 className="text-lg font-semibold tracking-[-0.02em] text-brand-950">{title}</h2>
             <button onClick={onClose} className="grid h-9 w-9 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100 active:scale-[.96]" aria-label="Cerrar">
               <X size={20} />
             </button>

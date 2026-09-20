@@ -195,16 +195,16 @@ export default function CargarReporteCitas({ alTerminar }: { alTerminar: () => v
             un parrafo que nadie lee con el explorador de archivos abierto.
           */}
           <div className="rounded-xl border border-brand-200 bg-brand-50 p-4">
-            <p className="flex items-center gap-2 text-sm font-black text-brand-900">
+            <p className="flex items-center gap-2 text-sm font-semibold text-brand-900">
               <FileCode size={18} weight="fill" />
               Exportalo en XML
             </p>
             <p className="mt-1.5 text-sm leading-6 text-brand-900/80">
-              En el servidor de informes, exporta el <strong className="font-black">Reporte de citas
-              asignadas</strong> con la opcion <strong className="font-black">XML</strong>. Si el informe lo
-              descarga con nombre <strong className="font-black">.xls</strong>, sirve igual: por dentro es
+              En el servidor de informes, exporta el <strong className="font-semibold">Reporte de citas
+              asignadas</strong> con la opcion <strong className="font-semibold">XML</strong>. Si el informe lo
+              descarga con nombre <strong className="font-semibold">.xls</strong>, sirve igual: por dentro es
               ese mismo XML. El mismo reporte exportado a{' '}
-              <strong className="font-black">Excel (.xlsx)</strong> tambien se puede subir, aunque el XML
+              <strong className="font-semibold">Excel (.xlsx)</strong> tambien se puede subir, aunque el XML
               es mas limpio y da menos problemas.
             </p>
             <p className="mt-2 flex items-start gap-2 text-sm font-bold leading-6 text-brand-900/70">
@@ -214,7 +214,7 @@ export default function CargarReporteCitas({ alTerminar }: { alTerminar: () => v
           </div>
 
           <div className="rounded-xl border border-slate-200 p-4">
-            <p className="text-sm font-black text-brand-950">Cada cita del archivo debe traer</p>
+            <p className="text-sm font-semibold text-brand-950">Cada cita del archivo debe traer</p>
             <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
               {DATOS_OBLIGATORIOS.map((dato) => (
                 <li key={dato} className="flex items-start gap-2 text-sm leading-6 text-slate-600">
@@ -254,7 +254,7 @@ export default function CargarReporteCitas({ alTerminar }: { alTerminar: () => v
               <FileCode size={22} weight="duotone" />
             </span>
             <div>
-              <p className="text-sm font-black text-brand-950">Arrastra aqui el archivo</p>
+              <p className="text-sm font-semibold text-brand-950">Arrastra aqui el archivo</p>
               <p className="mt-0.5 text-xs font-semibold text-slate-500">
                 o eligelo desde el equipo · maximo 10 MB
               </p>
@@ -355,7 +355,7 @@ function Resultado({ resumen }: { resumen: ResumenCarga }) {
           <ul className="mt-2 space-y-1">
             {resumen.errores.slice(0, ERRORES_VISIBLES).map((error) => (
               <li key={`${error.fila}-${error.motivo}`} className="text-red-900">
-                <span className="font-black">Fila {error.fila}:</span> {error.motivo}
+                <span className="font-semibold">Fila {error.fila}:</span> {error.motivo}
               </li>
             ))}
           </ul>
@@ -376,8 +376,8 @@ function Dato({ etiqueta, valor, tono }: { etiqueta: string; valor: number; tono
       <p
         className={
           tono === 'verde'
-            ? 'text-2xl font-black text-emerald-700'
-            : 'text-2xl font-black text-brand-900'
+            ? 'text-2xl font-semibold text-emerald-700'
+            : 'text-2xl font-semibold text-brand-900'
         }
       >
         {valor}
@@ -403,7 +403,7 @@ function Aviso({
 
   return (
     <div className={`rounded-xl border p-3 ${estilos}`}>
-      <p className="flex items-center gap-2 font-black">
+      <p className="flex items-center gap-2 font-semibold">
         <Warning size={17} weight="fill" />
         {titulo}
       </p>

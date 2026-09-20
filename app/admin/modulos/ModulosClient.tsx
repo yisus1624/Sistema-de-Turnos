@@ -192,7 +192,7 @@ export default function ModulosClient() {
                   onClick={() => abrirEdicion(modulo)}
                   className="cursor-pointer hover:bg-slate-50"
                 >
-                  <td className="px-4 py-3 font-black text-brand-950">{modulo.nombre}</td>
+                  <td className="px-4 py-3 font-semibold text-brand-950">{modulo.nombre}</td>
                   <td className="px-4 py-3 text-slate-600">{nombreServicio(modulo.servicioId)}</td>
                   <td className="px-4 py-3">
                     <CeldaActividad

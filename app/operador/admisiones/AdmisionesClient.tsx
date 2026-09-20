@@ -151,7 +151,7 @@ export default function AdmisionesClient() {
         <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50">
           <div className="px-6 pt-5 text-center">
             <p className="text-sm font-bold uppercase tracking-wide text-emerald-700">Turno asignado</p>
-            <p className="mt-1 text-6xl font-black tracking-[-0.03em] text-emerald-900">
+            <p className="mt-1 text-6xl font-semibold tracking-[-0.03em] text-emerald-900">
               {comprobante.codigo}
             </p>
             {comprobante.nombrePaciente ? (
@@ -165,20 +165,20 @@ export default function AdmisionesClient() {
               enfrente. */}
           <div className="mt-4 grid gap-px bg-emerald-200 sm:grid-cols-2">
             <div className="bg-white px-5 py-4">
-              <p className="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-slate-500">
+              <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                 <DoorOpen size={16} weight="bold" />
                 Consultorio
               </p>
-              <p className="mt-1 text-xl font-black leading-tight text-brand-950">
+              <p className="mt-1 text-xl font-semibold leading-tight text-brand-950">
                 {comprobante.moduloNombre ?? 'Se le indicara en la pantalla'}
               </p>
             </div>
             <div className="bg-white px-5 py-4">
-              <p className="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-slate-500">
+              <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                 <Stethoscope size={16} weight="bold" />
                 Lo atiende
               </p>
-              <p className="mt-1 text-xl font-black leading-tight text-brand-950">
+              <p className="mt-1 text-xl font-semibold leading-tight text-brand-950">
                 {comprobante.profesionalNombre ?? comprobante.servicioNombre}
               </p>
             </div>
@@ -186,7 +186,7 @@ export default function AdmisionesClient() {
 
           <p className="bg-emerald-100 px-6 py-3 text-center text-sm font-semibold leading-6 text-emerald-900">
             Digale al paciente que espere en la sala. En la pantalla va a aparecer{' '}
-            <strong className="font-black">solo su turno {comprobante.codigo}</strong> y el consultorio al
+            <strong className="font-semibold">solo su turno {comprobante.codigo}</strong> y el consultorio al
             que debe entrar; su nombre no se muestra ni se dice en voz alta.
           </p>
         </div>
@@ -247,7 +247,7 @@ export default function AdmisionesClient() {
                     className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-base font-black text-brand-950">{cita.nombrePaciente}</p>
+                      <p className="truncate text-base font-semibold text-brand-950">{cita.nombrePaciente}</p>
                       <p className="mt-0.5 text-sm text-slate-600">
                         {horaCorta(cita.horaCita)} · documento {cita.documentoPaciente}
                       </p>
@@ -290,7 +290,7 @@ export default function AdmisionesClient() {
           </CardHeader>
           <CardContent>
             <p className="mb-3 text-sm leading-6 text-slate-600">
-              Estas citas <strong className="font-black">no son de hoy</strong>, asi que no se les registra
+              Estas citas <strong className="font-semibold">no son de hoy</strong>, asi que no se les registra
               la llegada. Confirmale al paciente el dia y la hora.
             </p>
             <ul className="space-y-2">
@@ -300,7 +300,7 @@ export default function AdmisionesClient() {
                   className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-black text-amber-950">{cita.nombrePaciente}</p>
+                    <p className="truncate text-sm font-semibold text-amber-950">{cita.nombrePaciente}</p>
                     <p className="mt-0.5 text-sm font-semibold text-amber-800">
                       {fechaLarga(cita.horaCita)} · {horaCorta(cita.horaCita)}
                     </p>

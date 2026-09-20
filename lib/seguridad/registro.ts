@@ -202,6 +202,62 @@ function purgarVencidos(ahora: number) {
 
 let ultimaPurga = 0
 
+/**
+ * Cuantas ventanas se guardan como maximo.
+ *
+ * SIN ESTE TECHO EL MAPA NO TIENE FONDO. La purga de arriba solo borra las
+ * ventanas YA VENCIDAS, y como mucho cada sesenta segundos; dentro de la
+ * ventana de cinco minutos las entradas se quedan. El problema es de donde
+ * salen las claves: en el acceso del consultorio el identificador es el TOKEN
+ * (ver `lib/turnos/acceso-consultorio.ts`), que lo elige quien hace la
+ * peticion. Un bucle mandando tokens inventados a /api/consultorio/<token>
+ * estrena una entrada por intento y se lleva la memoria del proceso por
+ * delante, y con ella la pantalla de la sala de espera.
+ *
+ * Cincuenta mil ventanas son unos pocos megas y quedan muy por encima de
+ * cualquier uso real: el hospital tiene decenas de funcionarios y de enlaces,
+ * no decenas de miles. Si se llega a este numero, no es trabajo: es una
+ * avalancha.
+ */
+export const MAXIMO_INTENTOS_EN_MEMORIA = 50_000
+
+/**
+ * Cuantas ventanas se tiran de golpe cuando el mapa se llena.
+ *
+ * Por tandas y no de una en una: liberar un 10% deja sitio para un buen rato,
+ * en vez de pagar un barrido en cada peticion de la avalancha.
+ */
+const DESALOJO_POR_TANDA = MAXIMO_INTENTOS_EN_MEMORIA / 10
+
+/**
+ * Hace sitio cuando el mapa toca el techo.
+ *
+ * Primero purga lo vencido, que es gratis y suele bastar. Si despues sigue
+ * lleno, se descartan las ventanas MAS ANTIGUAS (el `Map` conserva el orden de
+ * insercion, asi que las primeras son las que llevan mas tiempo dentro).
+ *
+ * POR QUE DESCARTAR LAS VIEJAS Y NO RECHAZAR LA NUEVA. Rechazar la nueva
+ * significa DEJAR DE CONTAR a partir de ese momento: al atacante le bastaria
+ * llenar el mapa para que el siguiente identificador —por ejemplo el usuario
+ * del administrador en el inicio de sesion— pasara sin limite. Descartando las
+ * viejas, el limitador sigue vivo y se queda con lo reciente, que es donde
+ * esta el ataque en curso; lo que se pierde son ventanas a punto de vencer de
+ * todas formas.
+ */
+function hacerSitio(ahora: number) {
+  purgarVencidos(ahora)
+  ultimaPurga = ahora
+
+  if (intentos.size < MAXIMO_INTENTOS_EN_MEMORIA) return
+
+  let porDesalojar = DESALOJO_POR_TANDA
+  for (const clave of intentos.keys()) {
+    if (porDesalojar <= 0) return
+    intentos.delete(clave)
+    porDesalojar -= 1
+  }
+}
+
 export function limitarIntentos(
   accion: string,
   identificador: string,
@@ -221,6 +277,7 @@ export function limitarIntentos(
   const actual = intentos.get(clave)
 
   if (!actual || actual.expiraEn <= ahora) {
+    if (intentos.size >= MAXIMO_INTENTOS_EN_MEMORIA) hacerSitio(ahora)
     intentos.set(clave, { conteo: 1, expiraEn: ahora + ventanaMs })
     return { permitido: true, reintentarEnSegundos: 0 }
   }

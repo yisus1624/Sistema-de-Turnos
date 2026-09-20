@@ -737,7 +737,7 @@ export default function EnlacesClient() {
                     className="cursor-pointer hover:bg-slate-50"
                     onClick={() => abrirGenerar(profesional)}
                   >
-                    <td className="px-4 py-3 font-black text-brand-950">{profesional.nombre}</td>
+                    <td className="px-4 py-3 font-semibold text-brand-950">{profesional.nombre}</td>
                     <td className="px-4 py-3 text-slate-600">{nombreServicio(profesional.servicioId)}</td>
                     <td className="px-4 py-3">
                       <JornadaDeEseDia

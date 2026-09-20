@@ -24,6 +24,30 @@ export const EVENTOS = {
   USUARIO_CREADO: 'USUARIO_CREADO',
   USUARIO_ACTUALIZADO: 'USUARIO_ACTUALIZADO',
 
+  /**
+   * Cambio el NOMBRE DE ENTRADA de una cuenta, no la cuenta.
+   *
+   * Tiene tipo propio, en vez de quedarse como un campo mas dentro de
+   * USUARIO_ACTUALIZADO, porque es el unico cambio que estropea la lectura de
+   * lo ya escrito: los eventos anteriores guardan en `identificador` el nombre
+   * de entonces, asi que a partir del renombrado hay dos nombres para la misma
+   * persona. Este apunte lleva el anterior y el nuevo, y es el puente entre los
+   * dos; con tipo propio, ademas, se pueden sacar de golpe todos los
+   * renombrados de un periodo.
+   */
+  USUARIO_RENOMBRADO: 'USUARIO_RENOMBRADO',
+
+  /**
+   * Se cambio la contrasena de una cuenta: la propia, o la de otra persona
+   * cuando un administrador la restablece.
+   *
+   * SE APUNTA QUE SE CAMBIO, NUNCA CUAL ES: ni la vieja ni la nueva, ni entera
+   * ni en trozos, ni su hash (ver `lib/usuarios/auditoria.ts`). Los intentos
+   * FALLIDOS tambien se apuntan; alguien probando contrasenas contra una sesion
+   * abierta es justo lo que hay que poder revisar despues.
+   */
+  USUARIO_CONTRASENA_CAMBIADA: 'USUARIO_CONTRASENA_CAMBIADA',
+
   ACCESO_PROFESIONAL: 'ACCESO_PROFESIONAL',
   ACCESO_PROFESIONAL_GENERADO: 'ACCESO_PROFESIONAL_GENERADO',
   ACCESO_PROFESIONAL_REVOCADO: 'ACCESO_PROFESIONAL_REVOCADO',
@@ -46,6 +70,13 @@ export const EVENTOS = {
   MODULO_ACTUALIZADO: 'MODULO_ACTUALIZADO',
   PROFESIONAL_CREADO: 'PROFESIONAL_CREADO',
   PROFESIONAL_ACTUALIZADO: 'PROFESIONAL_ACTUALIZADO',
+
+  /**
+   * Se rechazo una conexion al canal en vivo por aforo lleno (ver
+   * `lib/realtime/aforo.ts`). Si empiezan a aparecer, o el hospital tiene mas
+   * pantallas de las previstas o alguien esta abriendo conexiones a mano.
+   */
+  CANAL_EN_VIVO_RECHAZADO: 'CANAL_EN_VIVO_RECHAZADO',
 
   CONFIGURACION_ACTUALIZADA: 'CONFIGURACION_ACTUALIZADA',
   SIMULACION_REINICIO_DEL_DIA: 'SIMULACION_REINICIO_DEL_DIA',

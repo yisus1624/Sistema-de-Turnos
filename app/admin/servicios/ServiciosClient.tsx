@@ -189,9 +189,9 @@ export default function ServiciosClient() {
                   onClick={() => abrirEdicion(servicio)}
                   className="cursor-pointer hover:bg-slate-50"
                 >
-                  <td className="px-4 py-3 font-black text-brand-950">{servicio.nombre}</td>
+                  <td className="px-4 py-3 font-semibold text-brand-950">{servicio.nombre}</td>
                   <td className="px-4 py-3">
-                    <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-black text-slate-700">
+                    <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-semibold text-slate-700">
                       {servicio.prefijo}
                     </span>
                   </td>

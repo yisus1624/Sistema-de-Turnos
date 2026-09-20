@@ -19,10 +19,19 @@ const variants: Record<ButtonVariant, string> = {
   dark: 'bg-brand-950 text-white hover:bg-brand-900',
 }
 
+/*
+ * El texto se aprieta un poco a medida que crece.
+ *
+ * Una etiqueta corta en grueso y con las letras muy separadas se lee como un
+ * cartel, no como un boton. Cuanto mas grande es la letra, mas sobra el aire
+ * entre caracteres: por eso el tamano grande cierra mas el espaciado que el
+ * pequeno, y el pequeno lo ABRE un pelo, que es lo que necesita para no
+ * apelmazarse.
+ */
 const sizes: Record<ButtonSize, string> = {
-  sm: 'h-9 px-3 text-sm',
-  md: 'h-11 px-4 text-sm',
-  lg: 'h-12 px-5 text-base',
+  sm: 'h-9 px-3 text-sm tracking-[0.005em]',
+  md: 'h-11 px-4 text-sm tracking-[-0.005em]',
+  lg: 'h-12 px-5 text-base tracking-[-0.012em]',
   icon: 'h-10 w-10 p-0',
 }
 
@@ -39,7 +48,24 @@ export function Button({
     <button
       disabled={disabled || loading}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-xl font-black outline-none transition active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-55',
+        /*
+         * PESO 600, NO 900. Estaba en negra maxima, el grosor mas pesado que
+         * existe, igual que los titulos de pagina: cuando todo pesa lo mismo,
+         * el grosor deja de senalar nada y la pantalla se lee como un muro. En
+         * semi-negrita el boton sigue siendo lo mas solido de su zona y ademas
+         * se lee mejor de cerca, que es como se usa.
+         *
+         * LA PULSACION RESPONDE EN 110ms Y SOLO ELLA. Antes `transition` sin
+         * apellido animaba TODAS las propiedades con la misma duracion, asi
+         * que el encogido del clic tardaba lo mismo que un cambio de color y
+         * llegaba tarde al dedo. Ahora el tamano va por su cuenta y corto
+         * —que es lo unico que el dedo espera al instante— y el color se toma
+         * su tiempo.
+         */
+        'inline-flex select-none items-center justify-center gap-2 rounded-xl font-semibold outline-none',
+        'transition-[background-color,border-color,color,opacity] duration-[var(--suave)]',
+        'active:scale-[.97] active:transition-transform active:duration-[var(--toque)]',
+        'disabled:cursor-not-allowed disabled:opacity-55 disabled:active:scale-100',
         variants[variant],
         sizes[size],
         className,

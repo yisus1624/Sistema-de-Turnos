@@ -30,12 +30,13 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { realtimeHub } from '@/lib/realtime/hub'
 import { errorDeNegocio } from './errores'
-import { ordenAtencion, resumir } from './estadisticas'
+import { ordenAtencion, resumir, type PuestoEnLaFila } from './estadisticas'
 import { reunirActividad } from './actividad'
 import { modulosVisiblesEnPantalla } from './casillas'
 import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
 import { esChoqueDeUnico, mensajeDeChoque } from './choques-unicos'
 import { CONFIGURACION_INICIAL } from './configuracion-inicial'
+import { esDisenoPantalla } from './types'
 import { CONFIGURACION_YA_CAMBIADA, exigirConfiguracionAlDia } from './configuracion-version'
 import {
   ETIQUETA_JORNADA,
@@ -199,6 +200,8 @@ type FilaConfiguracion = {
   jornadaMananaFin: string
   jornadaTardeInicio: string
   jornadaTardeFin: string
+  disenoPantalla: string
+  fondoPantalla: string
 }
 
 function aConfiguracion(fila: FilaConfiguracion): ConfiguracionGuardada {
@@ -207,6 +210,14 @@ function aConfiguracion(fila: FilaConfiguracion): ConfiguracionGuardada {
     audioActivo: fila.audioActivo,
     volumen: fila.volumen,
     mensajePie: fila.mensajePie,
+    // La columna es texto libre (ver el comentario del schema), asi que al
+    // SALIR de la base se valida: una fila con un diseño que ya no existe
+    // —quedo de una version anterior, o alguien la toco a mano— no puede
+    // dejar el televisor en blanco. Ante la duda, el de siempre.
+    disenoPantalla: esDisenoPantalla(fila.disenoPantalla)
+      ? fila.disenoPantalla
+      : CONFIGURACION_INICIAL.disenoPantalla,
+    fondoPantalla: fila.fondoPantalla,
     duracionCitaMinutos: fila.duracionCitaMinutos,
     jornadaMananaInicio: fila.jornadaMananaInicio,
     jornadaMananaFin: fila.jornadaMananaFin,
@@ -1436,6 +1447,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
       todosLosProfesionales,
       llamados,
       citasDeHoy,
+      enEsperaDeHoy,
       turnosDeHoy,
       configuracion,
       citasRegistradasHoy,
@@ -1460,6 +1472,18 @@ export class PrismaTurnoRepository implements TurnoRepository {
       prisma.cita.findMany({
         where: { fecha: hoy, estado: { not: 'CANCELADA' } },
         select: { profesionalId: true },
+      }),
+      // LA COLA DE HOY, para poder decir quien entra despues en cada
+      // consultorio (ver `siguienteCodigo` en `CasillaPantalla`).
+      //
+      // Se piden TODOS los que esperan en UNA consulta y se agrupan en
+      // memoria, en vez de preguntar por cada consultorio: con veinte
+      // consultorios encendidos eso serian veinte consultas mas en cada
+      // refresco de cada televisor, contra la misma base que atiende el
+      // mostrador. Solo se traen las tres columnas que hacen falta.
+      prisma.turno.findMany({
+        where: { fecha: hoy, estado: 'EN_ESPERA', profesionalId: { not: null } },
+        select: { codigo: true, profesionalId: true, prioridad: true, fechaGeneracion: true },
       }),
       prisma.turno.findMany({
         where: { fecha: hoy, moduloId: { not: null } },
@@ -1521,7 +1545,52 @@ export class PrismaTurnoRepository implements TurnoRepository {
     const ultimoPorModulo = new Map<string, FilaTurno>()
     for (const turno of llamados) ultimoPorModulo.set(turno.moduloId!, turno)
 
+    /*
+     * EL PROXIMO DE CADA DOCTOR.
+     *
+     * Se queda solo con el PRIMERO de cada cola, no con la cola entera: es lo
+     * unico que la pantalla muestra, y guardar el resto seria pasear cientos
+     * de turnos por memoria en cada refresco de cada televisor.
+     *
+     * El criterio de "primero" es EL MISMO que aplica `llamarSiguiente`
+     * —prioritarios delante y, a igual prioridad, el que lleva mas tiempo
+     * esperando—, no un orden parecido. Si fueran dos criterios distintos, la
+     * pantalla anunciaria a un paciente y el doctor llamaria a otro, que es
+     * peor que no anunciar nada.
+     */
+    const proximoPorProfesional = new Map<string, { codigo: string } & PuestoEnLaFila>()
+    for (const turno of enEsperaDeHoy) {
+      const candidato = {
+        codigo: turno.codigo,
+        prioridad: turno.prioridad,
+        // Directo y no por `iso()`: esa admite null y aqui la columna nunca lo
+        // es, asi que pasar por ella solo ensuciaria el tipo con un null que
+        // no puede ocurrir.
+        fechaGeneracion: turno.fechaGeneracion.toISOString(),
+      }
+      const actual = proximoPorProfesional.get(turno.profesionalId!)
+      if (!actual || ordenAtencion(candidato, actual) < 0) {
+        proximoPorProfesional.set(turno.profesionalId!, candidato)
+      }
+    }
+
     const bloqueAhora = jornadaActual(configuracion)
+
+    /*
+     * Quien entra despues en ESTA casilla, o null si no se puede prometer.
+     *
+     * Se calcula sobre el doctor que rotula la casilla, porque la cola es
+     * suya. En una VENTANILLA DE FILA COMPARTIDA no hay doctor y la cola es de
+     * todos: el primero de esa fila se lo lleva la ventanilla que pulse antes,
+     * asi que anunciarlo en una casilla concreta mandaria al paciente a la
+     * ventanilla equivocada. Ahi se devuelve null y la pantalla no muestra
+     * nada, que es la respuesta honesta.
+     */
+    const proximoDeLaCasilla = (moduloId: string) => {
+      const doctor = profesionalDeTurnoEn(moduloId, profesionalesDeHoy, bloqueAhora)
+      if (!doctor) return null
+      return proximoPorProfesional.get(doctor.id)?.codigo ?? null
+    }
 
     const casillas = modulos.map((modulo) => {
       const turno = ultimoPorModulo.get(modulo.id)
@@ -1543,6 +1612,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
           codigo: turno.codigo,
           horaLlamado: iso(turno.horaLlamado),
           vecesLlamado: turno.vecesLlamado,
+          siguienteCodigo: proximoDeLaCasilla(modulo.id),
         }
       }
 
@@ -1561,6 +1631,10 @@ export class PrismaTurnoRepository implements TurnoRepository {
         codigo: null,
         horaLlamado: null,
         vecesLlamado: 0,
+        // El consultorio esta libre pero puede tener gente esperando: mostrar
+        // quien es el proximo avisa al paciente de que se acerque antes de que
+        // lo llamen, que es justo el rato que se pierde en la practica.
+        siguienteCodigo: proximoDeLaCasilla(modulo.id),
       }
     })
 
@@ -1961,6 +2035,11 @@ export class PrismaTurnoRepository implements TurnoRepository {
     })
     if (guardado.count === 0) errorDeNegocio(CONFIGURACION_YA_CAMBIADA)
 
+    // Se avisa DESPUES de escribir y solo si se escribio: las pantallas vuelven
+    // a preguntar en cuanto llega esto, y avisar antes las haria leer todavia
+    // lo viejo. Ver `configuracion.cambiada` en `lib/realtime/hub.ts`.
+    realtimeHub.publish({ tipo: 'configuracion.cambiada' })
+
     return cargarConfiguracion()
   }
 
@@ -2061,12 +2140,40 @@ export class PrismaTurnoRepository implements TurnoRepository {
 // Ayudas que necesitan la base de datos
 // ---------------------------------------------------------------------------
 
-/** Arma la casilla que ve la pantalla publica. NO lleva datos del paciente. */
+/**
+ * El turno que ese profesional llamara despues, o null si no queda nadie.
+ *
+ * Mismo criterio que `llamarSiguiente` y que `estadoPantalla`: el primero de su
+ * cola, prioritarios delante (`ordenAtencion`). Se pide ordenado a la base y se
+ * toma uno solo, porque aqui hace falta ese y nada mas.
+ */
+async function proximoDelProfesional(profesionalId: string | null): Promise<string | null> {
+  if (!profesionalId) return null
+
+  const proximo = await prisma.turno.findFirst({
+    where: { fecha: diaColombia(ahoraISO()), estado: 'EN_ESPERA', profesionalId },
+    orderBy: [{ prioridad: 'desc' }, { fechaGeneracion: 'asc' }],
+    select: { codigo: true },
+  })
+  return proximo?.codigo ?? null
+}
+
+/**
+ * Arma la casilla que ve la pantalla publica. NO lleva datos del paciente.
+ *
+ * LLEVA TAMBIEN EL PROXIMO, y tiene que llevarlo. Esta casilla es la que viaja
+ * por el canal en vivo cuando alguien llama un turno, y la pantalla reemplaza
+ * con ella la que tenia. Sin `siguienteCodigo`, cada llamado BORRABA de la
+ * cartelera el aviso de "se estan preparando" de ese consultorio —justo en el
+ * momento en que acaba de cambiar y mas util es— y no volvia hasta la
+ * resincronizacion, hasta un minuto despues.
+ */
 async function casillaDeTurno(turno: FilaTurno): Promise<CasillaPantalla> {
-  const [modulo, servicio, profesional] = await Promise.all([
+  const [modulo, servicio, profesional, siguienteCodigo] = await Promise.all([
     turno.moduloId ? prisma.modulo.findUnique({ where: { id: turno.moduloId } }) : null,
     prisma.servicio.findUnique({ where: { id: turno.servicioId } }),
     turno.profesionalId ? prisma.profesional.findUnique({ where: { id: turno.profesionalId } }) : null,
+    proximoDelProfesional(turno.profesionalId),
   ])
 
   return {
@@ -2078,6 +2185,7 @@ async function casillaDeTurno(turno: FilaTurno): Promise<CasillaPantalla> {
     codigo: turno.codigo,
     horaLlamado: iso(turno.horaLlamado),
     vecesLlamado: turno.vecesLlamado,
+    siguienteCodigo,
   }
 }
 

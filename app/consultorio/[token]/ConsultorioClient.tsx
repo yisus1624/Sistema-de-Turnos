@@ -87,7 +87,7 @@ function AvisoAPantallaCompleta({
         <div className={cn('mx-auto grid h-16 w-16 place-items-center rounded-2xl', COLOR_AVISO[tono])}>
           <WarningCircle size={32} weight="fill" />
         </div>
-        <h1 className="text-xl font-black tracking-[-0.02em] text-brand-950">{titulo}</h1>
+        <h1 className="text-xl font-semibold tracking-[-0.02em] text-brand-950">{titulo}</h1>
         <p className="text-sm leading-6 text-slate-600">{descripcion}</p>
       </div>
     </main>
@@ -279,7 +279,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
           <div className="flex items-center gap-3">
             <Isotipo size={40} />
             <div className="leading-tight">
-              <p className="text-lg font-black tracking-[-0.02em] text-brand-950">{profesional.nombre}</p>
+              <p className="text-lg font-semibold tracking-[-0.02em] text-brand-950">{profesional.nombre}</p>
               <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{NOMBRE_INSTITUCION}</p>
             </div>
           </div>
@@ -316,11 +316,11 @@ export default function ConsultorioClient({ token }: { token: string }) {
             {turnoActual ? (
               <div className="rounded-2xl border-2 border-brand-100 bg-brand-50 p-6 text-center">
                 <p className="text-xs font-bold uppercase tracking-wide text-brand-600">Turno en atencion</p>
-                <p className="mt-1 text-5xl font-black tracking-[-0.03em] text-brand-950">
+                <p className="mt-1 text-5xl font-semibold tracking-[-0.03em] text-brand-950">
                   {turnoActual.codigo}
                 </p>
                 {turnoActual.nombrePaciente ? (
-                  <p className="mt-2 text-2xl font-black text-slate-800">{turnoActual.nombrePaciente}</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-800">{turnoActual.nombrePaciente}</p>
                 ) : null}
                 <p className="mt-2 text-sm font-semibold text-brand-700">
                   Llamado {turnoActual.vecesLlamado} {turnoActual.vecesLlamado === 1 ? 'vez' : 'veces'}
@@ -453,7 +453,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
                         {horaCorta(item.horaCita)}
                       </span>
                       {item.codigo ? (
-                        <span className="shrink-0 font-black text-brand-950">{item.codigo}</span>
+                        <span className="shrink-0 font-semibold text-brand-950">{item.codigo}</span>
                       ) : null}
                       <span className="min-w-0 flex-1 truncate font-semibold text-slate-700">{item.nombrePaciente}</span>
                       <Badge tone={etiqueta.tone}>{etiqueta.texto}</Badge>

@@ -17,6 +17,14 @@ export const CONFIGURACION_INICIAL: ConfiguracionSistema = {
   audioActivo: true,
   volumen: 1,
   mensajePie: 'Bienvenido a la ESE Hospital San Rafael de Chinu. Por favor espere a ser llamado.',
+  // El televisor arranca con el diseño de siempre: cambiarle el aspecto a las
+  // salas no puede ser el efecto secundario de una actualizacion, tiene que
+  // ser una decision que alguien tome en "Pantalla y audio".
+  disenoPantalla: 'CUADRICULA',
+  // La imagen institucional que el hospital entrego para la sala de espera.
+  // Dejarla vacia tambien vale: las dos pantallas se ven correctas sin fondo,
+  // porque la imagen es un adorno y nunca sostiene informacion.
+  fondoPantalla: '/img/fondo-pantalla.png',
   // Jornadas y duracion de consulta tipicas del hospital. El administrador las
   // cambia desde "Pantalla y audio"; de aqui sale la parrilla del horario.
   duracionCitaMinutos: 15,

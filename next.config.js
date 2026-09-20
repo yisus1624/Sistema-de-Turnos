@@ -31,6 +31,69 @@ const cabecerasHsts = hstsActivo
   ? [{ key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' }]
   : []
 
+/**
+ * Content-Security-Policy: que puede cargar y ejecutar el navegador.
+ *
+ * Es la red que queda si algun dia entra contenido ajeno en una pantalla (un
+ * nombre de doctor o un mensaje al pie con un <script> dentro, un reporte de
+ * citas manipulado): sin esto, ese script puede leer la sesion del funcionario
+ * y hablar con cualquier servidor de internet; con esto, el navegador se niega
+ * a cargar nada que no venga de este mismo servidor.
+ *
+ * QUE SE RELAJO, Y POR QUE. Dos directivas no pueden ser estrictas hoy:
+ *
+ * - `script-src 'unsafe-inline'`: Next.js inyecta en cada pagina sus propios
+ *   scripts EN LINEA (el arranque de React y los datos del servidor). La forma
+ *   limpia de permitirlos sin abrir la puerta a todos es firmarlos con un
+ *   nonce distinto por peticion, y eso exige un middleware que reescriba la
+ *   cabecera en cada respuesta: estas cabeceras se graban AL COMPILAR y no
+ *   pueden llevar un valor que cambie por peticion. Sin `unsafe-inline` la
+ *   aplicacion entera se queda en blanco, televisor de la sala de espera
+ *   incluido. Se deja abierto y se anota como pendiente.
+ *
+ * - `style-src 'unsafe-inline'`: lo mismo con los estilos en linea, que usan
+ *   tanto Next como la fuente Geist.
+ *
+ * Lo demas si va cerrado: nada de este sistema carga scripts, tipografias ni
+ * datos de otros dominios (no hay CDN, ni analitica, ni mapas), asi que
+ * `'self'` alcanza para todo.
+ *
+ * `'unsafe-eval'` SOLO EN DESARROLLO: lo necesitan las herramientas de recarga
+ * en caliente. En el servidor del hospital no se envia.
+ *
+ * EL ENMARCADO NO SE CONTROLA AQUI. Se queda en `X-Frame-Options`, que ya
+ * distingue el caso de `/pantalla` (ver abajo). Si se pusiera
+ * `frame-ancestors` en esta politica global, la pantalla recibiria dos CSP y
+ * el navegador aplica la MAS restrictiva de las dos: el televisor embebido en
+ * el panel del administrador dejaria de verse.
+ *
+ * TAMPOCO VA `upgrade-insecure-requests`: el sistema puede estar todavia sin
+ * HTTPS delante (ver docs/despliegue.md), y forzar la subida ahi deja las
+ * peticiones sin respuesta.
+ */
+const enDesarrollo = process.env.NODE_ENV !== 'production'
+
+const csp = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${enDesarrollo ? " 'unsafe-eval'" : ''}`,
+  "style-src 'self' 'unsafe-inline'",
+  // `data:` para los iconos embebidos; `blob:` para lo que genera el propio
+  // navegador (la vista previa de un PDF antes de descargarlo).
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  // Aqui entra el canal en vivo (SSE) y todas las llamadas a la API: mismo
+  // origen y nada mas.
+  "connect-src 'self'",
+  // El aviso de la sala de espera es una campanita que se sintetiza en el
+  // propio navegador (ver lib/turnos/anuncio.ts): no carga ningun archivo de
+  // audio, pero `blob:` cubre el PDF que se abre para imprimir.
+  "media-src 'self' blob:",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ')
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   compress: true,
@@ -46,6 +109,7 @@ const nextConfig = {
       {
         source: '/:path*',
         headers: [
+          { key: 'Content-Security-Policy', value: csp },
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },

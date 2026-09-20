@@ -10,6 +10,31 @@
     --turnos-brand: #1c86a8;
     --turnos-brand-dark: #135872;
     --turnos-sidebar: #0a2634;
+
+    /*
+     * PROFUNDIDAD EN CAPAS, NO UNA SOMBRA PLANA.
+     *
+     * Antes todo —una tarjeta de indicador y la ventana modal— llevaba la
+     * misma sombra de un solo nivel, asi que nada parecia estar mas cerca ni
+     * mas lejos que lo demas. Una superficie grande tiene que leerse mas
+     * gruesa que una pequena: cada nivel junta un contacto corto y muy tenue
+     * (el filo que toca el fondo) con una difusion amplia (la sombra de
+     * verdad). Es lo que hace que una tarjeta parezca APOYADA sobre la pagina
+     * en vez de dibujada encima.
+     */
+    --sombra-sm: 0 1px 2px rgba(10, 38, 52, 0.04), 0 1px 3px rgba(10, 38, 52, 0.05);
+    --sombra-md: 0 2px 4px rgba(10, 38, 52, 0.03), 0 6px 16px rgba(10, 38, 52, 0.06);
+    --sombra-lg: 0 2px 6px rgba(10, 38, 52, 0.04), 0 12px 32px rgba(10, 38, 52, 0.09);
+    --sombra-modal: 0 2px 8px rgba(10, 38, 52, 0.08), 0 32px 64px rgba(10, 38, 52, 0.22);
+
+    /*
+     * RESPUESTA AL TACTO. Una pulsacion tiene que verse en el acto: pasados
+     * ~120ms el boton se siente muerto. La transicion de color o de fondo si
+     * puede ser mas larga, porque no esta en el camino del dedo.
+     */
+    --toque: 110ms;
+    --suave: 220ms;
+    --curva: cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   html {
@@ -24,6 +49,30 @@
     background: var(--turnos-bg);
     color: var(--turnos-ink);
     -webkit-overflow-scrolling: touch;
+    /*
+     * Deja que la tipografia use sus formas bien dibujadas en lugar de las de
+     * respaldo, y afina el trazo en pantallas normales: el texto en grueso
+     * sobre fondo claro se veia mas pesado de lo que el diseno pide.
+     */
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /*
+   * NUMEROS DE ANCHO FIJO EN TODO LO QUE SE LEE DE UN VISTAZO.
+   *
+   * Con las cifras proporcionales, el "1" es mas angosto que el "8": una
+   * columna de horas o un contador que sube cambia de ancho con cada cambio
+   * de cifra y baila. En una pantalla de sala de espera, donde el turno se
+   * refresca solo, ese temblor se ve desde lejos. Con `tabular-nums` cada
+   * cifra ocupa lo mismo y las columnas quedan alineadas sin tocar el
+   * marcado.
+   */
+  table,
+  time,
+  [data-cifras] {
+    font-variant-numeric: tabular-nums;
   }
 
   input,
@@ -134,4 +183,135 @@
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #a3c6d3;
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * PREFERENCIAS DEL SISTEMA OPERATIVO
+ * ---------------------------------------------------------------------------
+ *
+ * El sistema no las miraba. Son ajustes que el funcionario ya activo en su
+ * equipo, muchas veces por una razon medica, y una aplicacion de hospital es
+ * de las que menos puede ignorarlos.
+ */
+
+/*
+ * MOVIMIENTO REDUCIDO. Quien lo activa suele hacerlo por mareo o vertigo: el
+ * panel que entra deslizandose y la tarjeta que se encoge al pulsarla le
+ * marean de verdad.
+ *
+ * Reducir NO es apagar el aviso: el cambio de color y de opacidad se queda,
+ * porque es lo que le dice que su clic hizo algo. Lo que se quita es el
+ * desplazamiento y el cambio de tamano.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* El giro de "cargando" se conserva: sin el, no hay forma de saber que el
+     sistema sigue trabajando. Se deja mas lento y sin tirones. */
+  .animate-spin {
+    animation-duration: 1.2s !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  /* Nada se encoge ni se desplaza al pulsarlo. */
+  :is(button, [role='button'], a):active {
+    transform: none !important;
+  }
+}
+
+/*
+ * TRANSPARENCIA REDUCIDA. Las barras traslucidas se vuelven solidas: quien lo
+ * activa necesita que el texto no compita con lo que pasa por debajo.
+ */
+@media (prefers-reduced-transparency: reduce) {
+  .material-chrome {
+    background: var(--turnos-bg) !important;
+    backdrop-filter: none !important;
+  }
+
+  .material-chrome-oscuro {
+    background: var(--turnos-sidebar) !important;
+    backdrop-filter: none !important;
+  }
+}
+
+/*
+ * MAS CONTRASTE. Los bordes tenues desaparecen para quien lo pide: se marcan
+ * con un tono que si se ve, y las superficies se apoyan en el borde en lugar
+ * de en la sombra.
+ */
+@media (prefers-contrast: more) {
+  .material-chrome,
+  .material-chrome-oscuro {
+    backdrop-filter: none !important;
+  }
+
+  .material-chrome {
+    background: var(--turnos-bg) !important;
+  }
+
+  :is(.border-slate-100, .border-slate-200, .border-slate-200\/80) {
+    border-color: #64748b !important;
+  }
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * MATERIALES: LA BARRA FLOTA SOBRE EL CONTENIDO
+ * ---------------------------------------------------------------------------
+ *
+ * Las barras eran de color solido, del mismo tono que el fondo, asi que al
+ * bajar por una tabla larga el contenido simplemente DESAPARECIA debajo de un
+ * bloque opaco y no quedaba claro si arriba habia mas o no.
+ *
+ * Con un material traslucido, lo que pasa por debajo se sigue intuyendo
+ * —desenfocado, sin competir con el texto—, y la barra se lee como una capa
+ * que flota sobre la pagina. Eso responde a la pregunta de "donde estoy" sin
+ * ocupar ni un pixel mas.
+ *
+ * El desenfoque va acompanado de `saturate`: al difuminar, los colores de
+ * debajo se apagan, y subir la saturacion devuelve el tono del teal
+ * institucional en lugar de dejarlo grisaceo.
+ *
+ * `-webkit-backdrop-filter` va incluido por Safari, que es el navegador del
+ * iPad que usan en admisiones.
+ */
+.material-chrome {
+  background: rgba(242, 247, 249, 0.78);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+
+.material-chrome-oscuro {
+  background: rgba(10, 38, 52, 0.82);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+
+/*
+ * Donde el contenido se mete debajo de la barra, un degradado de opacidad
+ * —no una linea de 1px— marca el limite. Un borde duro corta la pagina en
+ * dos; esto deja que el contenido se desvanezca, que es lo que hace ver que
+ * hay mas cosas arriba.
+ *
+ * Es una mascara de opacidad, no un degradado de color: la regla del usuario
+ * de no usar degradados es sobre los fondos de colores, y aqui no se tine
+ * nada.
+ */
+.borde-desvanecido::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  height: 14px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(10, 38, 52, 0.05), transparent);
 }

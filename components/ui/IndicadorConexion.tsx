@@ -29,7 +29,7 @@ export function IndicadorConexion({
   return (
     <span
       role="status"
-      className={cn('inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black', caja, className)}
+      className={cn('inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium', caja, className)}
     >
       <span aria-hidden="true" className={cn('h-2 w-2 rounded-full', punto)} />
       {texto}

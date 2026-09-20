@@ -85,7 +85,10 @@ export async function register() {
   if (produccion && process.env.TURNOS_CONFIAR_PROXY !== '1') {
     aviso(
       'Sin TURNOS_CONFIAR_PROXY=1 no se confia en la IP del cliente, asi que el limite de intentos de entrada por IP ' +
-        'queda desactivado (el limite por usuario sigue activo). Ponerla solo si hay un proxy inverso delante.',
+        'queda desactivado (el limite por usuario sigue activo). Ponerla solo si hay un proxy inverso delante. ' +
+        'Y ese proxy es ademas el que tiene que limitar las peticiones por IP: sin el, nadie impide que una sola ' +
+        'maquina pida miles de veces por segundo hasta dejar el sistema sin atender. Ver la seccion 3 de ' +
+        'docs/despliegue.md.',
     )
   }
 }

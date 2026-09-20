@@ -56,8 +56,8 @@ function EstadisticasSkeleton() {
 function Indicador({ titulo, valor, tono = 'text-brand-800' }: { titulo: string; valor: string; tono?: string }) {
   return (
     <Card className="text-center">
-      <p className="text-xs font-black uppercase tracking-wide text-slate-500">{titulo}</p>
-      <p className={`mt-1 text-3xl font-black tracking-[-0.03em] ${tono}`}>{valor}</p>
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{titulo}</p>
+      <p className={`mt-1 text-3xl font-semibold tracking-[-0.03em] ${tono}`}>{valor}</p>
     </Card>
   )
 }
@@ -144,7 +144,7 @@ export default function EstadisticasClient() {
               <Tabla columnas={COLUMNAS_SERVICIO}>
                 {conMovimiento.map((servicio) => (
                   <tr key={servicio.servicioId} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 font-black text-brand-950">{servicio.servicioNombre}</td>
+                    <td className="px-4 py-3 font-semibold text-brand-950">{servicio.servicioNombre}</td>
                     <td className="px-4 py-3 tabular-nums text-slate-700">{servicio.generados}</td>
                     <td className="px-4 py-3 tabular-nums text-emerald-700">{servicio.atendidos}</td>
                     <td className="px-4 py-3 tabular-nums text-amber-700">{servicio.ausentes}</td>
@@ -175,7 +175,7 @@ export default function EstadisticasClient() {
                   {datos.porFuncionario.map((fila) => (
                     <tr key={fila.funcionarioId} className="hover:bg-slate-50">
                       <td className="px-4 py-3 font-semibold text-slate-700">{fila.funcionarioId}</td>
-                      <td className="px-4 py-3 tabular-nums font-black text-brand-800">{fila.atendidos}</td>
+                      <td className="px-4 py-3 tabular-nums font-semibold text-brand-800">{fila.atendidos}</td>
                     </tr>
                   ))}
                 </Tabla>

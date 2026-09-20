@@ -401,8 +401,8 @@ export default function ProfesionalesClient() {
             </Button>
           ) : null}
           <p className="mb-1.5 max-w-md text-sm leading-6 text-slate-500">
-            <strong className="font-black text-slate-600">Ese dia</strong> es lo que dicen sus citas
-            de esa fecha; <strong className="font-black text-slate-600">jornada habitual</strong> es
+            <strong className="font-semibold text-slate-600">Ese dia</strong> es lo que dicen sus citas
+            de esa fecha; <strong className="font-semibold text-slate-600">jornada habitual</strong> es
             la de su ficha, y solo decide a que horas se le agenda el primer paciente de un dia
             vacio.
           </p>
@@ -427,7 +427,7 @@ export default function ProfesionalesClient() {
                   className="cursor-pointer hover:bg-slate-50"
                   onClick={() => abrirEdicion(profesional)}
                 >
-                  <td className="px-4 py-3 font-black text-brand-950">{profesional.nombre}</td>
+                  <td className="px-4 py-3 font-semibold text-brand-950">{profesional.nombre}</td>
                   <td className="px-4 py-3 text-slate-600">{nombreServicio(profesional.servicioId)}</td>
                   <td className="px-4 py-3">
                     <EseDia
@@ -457,7 +457,7 @@ export default function ProfesionalesClient() {
 
       <p className="mt-4 text-sm leading-6 text-slate-500">
         El enlace con el que cada doctor entra a su consultorio se genera en{' '}
-        <strong className="font-black text-slate-600">Enlaces de consultorio</strong>.
+        <strong className="font-semibold text-slate-600">Enlaces de consultorio</strong>.
       </p>
 
       <Modal
@@ -571,7 +571,7 @@ export default function ProfesionalesClient() {
           {editando ? (
             <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 p-3.5">
               <div>
-                <p className="text-sm font-black text-slate-800">Activo</p>
+                <p className="text-sm font-semibold text-slate-800">Activo</p>
                 <p className="text-xs text-slate-500">
                   Al desactivarlo deja de aparecer para agendarle citas. No se borra: su nombre sigue en los
                   turnos que ya llamo.

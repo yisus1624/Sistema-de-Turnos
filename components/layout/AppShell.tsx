@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { CaretLeft, CaretRight, List, SignOut } from '@phosphor-icons/react'
+import { CaretLeft, CaretRight, List, SignOut, UserCircle } from '@phosphor-icons/react'
 import { logoutAction } from '@/app/actions/auth'
 import { Isotipo, Logotipo } from '@/components/brand/Marca'
 import type { RolUsuario } from '@/lib/usuarios/types'
@@ -97,7 +97,14 @@ export default function AppShell({
         <div key={seccionNav.label}>
           <p
             className={cn(
-              'px-3 text-[11px] font-black uppercase tracking-[0.09em] text-brand-200/60',
+              /*
+                Rotulo de grupo del menu ("Operacion", "Configuracion"). A
+                11px y en mayusculas, la negra maxima cierra los huecos de las
+                letras y la palabra se vuelve un borron; en semi-negrita
+                mantiene la presencia y se lee. El espaciado amplio se queda,
+                que es lo que hace legible una mayuscula pequena.
+              */
+              'px-3 text-[11px] font-semibold uppercase tracking-[0.09em] text-brand-200/70',
               sidebarColapsado && 'lg:sr-only',
             )}
           >
@@ -112,9 +119,23 @@ export default function AppShell({
                   href={item.href}
                   title={sidebarColapsado ? item.label : undefined}
                   className={cn(
-                    'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold transition active:scale-[.98]',
+                    /*
+                      LA SECCION ACTIVA PESA MAS QUE LAS DEMAS.
+                      Antes todas iban en negrita y solo cambiaba el fondo, asi
+                      que "donde estoy" dependia de un solo indicio. Ahora la
+                      activa sube de grosor y las otras bajan a peso medio: se
+                      distingue de un vistazo incluso de reojo, y el menu deja
+                      de leerse como un bloque uniforme de texto grueso.
+
+                      El encogido responde en 110ms, no en los 150 genericos.
+                    */
+                    'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm',
+                    'transition-[background-color,color] duration-[var(--suave)]',
+                    'active:scale-[.98] active:transition-transform active:duration-[var(--toque)]',
                     sidebarColapsado && 'lg:h-12 lg:w-12 lg:justify-center lg:gap-0 lg:px-0 lg:py-0',
-                    activa ? 'bg-white text-brand-950' : 'text-brand-100 hover:bg-white/10 hover:text-white',
+                    activa
+                      ? 'bg-white font-semibold text-brand-950'
+                      : 'font-medium text-brand-100 hover:bg-white/10 hover:text-white',
                   )}
                 >
                   <item.icon size={20} weight={activa ? 'fill' : 'regular'} className="shrink-0" />
@@ -127,6 +148,30 @@ export default function AppShell({
         )
       })}
     </>
+  )
+
+  /**
+   * MI CUENTA, JUNTO A CERRAR SESION Y NO DENTRO DEL MENU.
+   *
+   * No es una seccion del sistema (no se reparte ni se quita: la necesita todo
+   * el que tiene cuenta), asi que no sale del catalogo de `navDelUsuario`. Va
+   * al pie, donde ya se buscan las cosas de la propia cuenta.
+   */
+  const enlaceMiCuenta = (
+    <Link
+      href="/mi-cuenta"
+      title="Mi cuenta"
+      className={cn(
+        'mt-4 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-white/10 hover:text-white active:scale-[.98]',
+        esActiva(pathname, '/mi-cuenta')
+          ? 'bg-white font-semibold text-brand-950 hover:bg-white hover:text-brand-950'
+          : 'font-medium text-brand-100',
+        sidebarColapsado && 'lg:h-12 lg:w-12 lg:justify-center lg:gap-0 lg:self-center lg:px-0 lg:py-0',
+      )}
+    >
+      <UserCircle size={20} className="shrink-0" />
+      <span className={cn('whitespace-nowrap', sidebarColapsado && 'lg:hidden')}>Mi cuenta</span>
+    </Link>
   )
 
   const botonSalir = (
@@ -182,6 +227,7 @@ export default function AppShell({
         </div>
 
         <nav className="custom-scrollbar mt-7 flex-1 space-y-6 overflow-y-auto pr-1">{navegacion}</nav>
+        {enlaceMiCuenta}
         {botonSalir}
       </aside>
 
@@ -215,6 +261,7 @@ export default function AppShell({
         )}
 
         <nav className="sidebar-scrollbar mt-6 flex-1 space-y-5 overflow-y-auto pr-1">{navegacion}</nav>
+        {enlaceMiCuenta}
         {botonSalir}
       </aside>
 
@@ -222,7 +269,19 @@ export default function AppShell({
         inert={menuMovilAbierto}
         className={cn('min-w-0 transition-[padding] duration-300', sidebarColapsado ? 'lg:pl-20' : 'lg:pl-[264px]')}
       >
-        <div className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 bg-[var(--turnos-sidebar)] px-3 text-white lg:hidden">
+        {/*
+          Barra de movil como MATERIAL, no como bloque opaco.
+
+          Era del color solido del menu, asi que al bajar por una lista larga
+          el contenido desaparecia de golpe bajo una franja ciega. Traslucida
+          con desenfoque, lo que pasa por debajo se sigue intuyendo y la barra
+          se lee como una capa flotando sobre la pagina: se entiende que hay
+          contenido ahi arriba, no que la pantalla se acaba.
+
+          `material-chrome-oscuro` vuelve al color solido por su cuenta si el
+          equipo pide menos transparencia o mas contraste (ver globals.css).
+        */}
+        <div className="material-chrome-oscuro sticky top-0 z-30 flex h-14 items-center justify-between gap-3 px-3 text-white lg:hidden">
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -235,9 +294,9 @@ export default function AppShell({
               <List size={23} weight="bold" />
             </button>
             <Isotipo size={30} className="shrink-0 text-brand-400" />
-            <span className="truncate text-sm font-black">{title}</span>
+            <span className="truncate text-sm font-semibold">{title}</span>
           </div>
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-xs font-black text-brand-950">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-xs font-medium text-brand-950">
             {iniciales}
           </span>
         </div>
@@ -245,7 +304,13 @@ export default function AppShell({
         <header className="border-b border-slate-200/80 bg-[var(--turnos-bg)] px-4 py-4 md:px-7">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="hidden items-center gap-2 text-xs font-black text-brand-600 lg:flex">
+              {/*
+                El rastro de ubicacion (rol › area) es una referencia, no un
+                titular: en negra maxima competia con el nombre de la pantalla
+                que tiene justo debajo. Baja a peso medio y abre el espaciado,
+                que es lo que pide un texto de 12px para leerse limpio.
+              */}
+              <div className="hidden items-center gap-2 text-xs font-medium tracking-[0.02em] text-brand-600 lg:flex">
                 {rolLabels[rol]}
                 {area ? (
                   <>
@@ -254,20 +319,26 @@ export default function AppShell({
                   </>
                 ) : null}
               </div>
-              <h1 className="truncate text-2xl font-black tracking-[-0.03em] text-brand-950 lg:mt-1">{title}</h1>
+              {/*
+                El nombre de la pantalla es lo mas grande que hay aqui, asi que
+                el tamano ya manda: no necesita ademas el grosor maximo. En
+                semi-negrita y algo mas apretado se lee como un titulo
+                cuidado en vez de como un grito.
+              */}
+              <h1 className="truncate text-2xl font-semibold tracking-[-0.028em] text-brand-950 lg:mt-1">{title}</h1>
             </div>
 
-            <div className="hidden items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 lg:flex">
-              <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand-50 text-sm font-black text-brand-700">
+            <div className="hidden items-center gap-3 rounded-2xl border border-slate-200/70 bg-white px-3 py-2 shadow-[var(--sombra-sm)] lg:flex">
+              <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand-50 text-sm font-semibold text-brand-700">
                 {iniciales.slice(0, 1)}
               </span>
               <span className="max-w-[170px]">
-                <span className="block truncate text-sm font-black text-slate-800">{nombreUsuario || rolLabels[rol]}</span>
-                <span className="block truncate text-xs font-semibold text-slate-500">{rolLabels[rol]}</span>
+                <span className="block truncate text-sm font-semibold text-slate-800">{nombreUsuario || rolLabels[rol]}</span>
+                <span className="block truncate text-xs font-medium tracking-[0.01em] text-slate-500">{rolLabels[rol]}</span>
               </span>
             </div>
           </div>
-          <p className="mt-1.5 max-w-3xl text-sm leading-6 text-slate-600">{description}</p>
+          <p className="mt-1.5 max-w-3xl text-sm leading-[1.65] text-slate-600">{description}</p>
         </header>
 
         <div className="mx-auto w-full max-w-[1520px] px-4 py-5 pb-10 md:px-7 md:py-7 xl:px-8">{children}</div>

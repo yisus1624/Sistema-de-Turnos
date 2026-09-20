@@ -16,7 +16,7 @@ import { Campo, Entrada, Interruptor, Seleccion } from '@/components/admin/Campo
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import { sonarCampana } from '@/lib/turnos/anuncio'
 import { franjasDeJornada } from '@/lib/turnos/tiempo'
-import type { ConfiguracionGuardada, ConfiguracionSistema } from '@/lib/turnos/types'
+import type { ConfiguracionGuardada, ConfiguracionSistema, DisenoPantalla } from '@/lib/turnos/types'
 
 export default function PantallaConfigClient() {
   const [configuracion, setConfiguracion] = useState<ConfiguracionGuardada | null>(null)
@@ -131,7 +131,7 @@ export default function PantallaConfigClient() {
           <CardContent className="space-y-5">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <p className="text-sm font-black text-slate-800">Sonar en cada llamado</p>
+                <p className="text-sm font-semibold text-slate-800">Sonar en cada llamado</p>
                 <p className="text-xs text-slate-500">
                   Si se apaga, la pantalla sigue mostrando los turnos pero en silencio.
                 </p>
@@ -193,6 +193,49 @@ export default function PantallaConfigClient() {
               configurado algo. El parametro sigue en el sistema por si esa
               lista vuelve; lo que se quita es la promesa falsa.
             */}
+            {/*
+              EL ASPECTO DEL TELEVISOR, con las dos opciones descritas por lo
+              que el paciente ve, no por su nombre tecnico: quien elige aqui no
+              tiene por que saber que es una "cuadricula" hasta que se lo
+              cuentan. El cambio alcanza a TODAS las salas en cuanto se guarda,
+              y eso se avisa, porque desde esta pantalla no se ve ninguna.
+            */}
+            <Campo
+              etiqueta="Diseño de la pantalla"
+              ayuda="Aplica a todos los televisores del hospital en cuanto guardes."
+            >
+              <Seleccion
+                value={configuracion.disenoPantalla}
+                onChange={(e) => cambiar('disenoPantalla', e.target.value as DisenoPantalla)}
+              >
+                <option value="CUADRICULA">
+                  Cuadricula — una casilla por consultorio, todas visibles a la vez
+                </option>
+                <option value="CARTELERA">
+                  Cartelera — el turno en curso en grande, con los anteriores debajo
+                </option>
+              </Seleccion>
+            </Campo>
+
+            {/*
+              La imagen solo se ofrece con la cartelera, que es la unica que la
+              usa. Mostrarla siempre invitaria a configurar un fondo que no se
+              ve en ninguna parte, y despues a buscar por que no aparece.
+            */}
+            {configuracion.disenoPantalla === 'CARTELERA' ? (
+              <Campo
+                etiqueta="Imagen de fondo"
+                ayuda="Ruta de una imagen de este mismo sitio, por ejemplo /img/fondo-sala.jpg. Copia el archivo en la carpeta public/img del servidor. Dejalo vacio para un fondo liso."
+              >
+                <Entrada
+                  value={configuracion.fondoPantalla}
+                  onChange={(e) => cambiar('fondoPantalla', e.target.value)}
+                  maxLength={200}
+                  placeholder="/img/fondo-sala.jpg"
+                />
+              </Campo>
+            ) : null}
+
             <Campo etiqueta="Mensaje al pie" ayuda="Texto institucional que se muestra abajo. Dejalo vacio para ocultarlo.">
               <Entrada
                 value={configuracion.mensajePie}
@@ -227,7 +270,7 @@ export default function PantallaConfigClient() {
             </Campo>
 
             <div>
-              <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-600">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-600">
                 Jornada de la mañana
               </p>
               <div className="grid gap-4 sm:grid-cols-2">
@@ -249,7 +292,7 @@ export default function PantallaConfigClient() {
             </div>
 
             <div>
-              <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-600">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-600">
                 Jornada de la tarde
               </p>
               <div className="grid gap-4 sm:grid-cols-2">
@@ -274,11 +317,11 @@ export default function PantallaConfigClient() {
               {cupos > 0 ? (
                 <>
                   Con esta configuracion, un doctor de jornada completa tiene{' '}
-                  <strong className="font-black text-brand-800">{cupos} cupos</strong> al dia:{' '}
+                  <strong className="font-semibold text-brand-800">{cupos} cupos</strong> al dia:{' '}
                   {cuposManana} en la mañana y {cuposTarde} en la tarde. Ese es el tope de citas por doctor;
                   no hay que fijarlo aparte, la ultima cita de cada jornada es la que alcanza a terminar
                   antes del cierre. En que jornada trabaja cada doctor se define en{' '}
-                  <strong className="font-black">Profesionales</strong>.
+                  <strong className="font-semibold">Profesionales</strong>.
                 </>
               ) : (
                 <span className="font-bold text-red-600">

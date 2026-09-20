@@ -392,7 +392,7 @@ export default function PruebasClient() {
                   <div key={doctor.profesionalId} className="rounded-xl border border-slate-200 p-4">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className="font-black text-brand-950">{doctor.nombre}</p>
+                        <p className="font-semibold text-brand-950">{doctor.nombre}</p>
                         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
                           {doctor.moduloNombre}
                         </p>
@@ -474,10 +474,10 @@ export default function PruebasClient() {
         danger
       >
         <p className="text-sm leading-6 text-slate-600">
-          Se van a <strong className="font-black text-red-700">borrar todas las citas y todos los turnos de
+          Se van a <strong className="font-semibold text-red-700">borrar todas las citas y todos los turnos de
           hoy</strong>, incluidos los que haya cargado el mostrador y los pacientes que ya esten en la fila.
           Tambien se generan enlaces nuevos para los 10 doctores de ejemplo, con lo que{' '}
-          <strong className="font-black">se invalidan los enlaces que esten usando ahora</strong>.
+          <strong className="font-semibold">se invalidan los enlaces que esten usando ahora</strong>.
         </p>
         <p className="mt-3 text-sm leading-6 text-slate-600">
           Esta pantalla es solo para demos y pruebas de carga. No la uses en un dia de atencion real.

@@ -92,6 +92,13 @@ const ABIERTAS_A_CUALQUIER_SESION = new Set([
   'app/api/turnos/modulos GET',
   'app/api/turnos/profesionales GET',
   'app/api/turnos/historico GET',
+
+  // CAMBIAR LA PROPIA CONTRASENA. Es la unica de la lista que escribe, y la
+  // unica que no depende de ninguna seccion a proposito: cualquiera con cuenta
+  // tiene que poder cambiar su clave, incluso un operador al que le retiraron
+  // todo el menu. No toca la cuenta de nadie mas —el id sale de la sesion, no
+  // del cuerpo— y exige la contrasena actual, con tope de intentos.
+  'app/api/cuenta/contrasena POST',
 ])
 
 /** Un funcionario con cuenta valida al que le retiraron todas las secciones. */

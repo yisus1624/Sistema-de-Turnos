@@ -15,7 +15,7 @@ export function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-sm font-black text-slate-800">{label}</span>
+      <span className="text-sm font-semibold text-slate-800">{label}</span>
       <span className="mt-2 block">{children}</span>
       {error ? <span className="mt-1.5 block text-sm font-semibold text-red-600">{error}</span> : helper ? <span className="mt-1.5 block text-xs font-semibold text-slate-500">{helper}</span> : null}
     </label>
@@ -81,7 +81,7 @@ export function FormSection({
   return (
     <section className={cn('min-w-0 rounded-2xl border border-slate-200 bg-white p-4', className)}>
       <div className="mb-3.5">
-        <h3 className="text-sm font-black text-brand-950">{title}</h3>
+        <h3 className="text-sm font-semibold text-brand-950">{title}</h3>
         {description ? <p className="mt-0.5 text-xs font-semibold leading-5 text-slate-500">{description}</p> : null}
       </div>
       {children}
@@ -111,13 +111,13 @@ export function Stepper({ steps, current }: { steps: string[]; current: number }
           >
             <span
               className={cn(
-                'grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-black',
+                'grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold',
                 active || done ? 'bg-brand-600 text-white' : 'bg-slate-300 text-white',
               )}
             >
               {index + 1}
             </span>
-            <span className={cn('truncate text-xs font-black', active ? 'text-brand-700' : 'text-slate-500')}>{step}</span>
+            <span className={cn('truncate text-xs tracking-[0.01em]', active ? 'font-semibold text-brand-700' : 'font-medium text-slate-500')}>{step}</span>
           </li>
         )
       })}

@@ -344,6 +344,32 @@ model Configuracion {
   ultimosVisibles Int     @default(5)
   mensajePie      String  @default("")
 
+  /// Con que aspecto se dibuja el televisor de la sala de espera.
+  ///
+  /// "CUADRICULA" es el de siempre: una casilla fija por consultorio, todas
+  /// visibles a la vez. "CARTELERA" es el formato de panel sobre imagen de
+  /// fondo, con el turno en curso destacado y el siguiente de cada consultorio.
+  ///
+  /// Se guarda AQUI, y no en cada televisor, porque es una decision del
+  /// hospital: el administrador la toma una vez en /admin/pantalla y todas las
+  /// salas quedan iguales. Guardarlo en el navegador de cada televisor
+  /// significaria que una sala se queda con el diseño viejo el dia que alguien
+  /// le borre los datos al navegador, y nadie se entera.
+  ///
+  /// Texto y no enum a proposito: agregar un diseño nuevo no deberia obligar a
+  /// una migracion de base. El valor se valida en la aplicacion
+  /// (`DISENOS_PANTALLA` en lib/turnos/types.ts), que es donde vive la lista.
+  disenoPantalla String @default("CUADRICULA")
+
+  /// Ruta de la imagen de fondo de la cartelera, servida desde `public/`
+  /// (por ejemplo "/img/fondo-sala.jpg"). Vacio = sin imagen, fondo liso.
+  ///
+  /// Es una RUTA y no un archivo subido: el televisor la pide como cualquier
+  /// otra imagen del sitio, sin pasar por la base ni por el servidor de la
+  /// aplicacion, que es lo que hay que evitar en una pantalla que se refresca
+  /// sola durante toda la jornada.
+  fondoPantalla String @default("")
+
   duracionCitaMinutos Int    @default(15)
   jornadaMananaInicio String @default("07:00")
   jornadaMananaFin    String @default("12:00")

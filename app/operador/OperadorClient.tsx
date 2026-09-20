@@ -216,9 +216,9 @@ export default function OperadorClient() {
           {turnoActual ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center">
               <p className="text-sm font-bold uppercase tracking-wide text-slate-500">Turno</p>
-              <p className="mt-1 text-5xl font-black tracking-[-0.03em] text-brand-950">{turnoActual.codigo}</p>
+              <p className="mt-1 text-5xl font-semibold tracking-[-0.03em] text-brand-950">{turnoActual.codigo}</p>
               {turnoActual.nombrePaciente ? (
-                <p className="mt-2 text-xl font-black text-slate-800">{turnoActual.nombrePaciente}</p>
+                <p className="mt-2 text-xl font-semibold text-slate-800">{turnoActual.nombrePaciente}</p>
               ) : null}
               <p className="mt-2 text-sm text-slate-600">
                 Llamado {turnoActual.vecesLlamado} {turnoActual.vecesLlamado === 1 ? 'vez' : 'veces'}
@@ -274,10 +274,10 @@ export default function OperadorClient() {
                   key={turno.id}
                   className="flex items-center gap-3 rounded-xl border border-slate-100 bg-white px-4 py-2.5 text-sm"
                 >
-                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-slate-100 text-xs font-black text-slate-600">
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-slate-100 text-xs font-medium text-slate-600">
                     {indice + 1}
                   </span>
-                  <span className="font-black text-brand-950">{turno.codigo}</span>
+                  <span className="font-semibold text-brand-950">{turno.codigo}</span>
                   <span className="min-w-0 flex-1 truncate text-slate-700">{turno.nombrePaciente ?? '—'}</span>
                   {turno.prioridad === 'PRIORITARIO' ? <Badge tone="amber">Prioritario</Badge> : null}
                 </li>

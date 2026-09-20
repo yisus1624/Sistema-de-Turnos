@@ -188,7 +188,7 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
             <Tabla columnas={COLUMNAS}>
               {turnos.map((turno) => (
                 <tr key={turno.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-black text-brand-950">{turno.codigo}</td>
+                  <td className="px-4 py-3 font-semibold text-brand-950">{turno.codigo}</td>
                   <td className="px-4 py-3 text-slate-600">{nombre(servicios, turno.servicioId)}</td>
                   <td className="px-4 py-3 text-slate-600">{nombre(modulos, turno.moduloId)}</td>
                   <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.fechaGeneracion)}</td>

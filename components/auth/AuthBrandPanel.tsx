@@ -21,7 +21,7 @@ export function AuthBrandPanel() {
 
       <div className="relative">
         <Isotipo size={56} className="text-brand-400" />
-        <p className="mt-5 text-3xl font-black leading-tight tracking-[-0.03em] xl:text-4xl">{NOMBRE_SISTEMA}</p>
+        <p className="mt-5 text-3xl font-semibold leading-tight tracking-[-0.03em] xl:text-4xl">{NOMBRE_SISTEMA}</p>
         <p className="mt-2 max-w-[300px] text-base leading-snug text-brand-100">{NOMBRE_INSTITUCION}</p>
 
         <nav className="mt-10 space-y-5 xl:mt-14 xl:space-y-7">

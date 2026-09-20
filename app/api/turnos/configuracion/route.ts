@@ -5,7 +5,7 @@ import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { camposCambiados } from '@/lib/seguridad/cambios'
-import type { ConfiguracionSistema } from '@/lib/turnos/types'
+import { DISENOS_PANTALLA, type ConfiguracionSistema } from '@/lib/turnos/types'
 
 export async function GET() {
   try {
@@ -36,6 +36,28 @@ const configuracionSchema = z.object({
   audioActivo: z.boolean().optional(),
   volumen: z.number().min(0).max(1).optional(),
   mensajePie: z.string().trim().max(200).optional(),
+
+  // --- Aspecto del televisor ---
+  disenoPantalla: z.enum(DISENOS_PANTALLA).optional(),
+  /*
+   * Ruta de la imagen de fondo, y SOLO una ruta de este mismo sitio.
+   *
+   * Se exige que empiece por una barra y se prohibe "//" y "..": sin eso, aqui
+   * se podria escribir la direccion de un servidor cualquiera de internet y el
+   * televisor de la sala de espera —que esta encendido todo el dia y no tiene
+   * a nadie mirandolo de cerca— acabaria pidiendole una imagen a ese servidor
+   * en cada carga, contandole de paso que existe y desde donde se conecta. La
+   * imagen del hospital se copia en `public/` y se pone su ruta.
+   */
+  fondoPantalla: z
+    .string()
+    .trim()
+    .max(200)
+    .refine(
+      (valor) => valor === '' || (valor.startsWith('/') && !valor.startsWith('//') && !valor.includes('..')),
+      'La imagen de fondo debe ser una ruta de este mismo sitio, por ejemplo /img/fondo-sala.jpg',
+    )
+    .optional(),
 
   // --- Agenda ---
   // La duracion se acota a un rango razonable de consulta; las horas se

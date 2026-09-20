@@ -131,14 +131,14 @@ export default function PurgaDatosModal({
             </p>
           ) : (
             <>
-              <p className="text-sm font-black text-brand-950">
+              <p className="text-sm font-semibold text-brand-950">
                 {resumen.dias} dia(s) · {resumen.citas} cita(s) · {resumen.turnos} turno(s)
               </p>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                <strong className="font-black">Se borran:</strong> nombre, documento, tipo de
+                <strong className="font-semibold">Se borran:</strong> nombre, documento, tipo de
                 documento, procedimiento y CUPS.
                 <br />
-                <strong className="font-black">Se conservan:</strong> fecha, hora, doctor, servicio
+                <strong className="font-semibold">Se conservan:</strong> fecha, hora, doctor, servicio
                 y estado de cada cita.
               </p>
             </>

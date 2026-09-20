@@ -7,7 +7,7 @@
 // monitor del administrador la consulta cada pocos segundos), asi que no
 // calcula nada que nadie use.
 import { NextResponse } from 'next/server'
-import { turnoRepository } from '@/lib/turnos/repositorio'
+import { estadoPantallaCacheado } from '@/lib/turnos/pantalla-cacheada'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,7 +15,12 @@ export async function GET() {
   // UNA sola llamada al repositorio. Antes se pedia aparte la configuracion,
   // que `estadoPantalla` ya habia cargado por dentro: la misma fila leida dos
   // veces en cada refresco de cada televisor encendido.
-  const { casillas, configuracion } = await turnoRepository.estadoPantalla()
+  //
+  // Y con cache de segundo y medio, que se tira sola en cuanto el canal en
+  // vivo publica algo: sin ella, un bucle de peticiones contra esta ruta
+  // —publica y sin sesion— agota el pool de Prisma, que es el mismo del inicio
+  // de sesion. El porque completo esta en `lib/turnos/pantalla-cacheada.ts`.
+  const { casillas, configuracion } = await estadoPantallaCacheado()
 
   return NextResponse.json({ casillas, configuracion })
 }

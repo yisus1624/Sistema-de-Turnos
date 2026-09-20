@@ -33,6 +33,23 @@ export type EventoTurno =
    * movio, porque este mismo canal lo escucha la pantalla sin sesion.
    */
   | { tipo: 'fila.cambiada'; servicioId: string; profesionalId: string | null }
+  /**
+   * El administrador guardo la configuracion: la pantalla vuelve a pedir su
+   * estado y se repinta con lo nuevo.
+   *
+   * SIN ESTO EL CAMBIO TARDABA HASTA UN MINUTO. El televisor solo se
+   * resincroniza cada `MS_RESINCRONIZAR`, asi que al cambiarle el diseño —o el
+   * mensaje del pie, o el volumen— las salas seguian con lo anterior durante
+   * casi un minuto, sin ninguna señal de que algo estuviera en camino. Quien
+   * acababa de guardar lo leia como que no habia funcionado, volvia a guardar,
+   * y asi.
+   *
+   * No lleva la configuracion dentro a proposito: este canal lo escucha la
+   * pantalla de la sala de espera, que no tiene sesion. El evento solo dice
+   * "vuelve a preguntar", y lo que se le responde ya pasa por la ruta publica,
+   * que decide que sale hacia alla.
+   */
+  | { tipo: 'configuracion.cambiada' }
 
 const EVENTO = 'turno'
 

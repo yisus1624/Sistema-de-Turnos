@@ -527,6 +527,40 @@ export interface CasillaPantalla {
   horaLlamado?: string | null
   /** Cuantas veces se llamo; la pantalla lo usa para repetir la animacion. */
   vecesLlamado?: number
+
+  /**
+   * El turno que este consultorio llamara DESPUES del que esta atendiendo, para
+   * que ese paciente se vaya acercando.
+   *
+   * ES UNA PREVISION, NO UNA PROMESA, y la pantalla tiene que decirlo asi. Sale
+   * de aplicar el mismo criterio que usa `llamarSiguiente` —el primero de la
+   * cola de ESE profesional, prioritarios delante (ver `ordenAtencion`)—, pero
+   * la cola se mueve: si entretanto llega un paciente prioritario, se cuela
+   * delante y el que se habia preparado ya no es el siguiente.
+   *
+   * SOLO VIENE EN LAS CASILLAS DE UN PROFESIONAL. En una ventanilla de fila
+   * compartida, el que esta primero en la cola se lo puede llevar cualquiera de
+   * las ventanillas que pulse antes, asi que anunciarlo en una casilla concreta
+   * seria mandar al paciente a la ventanilla equivocada. Ahi viaja `null`.
+   *
+   * Es el codigo del turno, como `codigo`: ningun dato del paciente.
+   */
+  siguienteCodigo?: string | null
+}
+
+/**
+ * Los aspectos con los que se puede dibujar el televisor de la sala de espera.
+ *
+ * La lista vive aqui y no en la base (la columna es un texto libre): agregar un
+ * diseño nuevo no deberia costar una migracion. Lo que SI valida el servidor al
+ * guardar es que el valor este en esta lista.
+ */
+export const DISENOS_PANTALLA = ['CUADRICULA', 'CARTELERA'] as const
+
+export type DisenoPantalla = (typeof DISENOS_PANTALLA)[number]
+
+export function esDisenoPantalla(valor: unknown): valor is DisenoPantalla {
+  return typeof valor === 'string' && (DISENOS_PANTALLA as readonly string[]).includes(valor)
 }
 
 /**
@@ -564,6 +598,17 @@ export interface ConfiguracionSistema {
   volumen: number
   /** Mensaje institucional que corre al pie de la pantalla. */
   mensajePie: string
+
+  /**
+   * Con que aspecto se dibuja el televisor de la sala de espera. Lo elige el
+   * administrador en /admin/pantalla y vale para TODAS las salas.
+   */
+  disenoPantalla: DisenoPantalla
+  /**
+   * Imagen de fondo de la cartelera, como ruta servida desde `public/`
+   * (por ejemplo "/img/fondo-sala.jpg"). Vacio = fondo liso, sin imagen.
+   */
+  fondoPantalla: string
 
   // --- Agenda ---
   //

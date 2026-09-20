@@ -63,10 +63,23 @@ export function resumir(
 }
 
 /**
+ * Lo unico que hace falta saber de un turno para ponerlo en la fila.
+ *
+ * La firma pide ESTOS DOS CAMPOS y no un `Turno` entero para que la regla la
+ * pueda aplicar tambien quien no tiene el turno completo en la mano: el
+ * televisor, por ejemplo, calcula quien entra despues en cada consultorio
+ * leyendo de la base solo el codigo, la prioridad y la hora de generacion. Si
+ * exigiera el objeto completo, ese caso acabaria con una copia de la regla al
+ * lado, y el dia que cambie el criterio de atencion cambiaria en un sitio y no
+ * en el otro: la pantalla anunciaria a un paciente y el doctor llamaria a otro.
+ */
+export type PuestoEnLaFila = Pick<Turno, 'prioridad' | 'fechaGeneracion'>
+
+/**
  * Orden en el que hay que atender una fila: primero los prioritarios, y dentro
  * de cada grupo por orden de llegada.
  */
-export function ordenAtencion(a: Turno, b: Turno) {
+export function ordenAtencion(a: PuestoEnLaFila, b: PuestoEnLaFila) {
   if (a.prioridad !== b.prioridad) return a.prioridad === 'PRIORITARIO' ? -1 : 1
   return new Date(a.fechaGeneracion).getTime() - new Date(b.fechaGeneracion).getTime()
 }

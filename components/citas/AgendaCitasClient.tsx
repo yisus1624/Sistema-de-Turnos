@@ -558,7 +558,7 @@ export default function AgendaCitasClient() {
           {horario ? (
             <div className="flex flex-wrap items-center gap-2.5">
               <span className="inline-flex items-baseline gap-1.5 rounded-xl bg-brand-50 px-3 py-1.5 text-xs font-bold text-brand-800">
-                <strong className="text-base font-black leading-none text-brand-900">{totalCitas}</strong>
+                <strong className="text-base font-semibold leading-none text-brand-900">{totalCitas}</strong>
                 citas agendadas
               </span>
               <span className="inline-flex items-center rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-500">
@@ -739,7 +739,7 @@ export default function AgendaCitasClient() {
 
           <p className="rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
             El turno no se genera todavia: sale cuando el paciente llegue y se registre su llegada en{' '}
-            <strong className="font-black">Registro de llegada</strong>.
+            <strong className="font-semibold">Registro de llegada</strong>.
           </p>
 
           <div className="flex justify-end gap-2 pt-1">
@@ -765,11 +765,11 @@ export default function AgendaCitasClient() {
             <dl className="divide-y divide-slate-100 rounded-xl border border-slate-200">
               <div className="flex items-center justify-between gap-4 px-4 py-3">
                 <dt className="text-sm font-bold text-slate-500">Documento</dt>
-                <dd className="tabular-nums font-black text-brand-950">{detalle.documentoPaciente}</dd>
+                <dd className="tabular-nums font-semibold text-brand-950">{detalle.documentoPaciente}</dd>
               </div>
               <div className="flex items-center justify-between gap-4 px-4 py-3">
                 <dt className="text-sm font-bold text-slate-500">Hora</dt>
-                <dd className="tabular-nums font-black text-brand-950">{detalle.hora}</dd>
+                <dd className="tabular-nums font-semibold text-brand-950">{detalle.hora}</dd>
               </div>
               <div className="flex items-center justify-between gap-4 px-4 py-3">
                 <dt className="text-sm font-bold text-slate-500">Estado</dt>
@@ -786,7 +786,7 @@ export default function AgendaCitasClient() {
                 <div className="flex items-center justify-between gap-4 px-4 py-3">
                   <dt className="text-sm font-bold text-slate-500">Reprogramada</dt>
                   <dd className="text-right">
-                    <span className="font-black text-amber-700">
+                    <span className="font-semibold text-amber-700">
                       {detalle.vecesReprogramada}{' '}
                       {detalle.vecesReprogramada === 1 ? 'vez' : 'veces'}
                     </span>
@@ -956,7 +956,7 @@ export default function AgendaCitasClient() {
         <div className="space-y-3">
           <p className="text-sm leading-6 text-slate-600">
             Si el paciente sigue necesitando la cita, es mejor{' '}
-            <strong className="font-black">reprogramarla</strong>: asi se conserva su historial en vez de
+            <strong className="font-semibold">reprogramarla</strong>: asi se conserva su historial en vez de
             quedar una cita cancelada y otra nueva sin relacion entre ellas.
           </p>
           <Campo etiqueta="Motivo" ayuda="Queda guardado junto con quien cancela y a que hora.">
@@ -1050,7 +1050,7 @@ const Parrilla = memo(function Parrilla({
             <Icono size={17} weight="fill" />
           </span>
           <span className="min-w-0">
-            <span className="block text-sm font-black tracking-[-0.02em] text-brand-950">
+            <span className="block text-sm font-semibold tracking-[-0.02em] text-brand-950">
               {bloque.etiqueta}
             </span>
             <span className="block text-xs font-semibold text-slate-500">
@@ -1063,7 +1063,7 @@ const Parrilla = memo(function Parrilla({
         <span className="flex shrink-0 items-center gap-2.5">
           {/* El conteo se queda tambien plegada: es lo que deja decidir si hace
               falta abrirla. */}
-          <span className="rounded-lg bg-slate-50 px-2.5 py-1 text-xs font-black tabular-nums text-slate-600">
+          <span className="rounded-lg bg-slate-50 px-2.5 py-1 text-xs font-medium tabular-nums text-slate-600">
             {agendadas} citas
           </span>
           <span className="text-xs font-bold text-slate-500">{abierta ? 'Ocultar' : 'Mostrar'}</span>
@@ -1093,7 +1093,7 @@ const Parrilla = memo(function Parrilla({
               <CalendarPlus size={20} weight="duotone" />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-black text-brand-950">
+              <p className="text-sm font-semibold text-brand-950">
                 {bloque.filas.length === 0
                   ? 'Jornada sin franjas'
                   : filtrando
@@ -1130,7 +1130,7 @@ const Parrilla = memo(function Parrilla({
                 <tr>
                   {/* La esquina se cruza con las dos barras congeladas, asi
                       que va por encima de ambas. */}
-                  <th className="sticky left-0 top-0 z-30 w-20 border-b border-slate-200 bg-slate-100 px-3 py-2.5 text-left text-xs font-black uppercase tracking-wide text-slate-600">
+                  <th className="sticky left-0 top-0 z-30 w-20 border-b border-slate-200 bg-slate-100 px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-slate-600">
                     Hora
                   </th>
                   {bloque.columnas.map((columna) => (
@@ -1140,7 +1140,7 @@ const Parrilla = memo(function Parrilla({
                         columna.servicioNombre,
                       )}`}
                     >
-                      <span className="block truncate text-sm font-black leading-tight">
+                      <span className="block truncate text-sm font-semibold leading-tight">
                         {columna.profesionalNombre}
                       </span>
                       <span className="mt-0.5 block truncate text-[11px] font-semibold leading-tight text-white/80">
@@ -1156,7 +1156,7 @@ const Parrilla = memo(function Parrilla({
                   <tr key={fila.hora}>
                     <th
                       scope="row"
-                      className={`sticky left-0 z-10 border-b border-slate-100 px-3 py-1.5 text-left text-sm font-black tabular-nums ${
+                      className={`sticky left-0 z-10 border-b border-slate-100 px-3 py-1.5 text-left text-sm font-semibold tabular-nums ${
                         // La hora que no es franja de la configuracion se marca
                         // mas suave: esta ahi porque alguien tiene cita a esa
                         // hora, no porque se pueda agendar en ella.
@@ -1189,7 +1189,7 @@ const Parrilla = memo(function Parrilla({
                                   }`}
                                   title={`${cita.nombrePaciente} · ${estilosEstado[cita.estado].etiqueta}`}
                                 >
-                                  <span className="line-clamp-2 block whitespace-normal text-sm font-black leading-snug">
+                                  <span className="line-clamp-2 block whitespace-normal text-sm font-semibold leading-snug">
                                     {cita.nombrePaciente}
                                   </span>
                                   <span className="mt-0.5 block truncate text-xs font-semibold opacity-70">
@@ -1278,7 +1278,7 @@ function FueraDeHorario({
             onClick={() => onCita(cita)}
             className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left transition-colors hover:bg-amber-100"
           >
-            <span className="block text-xs font-black text-amber-900">
+            <span className="block text-xs font-medium text-amber-900">
               {cita.hora} · {cita.nombrePaciente}
             </span>
             <span className="block text-[11px] font-semibold text-amber-700">

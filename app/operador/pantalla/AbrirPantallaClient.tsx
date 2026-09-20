@@ -26,7 +26,7 @@ export default function AbrirPantallaClient() {
 
       <p className="mt-4 text-sm leading-6 text-slate-500">
         Se abre en otra pestana. Alli hay que pulsar una vez{' '}
-        <strong className="font-black text-slate-600">Activar pantalla</strong>: sin ese clic el
+        <strong className="font-semibold text-slate-600">Activar pantalla</strong>: sin ese clic el
         televisor no puede reproducir el sonido de los llamados.
       </p>
     </div>

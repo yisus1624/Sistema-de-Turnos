@@ -53,7 +53,18 @@ export async function pedir<T>(url: string, opciones?: OpcionesPedir): Promise<T
       // Se vuelve aqui despues de entrar, para que el funcionario retome donde
       // estaba en vez de aparecer en la pantalla de inicio.
       const volverA = encodeURIComponent(window.location.pathname + window.location.search)
-      window.location.href = `/auth/login?sesion=expirada&volverA=${volverA}`
+      // Recarga completa a proposito, no `router.push`: esto no es un
+      // componente (no hay hooks aqui) y, sobre todo, con la sesion vencida
+      // hay que TIRAR el estado que quedo en memoria —la fila, las citas, el
+      // paciente a medio registrar—, no navegar por encima de el.
+      //
+      // La URL se arma absoluta contra el origen actual porque Next avisa de
+      // los destinos relativos; el destino es el mismo, solo queda explicito
+      // que no se sale del sitio.
+      window.location.href = new URL(
+        `/auth/login?sesion=expirada&volverA=${volverA}`,
+        window.location.origin,
+      ).toString()
     }
 
     throw new ErrorApi(mensaje, res.status)

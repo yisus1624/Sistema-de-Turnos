@@ -34,6 +34,8 @@ const ETIQUETAS: Record<string, string> = {
   INICIO_SESION: 'Inicio de sesion',
   USUARIO_CREADO: 'Cuenta creada',
   USUARIO_ACTUALIZADO: 'Cuenta modificada',
+  USUARIO_RENOMBRADO: 'Nombre de usuario cambiado',
+  USUARIO_CONTRASENA_CAMBIADA: 'Contrasena cambiada',
   ACCESO_PROFESIONAL: 'Acceso del doctor',
   ACCESO_PROFESIONAL_GENERADO: 'Enlace de consultorio generado',
   ACCESO_PROFESIONAL_REVOCADO: 'Enlace de consultorio revocado',

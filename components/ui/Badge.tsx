@@ -12,7 +12,22 @@ const tones: Record<BadgeTone, string> = {
 
 export function Badge({ tone = 'slate', className, children }: { tone?: BadgeTone; className?: string; children: React.ReactNode }) {
   return (
-    <span className={cn('inline-flex items-center rounded-full px-2.5 py-1 text-xs font-black ring-1', tones[tone], className)}>
+    /*
+     * Peso 600 y las letras un poco MAS separadas, no menos.
+     *
+     * Es la regla al reves que en los titulos, y es a proposito: a 12px las
+     * letras se tocan y la palabra se vuelve una mancha, sobre todo en negra
+     * maxima y en mayusculas. Abrir el espaciado unas milesimas es lo que
+     * hace legible una etiqueta de estado —"EN ATENCION", "AUSENTE"— que se
+     * mira de reojo mientras se atiende a alguien.
+     */
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.015em] ring-1',
+        tones[tone],
+        className,
+      )}
+    >
       {children}
     </span>
   )

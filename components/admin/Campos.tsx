@@ -18,7 +18,7 @@ type EtiquetaProps = {
 export function Campo({ etiqueta, ayuda, className, children }: EtiquetaProps) {
   return (
     <label className={cn('block', className)}>
-      <span className="mb-1.5 block text-xs font-black uppercase tracking-wide text-slate-600">{etiqueta}</span>
+      <span className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-600">{etiqueta}</span>
       {children}
       {ayuda ? <span className="mt-1 block text-xs font-medium text-slate-400">{ayuda}</span> : null}
     </label>
@@ -112,7 +112,7 @@ export function Tabla({ columnas, children }: { columnas: string[]; children: Re
         <thead>
           <tr className="border-b border-slate-200">
             {columnas.map((columna) => (
-              <th key={columna} className="px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-500">
+              <th key={columna} className="px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
                 {columna}
               </th>
             ))}

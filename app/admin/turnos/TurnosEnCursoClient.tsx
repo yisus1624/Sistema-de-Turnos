@@ -32,8 +32,8 @@ function contar(turnos: Turno[]): Resumen {
 function Indicador({ titulo, valor, tono }: { titulo: string; valor: number; tono: string }) {
   return (
     <Card className="text-center">
-      <p className="text-xs font-black uppercase tracking-wide text-slate-500">{titulo}</p>
-      <p className={`mt-1 text-4xl font-black tracking-[-0.03em] ${tono}`}>{valor}</p>
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{titulo}</p>
+      <p className={`mt-1 text-4xl font-semibold tracking-[-0.03em] ${tono}`}>{valor}</p>
     </Card>
   )
 }
@@ -174,13 +174,13 @@ export default function TurnosEnCursoClient() {
                     casilla.codigo ? 'border-brand-200 bg-brand-50' : 'border-slate-200 bg-white'
                   }`}
                 >
-                  <p className="truncate text-xs font-black uppercase tracking-wide text-slate-500">
+                  <p className="truncate text-xs font-medium uppercase tracking-wide text-slate-500">
                     {casilla.moduloNombre}
                     {casilla.profesionalNombre ? ` · ${casilla.profesionalNombre}` : ''}
                   </p>
                   {casilla.codigo ? (
                     <>
-                      <p className="mt-1 text-3xl font-black tracking-[-0.02em] text-brand-800">{casilla.codigo}</p>
+                      <p className="mt-1 text-3xl font-semibold tracking-[-0.02em] text-brand-800">{casilla.codigo}</p>
                       <p className="truncate text-sm font-bold text-slate-600">
                         {casilla.servicioNombre}
                         {casilla.horaLlamado ? ` · ${horaCorta(casilla.horaLlamado)}` : ''}
@@ -214,7 +214,7 @@ export default function TurnosEnCursoClient() {
               return (
                 <div key={servicio.id} className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3">
                   <span className="truncate font-bold text-slate-700">{servicio.nombre}</span>
-                  <span className="text-2xl font-black tabular-nums text-brand-800">{enEspera.length}</span>
+                  <span className="text-2xl font-semibold tabular-nums text-brand-800">{enEspera.length}</span>
                 </div>
               )
             })}

@@ -3,9 +3,12 @@ import { z } from 'zod'
 import { usuarioRepository } from '@/lib/usuarios/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { registrarApuntes, type Firma } from '@/lib/seguridad/apuntar'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { secciones as catalogoSecciones } from '@/lib/permissions/rutas'
 import { revisarCambio } from '@/lib/usuarios/politica-permisos'
+import { apunteDeRenombradoFallido, apuntesDeEdicion } from '@/lib/usuarios/auditoria'
+import type { Usuario } from '@/lib/usuarios/types'
 
 /** Ver la nota del POST: las secciones tienen que existir en el catalogo. */
 const hrefsValidos = catalogoSecciones.map((seccion) => seccion.href)
@@ -76,17 +79,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: rechazo.motivo }, { status: rechazo.estado })
     }
 
-    const usuario = await usuarioRepository.actualizar(id, parsed.data)
-
-    await registrarEvento({
-      tipo: EVENTOS.USUARIO_ACTUALIZADO,
-      exito: true,
+    const firma: Firma = {
       usuarioId: session.user.id,
       usuarioNombre: session.user.name ?? null,
-      identificador: usuario.usuario,
       ip,
-      detalle: detalleDelCambio(objetivo, usuario, parsed.data.password !== undefined),
-    })
+    }
+
+    const usuario = await guardarDejandoRastro(objetivo, parsed.data, firma)
 
     return NextResponse.json({ usuario })
   } catch (error) {
@@ -95,34 +94,39 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 }
 
 /**
- * Que cambio de verdad, con el antes y el despues.
+ * Guarda el cambio y deja el rastro, incluso si no se pudo guardar.
  *
- * Antes se guardaba `{ cambios: Object.keys(datos) }`, y eso no servia para
- * auditar nada: decia `['secciones']` sin decir de que a que, y el filtro que
- * quitaba la contraseña del detalle se llevaba por delante tambien EL HECHO de
- * que hubiera cambiado. Un restablecimiento de la clave de otro funcionario
- * —la escalada que habia que poder investigar— quedaba escrito como un cambio
- * vacio.
+ * LA CUENTA SE EDITA, NUNCA SE SUSTITUYE: se actualiza por `id`, asi que
+ * renombrarla no le cambia la identidad. Los turnos, los llamados y los
+ * eventos historicos siguen apuntando al mismo funcionario; borrarla y crear
+ * otra con el nombre nuevo dejaria todo ese historico huerfano.
  *
- * La contraseña sigue sin aparecer, ni en claro ni como hash: lo que se apunta
- * es que se cambio.
+ * EL FALLO TAMBIEN SE APUNTA. El unico que puede saltar aqui es el nombre de
+ * usuario ya tomado, y es de los que hay que poder revisar despues: dos
+ * intentos de ponerle a una cuenta el nombre de entrada de otra no son una
+ * errata, son alguien probando. Se vuelve a lanzar para que `apiError`
+ * responda con el mensaje de negocio tal cual.
  */
-function detalleDelCambio(
-  antes: { rol: string; activo: boolean; secciones?: string[] | null },
-  despues: { rol: string; activo: boolean; secciones?: string[] | null },
-  passwordCambiada: boolean,
-) {
-  const detalle: Record<string, unknown> = {}
-
-  if (passwordCambiada) detalle.passwordCambiada = true
-  if (antes.rol !== despues.rol) detalle.rol = `${antes.rol} -> ${despues.rol}`
-  if (antes.activo !== despues.activo) detalle.estado = despues.activo ? 'activado' : 'desactivado'
-
-  const seccionesAntes = antes.secciones ?? 'las de su rol'
-  const seccionesDespues = despues.secciones ?? 'las de su rol'
-  if (JSON.stringify(seccionesAntes) !== JSON.stringify(seccionesDespues)) {
-    detalle.secciones = { antes: seccionesAntes, despues: seccionesDespues }
+async function guardarDejandoRastro(
+  objetivo: Usuario,
+  datos: z.infer<typeof cambioSchema>,
+  firma: Firma,
+): Promise<Usuario> {
+  let usuario: Usuario
+  try {
+    usuario = await usuarioRepository.actualizar(objetivo.id, datos)
+  } catch (error) {
+    if (datos.usuario !== undefined && datos.usuario !== objetivo.usuario) {
+      const motivo = error instanceof Error ? error.message : 'no se pudo guardar'
+      await registrarApuntes([apunteDeRenombradoFallido(objetivo, datos.usuario, motivo)], firma)
+    }
+    throw error
   }
 
-  return detalle
+  await registrarApuntes(
+    apuntesDeEdicion({ antes: objetivo, despues: usuario, passwordCambiada: datos.password !== undefined }),
+    firma,
+  )
+
+  return usuario
 }

@@ -16,14 +16,16 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Clock, CornersIn, CornersOut, SpeakerHigh, SpeakerX } from '@phosphor-icons/react/dist/ssr'
+import { Clock } from '@phosphor-icons/react/dist/ssr'
 import type { EventoTurno } from '@/lib/realtime/hub'
 import { crearCanalEnVivo, type EstadoConexionEnVivo } from '@/lib/hooks'
 import { CONFIGURACION_INICIAL } from '@/lib/turnos/configuracion-inicial'
 import type { CasillaPantalla, ConfiguracionSistema } from '@/lib/turnos/types'
 import { CampanaDeLlamado, sonarCampana } from '@/lib/turnos/anuncio'
 import { Isotipo, NOMBRE_INSTITUCION, NOMBRE_SISTEMA } from '@/components/brand/Marca'
-import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
+import Cartelera from './Cartelera'
+import ControlesPantalla from './ControlesPantalla'
+import FondoPantalla from './FondoPantalla'
 
 /** Cuanto dura el resalte visual de la casilla recien llamada, en milisegundos. */
 const MS_RESALTE = 8000
@@ -78,7 +80,20 @@ function casillaLibreDesde(casilla: CasillaPantalla): CasillaPantalla {
   }
 }
 
-function Reloj() {
+/**
+ * La hora actual, refrescada cada quince segundos.
+ *
+ * Vive aparte del `Reloj` porque los DOS diseños de pantalla la necesitan —la
+ * cuadricula la pinta abajo a la derecha y la cartelera arriba— y tener dos
+ * temporizadores para el mismo dato significa que, con un televisor encendido
+ * toda la jornada, los dos acaban marcando minutos distintos.
+ *
+ * Arranca en `null` a proposito: la hora del servidor y la del televisor no
+ * tienen por que coincidir, y pintarla antes de que monte el componente haria
+ * que React se quejara de que el HTML del servidor no cuadra con el del
+ * navegador.
+ */
+function useAhora() {
   const [ahora, setAhora] = useState<Date | null>(null)
 
   useEffect(() => {
@@ -87,13 +102,24 @@ function Reloj() {
     return () => clearInterval(id)
   }, [])
 
-  if (!ahora) return null
+  return ahora
+}
 
-  const hora = new Intl.DateTimeFormat('es-CO', {
+/** La hora en formato "HH:MM", en hora de Colombia. */
+function horaColombiana(ahora: Date) {
+  return new Intl.DateTimeFormat('es-CO', {
     hour: '2-digit',
     minute: '2-digit',
     timeZone: 'America/Bogota',
   }).format(ahora)
+}
+
+function Reloj() {
+  const ahora = useAhora()
+
+  if (!ahora) return null
+
+  const hora = horaColombiana(ahora)
   const fecha = new Intl.DateTimeFormat('es-CO', {
     day: 'numeric',
     month: 'long',
@@ -105,7 +131,7 @@ function Reloj() {
     <div className="flex items-center gap-3">
       <Clock size={38} weight="thin" className="text-slate-400" />
       <div className="leading-tight">
-        <p className="text-2xl font-bold tabular-nums text-slate-700">{hora}</p>
+        <p className="text-2xl font-semibold tabular-nums tracking-[-0.01em] text-slate-700">{hora}</p>
         <p className="text-sm font-bold text-slate-500">{fecha}</p>
       </div>
     </div>
@@ -127,12 +153,28 @@ function Reloj() {
 const Casilla = memo(function Casilla({ casilla, resaltada }: { casilla: CasillaPantalla; resaltada: boolean }) {
   const ocupada = Boolean(casilla.codigo)
 
+  /*
+   * LA CASILLA SE LEE COMO UNA FICHA FISICA COLGADA EN LA PARED.
+   *
+   * Tres cambios, todos pensados para verse A VARIOS METROS:
+   *
+   * - Esquinas mas redondas (24px). A la distancia de una sala de espera, una
+   *   esquina apretada se percibe casi recta y la ficha parece un recuadro
+   *   dibujado; una curva amplia se sigue leyendo como curva y da el aspecto
+   *   de objeto.
+   * - Sombra en dos capas en vez de una difusa. Levanta la ficha del fondo de
+   *   verdad, en lugar de dejarle un halo gris alrededor.
+   * - El aro del turno recien llamado pasa a 4px y verde esmeralda pleno: era
+   *   de 2px, y a esa distancia, contra el blanco, practicamente no se
+   *   distinguia del borde normal. Es LA senal de la pantalla —"te toca a
+   *   ti"— y tiene que ganar sin ninguna duda.
+   */
   return (
     <div
-      className={`flex h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-white shadow-[0_2px_10px_rgba(10,38,52,.08)] ring-1 transition-all duration-500 ${
+      className={`flex h-full min-h-0 flex-col overflow-hidden rounded-[1.5rem] bg-white transition-all duration-500 ${
         ocupada && resaltada
-          ? 'ring-2 ring-emerald-400 motion-safe:animate-[pulse_1s_ease-in-out_2]'
-          : 'ring-slate-200'
+          ? 'shadow-[0_0_0_4px_rgb(52,211,153),0_12px_32px_rgba(10,38,52,.18)] motion-safe:animate-[pulse_1s_ease-in-out_2]'
+          : 'shadow-[0_0_0_1px_rgba(10,38,52,.07),0_4px_14px_rgba(10,38,52,.07)]'
       }`}
     >
       {/*
@@ -141,9 +183,16 @@ const Casilla = memo(function Casilla({ casilla, resaltada }: { casilla: Casilla
         que se muestra completo y no un numero suelto. Se deja envolver en dos
         lineas antes que recortarlo.
       */}
+      {/*
+        El rotulo del consultorio respira mas (py-3) y afloja el espaciado de
+        letras: en mayusculas, en negra maxima y con `tracking-wide`, a tamano
+        grande las palabras se estiraban tanto que costaba leerlas de un golpe.
+        Un espaciado corto y peso 800 —firme, pero no macizo— se lee antes
+        desde lejos, que es todo lo que importa aqui.
+      */}
       <div
-        className={`shrink-0 px-3 py-2.5 text-center text-[clamp(0.85rem,calc(2.7vmin*var(--escala)),2.1rem)] font-black uppercase leading-tight tracking-wide ${
-          ocupada ? 'bg-brand-100 text-brand-900' : 'bg-slate-100 text-slate-400'
+        className={`shrink-0 px-3 py-3 text-center text-[clamp(0.85rem,calc(2.7vmin*var(--escala)),2.1rem)] font-extrabold uppercase leading-tight tracking-[0.02em] ${
+          ocupada ? 'bg-brand-100 text-brand-900' : 'bg-slate-100/80 text-slate-400'
         }`}
       >
         <span className="line-clamp-2 text-balance">{casilla.moduloNombre}</span>
@@ -152,7 +201,20 @@ const Casilla = memo(function Casilla({ casilla, resaltada }: { casilla: Casilla
       {ocupada ? (
         <>
           <div className="grid min-h-0 flex-1 place-items-center bg-brand-950 px-2 py-[clamp(0.5rem,calc(2vmin*var(--escala)),1.4rem)]">
-            <span className="text-[clamp(1.6rem,calc(9vmin*var(--escala)),6rem)] font-black leading-none tracking-[-0.03em] text-white">
+            {/*
+              EL TURNO ES EL DATO DE LA PANTALLA. Se aprieta mas (-0.045em) y
+              lleva cifras de ancho fijo.
+
+              Lo del ancho fijo no es un detalle: la casilla se refresca sola,
+              y con cifras proporcionales el numero CAMBIA DE ANCHO al pasar
+              de "A-11" a "A-08", asi que el turno daba un salto lateral a
+              cada actualizacion. Desde la sala se ve como un parpadeo raro.
+              Con ancho fijo se queda clavado en su sitio.
+            */}
+            <span
+              data-cifras
+              className="text-[clamp(1.6rem,calc(9vmin*var(--escala)),6rem)] font-black leading-none tracking-[-0.045em] text-white"
+            >
               {casilla.codigo}
             </span>
           </div>
@@ -186,6 +248,22 @@ export default function PantallaPublicaPage() {
   const [anchoVentana, setAnchoVentana] = useState(1920)
 
   const [configuracion, setConfiguracion] = useState<ConfiguracionSistema>(CONFIGURACION_POR_DEFECTO)
+
+  /**
+   * Si el servidor ya dijo QUE ASPECTO tiene que tener esta pantalla.
+   *
+   * EXISTE PARA NO ENSEÑAR EL DISEÑO EQUIVOCADO. `CONFIGURACION_POR_DEFECTO`
+   * trae `disenoPantalla: 'CUADRICULA'`, asi que sin esto el televisor pintaba
+   * la cuadricula en el primer dibujado y saltaba a la cartelera un instante
+   * despues, cuando llegaba la respuesta. En la sala de espera eso se ve como
+   * un parpadeo a la configuracion anterior, y parece que el cambio no se
+   * hubiera guardado.
+   *
+   * No afecta al resto de la configuracion: el volumen o el mensaje del pie
+   * pueden empezar con el valor de por defecto sin que se note. Lo que no
+   * admite provisionalidad es el aspecto, porque cambia la pantalla entera.
+   */
+  const [configuracionCargada, setConfiguracionCargada] = useState(false)
   // Una entrada por modulo activo, en el mismo orden que entrega el servidor.
   // Nunca se reordena ni se quita por tiempo: solo cambia el contenido de la
   // casilla cuyo modulo llamo o se libero.
@@ -193,6 +271,10 @@ export default function PantallaPublicaPage() {
   // Un solo modulo resaltado a la vez: el foco sigue al llamado mas reciente,
   // no se queda pegado en el anterior mientras ya se esta llamando a otro.
   const [resaltado, setResaltado] = useState<string | null>(null)
+
+  // Un unico reloj para los dos diseños (ver `useAhora`). La cuadricula lo
+  // pinta con su propio `Reloj` abajo; la cartelera lo recibe ya formateado.
+  const ahora = useAhora()
 
   // Inicializacion perezosa: una sola campana por montaje, sin recrearla en
   // cada render. Ella misma reparte la rafaga: si varios consultorios llaman
@@ -248,11 +330,21 @@ export default function PantallaPublicaPage() {
       .then((respuesta) => respuesta.json())
       .then((estado) => {
         if (estado.configuracion) setConfiguracion(estado.configuracion)
+        // Ya se sabe que aspecto toca. Se marca aunque la respuesta venga sin
+        // configuracion: en ese caso la buena es la de por defecto, y dejarlo
+        // sin marcar mantendria el televisor esperando para siempre.
+        setConfiguracionCargada(true)
         if (eventosAplicadosRef.current !== eventosAlPedir) return
 
         setCasillas(estado.casillas ?? [])
       })
-      .catch(() => {})
+      .catch(() => {
+        // Ni siquiera se pudo preguntar (servidor caido, red). Se sigue
+        // adelante con la configuracion de por defecto: una sala de espera con
+        // la pantalla en blanco es peor que una con el diseño de siempre, y el
+        // aviso de conexion perdida ya lo da el indicador.
+        setConfiguracionCargada(true)
+      })
   }, [])
 
   useEffect(() => {
@@ -317,6 +409,15 @@ export default function PantallaPublicaPage() {
       if (sonidoRef.current && configuracionRef.current.audioActivo) {
         campana.anunciar(configuracionRef.current.volumen)
       }
+      return
+    }
+
+    // El administrador guardo la configuracion: puede haber cambiado el diseño
+    // de la pantalla, el mensaje del pie, el volumen o la imagen de fondo. No
+    // viene nada dentro del evento (este canal no tiene sesion): se vuelve a
+    // pedir el estado, que es el unico sitio que decide que sale hacia aqui.
+    if (evento.tipo === 'configuracion.cambiada') {
+      cargarEstado()
       return
     }
 
@@ -506,9 +607,83 @@ export default function PantallaPublicaPage() {
     )
   }
 
+  /*
+   * EL ASPECTO LO ELIGE EL ADMINISTRADOR, Y SE DECIDE AQUI.
+   *
+   * Los dos diseños reciben EXACTAMENTE los mismos datos y el mismo resalte:
+   * este punto solo escoge como se dibujan. Por eso cambiar de diseño no puede
+   * alterar a quien se llama, en que orden, ni cuando suena la campana —todo
+   * eso ya paso mas arriba, antes de llegar a esta linea.
+   *
+   * La campana y la resincronizacion viven en el componente padre justamente
+   * para eso: si cada diseño llevara la suya, cambiar de aspecto podria dejar
+   * una sala sin aviso sonoro y nadie lo notaria hasta que un paciente se
+   * pasara el turno.
+   */
+  /*
+   * Mientras no se sepa el aspecto, NO se dibuja ninguno de los dos.
+   *
+   * Es una espera de milisegundos contra el propio servidor, y se resuelve
+   * sola tanto si contesta como si falla (ver `cargarEstado`). Preferir un
+   * instante de fondo liso a pintar la cuadricula y saltar a la cartelera:
+   * el salto se lee desde la sala como un fallo del sistema.
+   */
+  if (!configuracionCargada) {
+    return <main className="h-screen bg-[var(--turnos-bg)]" aria-busy="true" />
+  }
+
+  if (configuracion.disenoPantalla === 'CARTELERA') {
+    return (
+      <Cartelera
+        casillas={casillas}
+        configuracion={configuracion}
+        resaltado={resaltado}
+        hora={ahora ? horaColombiana(ahora) : null}
+        controles={
+          <ControlesPantalla
+            conexion={conexion}
+            sonidoActivo={sonidoActivo}
+            alternarSonido={() => setSonidoActivo((v) => !v)}
+            pantallaCompleta={pantallaCompleta}
+            alternarPantallaCompleta={alternarPantallaCompleta}
+            tono="oscuro"
+          />
+        }
+      />
+    )
+  }
+
+  /*
+   * EL FONDO DEJA DE SER GRIS Y PASA AL AZUL MUY CLARO DE LA CASA.
+   *
+   * Con `bg-slate-100`, un gris neutro, las fichas blancas se recortaban poco
+   * y la pantalla entera se veia apagada —"de computador"—. El fondo
+   * institucional (el mismo `--turnos-bg` del resto del sistema) es un azul lo
+   * bastante claro para no competir y lo bastante tenido para que el blanco de
+   * las fichas salte hacia delante. Ademas la sala de espera pasa a verse de la
+   * misma familia que el resto de pantallas del hospital.
+   */
   return (
-    <main className="flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900">
-      <header className="flex shrink-0 items-center justify-between gap-6 border-b border-slate-200 bg-white px-8 py-4 shadow-[0_1px_0_rgba(10,38,52,.04)]">
+    <main className="relative flex h-screen flex-col overflow-hidden bg-[var(--turnos-bg)] text-slate-900">
+      {/*
+        La MISMA imagen institucional que la cartelera, pero mucho mas atenuada
+        (ver `FondoPantalla`): aqui la pantalla la llenan fichas blancas y la
+        foto solo asoma entre ellas. A esa intensidad aporta color y textura de
+        fondo —la sala deja de verse como una hoja de calculo— sin quitarle ni
+        un gramo de atencion a los turnos, que es lo unico que el paciente
+        viene a leer.
+      */}
+      <FondoPantalla ruta={configuracion.fondoPantalla} intensidad="cuadricula" />
+
+      {/*
+        La cabecera se separa con su propia sombra en lugar de con una linea
+        de 1px: a distancia, un filete gris no se ve, y la cabecera parecia
+        pegada al contenido. Con sombra se lee como una barra apoyada encima.
+
+        Semitransparente con desenfoque, para que la imagen de fondo se intuya
+        por detras en vez de cortarse en seco contra una franja blanca.
+      */}
+      <header className="relative z-10 flex shrink-0 items-center justify-between gap-6 bg-white/85 px-8 py-5 shadow-[0_1px_0_rgba(10,38,52,.06),0_6px_18px_rgba(10,38,52,.05)] backdrop-blur-md">
         <div className="flex items-center gap-4">
           <Isotipo size={56} />
           <div className="leading-tight">
@@ -520,23 +695,15 @@ export default function PantallaPublicaPage() {
         </div>
 
         <div className="flex items-center gap-6">
-          <IndicadorConexion estado={conexion} />
           <Reloj />
-          <button
-            onClick={() => setSonidoActivo((v) => !v)}
-            className="grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-slate-600 transition hover:bg-slate-200"
-            aria-label={sonidoActivo ? 'Desactivar sonido' : 'Activar sonido'}
-          >
-            {sonidoActivo ? <SpeakerHigh size={22} weight="bold" /> : <SpeakerX size={22} weight="bold" />}
-          </button>
-          <button
-            onClick={alternarPantallaCompleta}
-            className="grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-slate-600 transition hover:bg-slate-200"
-            aria-label={pantallaCompleta ? 'Salir de pantalla completa' : 'Ver en pantalla completa'}
-            title={pantallaCompleta ? 'Salir de pantalla completa' : 'Ver en pantalla completa'}
-          >
-            {pantallaCompleta ? <CornersIn size={22} weight="bold" /> : <CornersOut size={22} weight="bold" />}
-          </button>
+          {/* Los mismos mandos que la cartelera, desde un solo sitio. */}
+          <ControlesPantalla
+            conexion={conexion}
+            sonidoActivo={sonidoActivo}
+            alternarSonido={() => setSonidoActivo((v) => !v)}
+            pantallaCompleta={pantallaCompleta}
+            alternarPantallaCompleta={alternarPantallaCompleta}
+          />
         </div>
       </header>
 
@@ -557,13 +724,13 @@ export default function PantallaPublicaPage() {
         encoge la letra a medida que hay mas, para que sigan cabiendo legibles
         en vez de desbordar.
       */}
-      <div className="min-h-0 flex-1 overflow-hidden p-4">
+      <div className="relative z-10 min-h-0 flex-1 overflow-hidden p-6">
         {casillas.length === 0 ? (
           <div className="grid h-full place-items-center">
             <p className="text-2xl font-bold text-slate-400">Aun no hay consultorios ni ventanillas activos.</p>
           </div>
         ) : (
-          <div className="flex h-full flex-col gap-4" style={{ '--escala': escala } as React.CSSProperties}>
+          <div className="flex h-full flex-col gap-6" style={{ '--escala': escala } as React.CSSProperties}>
             {grupos.map((grupo, indice) => {
               const filas = filasPorGrupo[indice]
 
@@ -580,11 +747,23 @@ export default function PantallaPublicaPage() {
                 >
                   {/* El nombre del servicio encabeza su bloque; lo que de verdad
                       guia al paciente es el consultorio de cada tarjeta. */}
-                  <h2 className="shrink-0 rounded-lg bg-brand-100 px-4 py-2 text-[clamp(1.15rem,3vmin,2.6rem)] font-black uppercase leading-tight tracking-[0.04em] text-brand-900">
+                  {/*
+                    El nombre del servicio deja de ser una barra de color de
+                    lado a lado y pasa a ser una ETIQUETA del ancho de su
+                    texto.
+
+                    Ocupando toda la fila competia con las fichas, que es lo
+                    que el paciente tiene que mirar; ajustada al contenido y
+                    con forma de pastilla se lee como un rotulo que clasifica
+                    el bloque, no como otro elemento mas reclamando atencion.
+                  */}
+                  <h2 className="w-fit shrink-0 rounded-full bg-brand-100 px-5 py-1.5 text-[clamp(1.15rem,3vmin,2.6rem)] font-extrabold uppercase leading-tight tracking-[0.03em] text-brand-900">
                     {grupo.nombre}
                   </h2>
+                  {/* Mas aire entre fichas: pegadas, la pared de tarjetas se
+                      lee como una sola mancha desde lejos. */}
                   <div
-                    className="grid min-h-0 flex-1 gap-3"
+                    className="grid min-h-0 flex-1 gap-4"
                     style={{
                       // Numero de columnas FIJO y calculado (ver
                       // `distribucionEquilibrada`), no `auto-fill`: con ocho
@@ -609,7 +788,7 @@ export default function PantallaPublicaPage() {
       </div>
 
       {configuracion.mensajePie ? (
-        <footer className="shrink-0 overflow-hidden whitespace-nowrap bg-brand-800 px-8 py-2.5 text-center text-lg font-bold text-white">
+        <footer className="relative z-10 shrink-0 overflow-hidden whitespace-nowrap bg-brand-950 px-8 py-3 text-center text-lg font-medium tracking-[0.01em] text-white">
           {configuracion.mensajePie}
         </footer>
       ) : null}

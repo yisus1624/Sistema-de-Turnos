@@ -16,9 +16,17 @@ export function Card({ className, padded = true, surface = true, children, ...pr
   return (
     <div
       className={cn(
-        'rounded-2xl',
-        surface && 'border border-slate-200 bg-white shadow-[0_8px_18px_rgba(15,23,42,.04)]',
-        padded && 'p-5',
+        'rounded-[1.25rem]',
+        /*
+         * El borde se aclara y la sombra pasa a dos capas (ver `--sombra-md`
+         * en globals.css). El borde gris marcado dibujaba una caja; lo que
+         * tiene que verse es una superficie apoyada sobre el fondo, y de eso
+         * se encarga la sombra. El borde se queda, mas tenue, porque es lo
+         * unico que separa la tarjeta del fondo para quien mira de lejos o en
+         * una pantalla con poco contraste.
+         */
+        surface && 'border border-slate-200/70 bg-white shadow-[var(--sombra-md)]',
+        padded && 'p-6',
         className,
       )}
       {...props}
@@ -30,7 +38,7 @@ export function Card({ className, padded = true, surface = true, children, ...pr
 
 export function CardHeader({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4', className)} {...props}>
+    <div className={cn('flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-6 py-5', className)} {...props}>
       {children}
     </div>
   )
@@ -38,7 +46,7 @@ export function CardHeader({ className, children, ...props }: React.HTMLAttribut
 
 export function CardTitle({ className, children, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
   return (
-    <h2 className={cn('text-base font-black tracking-[-0.02em] text-brand-950', className)} {...props}>
+    <h2 className={cn('text-base font-semibold tracking-[-0.015em] text-brand-950', className)} {...props}>
       {children}
     </h2>
   )
@@ -46,7 +54,7 @@ export function CardTitle({ className, children, ...props }: React.HTMLAttribute
 
 export function CardContent({ className, padded = true, children, ...props }: CardProps) {
   return (
-    <div className={cn(padded && 'p-5', className)} {...props}>
+    <div className={cn(padded && 'p-6', className)} {...props}>
       {children}
     </div>
   )

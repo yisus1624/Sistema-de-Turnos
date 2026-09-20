@@ -69,7 +69,7 @@ export default function LoginPage() {
       <form onSubmit={form.handleSubmit(iniciarSesion)} className="w-full">
         <div className="text-center lg:text-left">
           <Isotipo size={44} className="mx-auto text-brand-600 lg:mx-0" />
-          <h1 className="mt-4 text-2xl font-black tracking-[-0.03em] text-brand-950">Iniciar sesion</h1>
+          <h1 className="mt-4 text-2xl font-semibold tracking-[-0.03em] text-brand-950">Iniciar sesion</h1>
           <p className="mt-1.5 text-sm font-medium text-slate-500">
             Acceso para funcionarios del {NOMBRE_INSTITUCION}.
           </p>
@@ -137,7 +137,7 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={cargando}
-          className="mt-6 h-12 w-full rounded-xl bg-brand-600 text-sm font-black text-white transition hover:bg-brand-700 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-6 h-12 w-full rounded-xl bg-brand-600 text-sm font-semibold text-white transition hover:bg-brand-700 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {cargando ? 'Validando acceso...' : 'Entrar'}
         </button>

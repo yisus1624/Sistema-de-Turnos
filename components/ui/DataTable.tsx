@@ -48,10 +48,10 @@ export function DataTable<T>({
           <div key={getRowKey(row)} className="space-y-3 p-4">
             {columns.map((column, index) => (
               <div key={column.key} className={cn(index === 0 ? 'block' : 'flex items-start justify-between gap-4')}>
-                <span className={cn('text-[11px] font-black uppercase text-slate-500', index === 0 && 'mb-1 block')}>
+                <span className={cn('text-[11px] font-semibold uppercase tracking-[0.05em] text-slate-500', index === 0 && 'mb-1 block')}>
                   {column.header}
                 </span>
-                <div className={cn('min-w-0 text-sm font-semibold text-slate-800', index === 0 ? 'text-base font-black text-brand-950' : 'text-right')}>
+                <div className={cn('min-w-0 text-sm font-medium text-slate-800', index === 0 ? 'text-base font-semibold text-brand-950' : 'text-right')}>
                   {column.cell(row)}
                 </div>
               </div>
@@ -65,7 +65,7 @@ export function DataTable<T>({
           <thead className="bg-slate-50">
             <tr>
               {columns.map((column) => (
-                <th key={column.key} className={cn('whitespace-nowrap px-4 py-3 text-left text-xs font-black text-slate-500', column.className)}>
+                <th key={column.key} className={cn('whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.045em] text-slate-500', column.className)}>
                   {column.header}
                 </th>
               ))}

@@ -66,6 +66,17 @@ function resumenDeAcceso(formulario: Formulario) {
 }
 
 /**
+ * Si cambio el nombre de entrada, se dice en el aviso.
+ *
+ * Es el dato que el funcionario necesita para volver a entrar mañana, y quien
+ * lo cambio tiene que salir de esta pantalla sabiendo cual quedo.
+ */
+function avisoDeRenombrado(anterior: Usuario, formulario: Formulario) {
+  if (anterior.usuario === formulario.usuario) return ''
+  return ` · ahora inicia sesion como "${formulario.usuario}"`
+}
+
+/**
  * Que puede usar cada funcionario, en la tabla.
  *
  * FALTABA, Y ESO HACIA PARECER QUE NADIE TENIA PERMISOS RECORTADOS. La lista
@@ -216,7 +227,10 @@ export default function UsuariosClient({
         // El aviso dice QUE QUEDO GUARDADO, no solo que se guardo: los permisos
         // son lo que mas se revisa dos veces, y confirmarlos aqui evita tener
         // que volver a abrir la ficha para comprobarlo.
-        toast.success('Usuario actualizado', `${formulario.nombre} · ${resumenDeAcceso(formulario)}`)
+        toast.success(
+          'Usuario actualizado',
+          `${formulario.nombre} · ${resumenDeAcceso(formulario)}${avisoDeRenombrado(editando, formulario)}`,
+        )
       } else {
         await pedir('/api/usuarios', {
           method: 'POST',
@@ -273,7 +287,7 @@ export default function UsuariosClient({
                     onClick={() => abrirEdicion(usuario)}
                     className="cursor-pointer hover:bg-slate-50"
                   >
-                    <td className="px-4 py-3 font-black text-brand-950">
+                    <td className="px-4 py-3 font-semibold text-brand-950">
                       {usuario.nombre}
                       {esYo ? <span className="ml-2 text-xs font-bold text-slate-400">(tu cuenta)</span> : null}
                     </td>
@@ -327,7 +341,22 @@ export default function UsuariosClient({
           </Campo>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Campo etiqueta="Usuario">
+            {/*
+              EL NOMBRE DE ENTRADA SE PUEDE CAMBIAR, y la ayuda lo dice.
+              Cambiarlo edita la cuenta, no la reemplaza: el historico de turnos
+              y el registro de actividad siguen colgando de la misma cuenta, y
+              el cambio queda apuntado con el nombre anterior y el nuevo. Sin
+              esa aclaracion, lo que se hacia era crear una cuenta nueva y
+              desactivar la vieja, que es justo lo que deja el rastro partido.
+            */}
+            <Campo
+              etiqueta="Usuario"
+              ayuda={
+                editando
+                  ? 'Con este nombre inicia sesion. Si lo cambias, la cuenta y su historico siguen siendo los mismos.'
+                  : undefined
+              }
+            >
               <Entrada
                 value={formulario.usuario}
                 onChange={(e) => setFormulario((f) => ({ ...f, usuario: e.target.value.toLowerCase() }))}
@@ -362,7 +391,7 @@ export default function UsuariosClient({
             <div className="rounded-xl border border-slate-200 p-3.5">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-xs font-black uppercase tracking-wide text-slate-600">Secciones que puede usar</p>
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-600">Secciones que puede usar</p>
                   <p className="mt-0.5 text-xs font-medium text-slate-400">
                     Deja el interruptor encendido para darle solo las secciones de operador, o apagalo para
                     elegir a mano, incluidas las de administracion.
@@ -403,7 +432,7 @@ export default function UsuariosClient({
                     un vistazo, antes de guardar y despues.
                   */}
                   <div className="rounded-lg bg-slate-50 px-3 py-2">
-                    <p className="text-xs font-black text-brand-900">
+                    <p className="text-xs font-medium text-brand-900">
                       {formulario.secciones.length} de {seccionesRepartibles.length} secciones marcadas
                     </p>
                     <p className="mt-0.5 text-xs leading-5 text-slate-500">
@@ -417,7 +446,7 @@ export default function UsuariosClient({
 
                   {gruposQuePuedeDar.map(({ grupo, items }) => (
                     <div key={grupo}>
-                      <p className="mb-1.5 text-[11px] font-black uppercase tracking-wide text-slate-400">
+                      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400">
                         {grupo}
                         {items[0].rol === 'ADMINISTRADOR' ? ' · administracion' : ''}
                       </p>
@@ -467,7 +496,11 @@ export default function UsuariosClient({
 
           <Campo
             etiqueta={editando ? 'Nueva contrasena' : 'Contrasena'}
-            ayuda={editando ? 'Dejala vacia para no cambiarla.' : 'Minimo 8 caracteres.'}
+            ayuda={
+              editando
+                ? 'Dejala vacia para no cambiarla. Cada funcionario puede cambiar la suya desde "Mi cuenta", sin que nadie mas la conozca.'
+                : 'Minimo 8 caracteres.'
+            }
           >
             <Entrada
               type="password"

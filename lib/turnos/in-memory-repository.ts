@@ -633,6 +633,38 @@ function exigirTurnoEnAtencion(turno: Turno, accion: 'atendido' | 'ausente') {
 }
 
 /** Arma la casilla que ve la pantalla publica, con el nombre ya enmascarado. */
+/**
+ * El turno que ese profesional llamara despues, o null si no queda nadie.
+ *
+ * Mismo criterio que `llamarSiguiente` y que `estadoPantalla`, y el mismo que
+ * la implementacion contra Postgres: el primero de su cola con los prioritarios
+ * delante (`ordenAtencion`).
+ */
+function proximoDelProfesional(profesionalId: string | null | undefined): string | null {
+  if (!profesionalId) return null
+
+  const hoy = diaColombia(ahoraISO())
+  const cola = estado.turnos
+    .filter(
+      (t) =>
+        t.estado === 'EN_ESPERA' &&
+        t.profesionalId === profesionalId &&
+        diaColombia(t.fechaGeneracion) === hoy,
+    )
+    .sort(ordenAtencion)
+
+  return cola[0]?.codigo ?? null
+}
+
+/**
+ * Arma la casilla que ve la pantalla publica. NO lleva datos del paciente.
+ *
+ * LLEVA TAMBIEN EL PROXIMO, por el mismo motivo que la version contra Postgres:
+ * esta casilla viaja por el canal en vivo en cada llamado y la pantalla
+ * reemplaza con ella la que tenia, asi que si no lo trajera, cada llamado
+ * borraria de la cartelera el aviso de "se estan preparando" de ese
+ * consultorio hasta la siguiente resincronizacion.
+ */
 function casillaDeTurno(turno: Turno): CasillaPantalla {
   const modulo = buscarModulo(turno.moduloId!)
   const servicio = buscarServicio(turno.servicioId)
@@ -647,6 +679,7 @@ function casillaDeTurno(turno: Turno): CasillaPantalla {
     codigo: turno.codigo,
     horaLlamado: turno.horaLlamado ?? null,
     vecesLlamado: turno.vecesLlamado,
+    siguienteCodigo: proximoDelProfesional(turno.profesionalId),
   }
 }
 
@@ -1449,12 +1482,49 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       hayAgendaDelDia: citasRegistradasHoy > 0,
     })
 
+    /*
+     * EL PROXIMO DE CADA DOCTOR, para poder decir quien entra despues.
+     *
+     * Mismo criterio que la implementacion contra Postgres y que
+     * `llamarSiguiente`: el primero de la cola de ESE profesional, con los
+     * prioritarios delante (`ordenAtencion`). Si las dos implementaciones
+     * ordenaran distinto, las pruebas darian por bueno un orden que el
+     * hospital no usa.
+     */
+    const proximoPorProfesional = new Map<string, Turno>()
+    for (const turno of estado.turnos) {
+      if (turno.estado !== 'EN_ESPERA' || !turno.profesionalId) continue
+      if (diaColombia(turno.fechaGeneracion) !== hoy) continue
+
+      const actual = proximoPorProfesional.get(turno.profesionalId)
+      if (!actual || ordenAtencion(turno, actual) < 0) {
+        proximoPorProfesional.set(turno.profesionalId, turno)
+      }
+    }
+
+    /*
+     * Quien entra despues en esta casilla, o null si no se puede prometer.
+     *
+     * En una ventanilla de fila compartida no hay doctor y la cola es de
+     * todos: ese turno se lo lleva la ventanilla que pulse antes, asi que
+     * anunciarlo aqui mandaria al paciente a la ventanilla equivocada (ver
+     * `siguienteCodigo` en `types.ts`).
+     */
+    const proximoDeLaCasilla = (moduloId: string) => {
+      const doctor = profesionalDeTurnoEn(
+        moduloId,
+        citasRegistradasHoy > 0 ? profesionalesConCita : undefined,
+      )
+      if (!doctor) return null
+      return proximoPorProfesional.get(doctor.id)?.codigo ?? null
+    }
+
     const casillas = modulosActivos
       .filter((m) => visibles.has(m.id))
       .map((modulo) => {
         const turno = ultimoPorModulo.get(modulo.id)
 
-        if (turno) return casillaDeTurno(turno)
+        if (turno) return { ...casillaDeTurno(turno), siguienteCodigo: proximoDeLaCasilla(modulo.id) }
 
         const servicio = modulo.servicioId ? buscarServicio(modulo.servicioId) : null
         // Solo profesionales ACTIVOS: si un doctor se dio de baja y su ficha
@@ -1482,6 +1552,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
           codigo: null,
           horaLlamado: null,
           vecesLlamado: 0,
+          siguienteCodigo: proximoDeLaCasilla(modulo.id),
         }
       })
 
@@ -1845,6 +1916,13 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     }
 
     estado.configuracion = { ...siguiente, actualizadoEn: marcaSiguiente(estado.configuracion.actualizadoEn) }
+
+    // Igual que la implementacion contra Postgres: las pantallas abiertas se
+    // enteran al instante en vez de esperar a su resincronizacion. Las dos
+    // cumplen el mismo contrato y tienen que comportarse igual, o las pruebas
+    // darian por bueno algo que en el hospital no pasa.
+    realtimeHub.publish({ tipo: 'configuracion.cambiada' })
+
     return { ...estado.configuracion }
   }
 
