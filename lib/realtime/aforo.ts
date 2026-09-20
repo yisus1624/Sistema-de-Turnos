@@ -41,6 +41,20 @@ function topeDelEntorno(variable: string, porDefecto: number): number {
   return Number.isInteger(declarado) && declarado > 0 ? declarado : porDefecto
 }
 
+/**
+ * Cuantas conexiones en vivo admite el servidor como maximo.
+ *
+ * LO NECESITA TAMBIEN EL HUB, y de ahi que este exportado. Cada conexion SSE
+ * engancha exactamente un oyente al hub, que tenia su propio tope escrito a
+ * mano (100) mientras el aforo admitia 200: el sistema estaba configurado para
+ * pasarse de su propio umbral de aviso, y al hacerlo Node empezaba a escupir
+ * `MaxListenersExceededWarning` con traza en cada suscripcion. Dos numeros que
+ * tienen que moverse juntos no pueden vivir en dos archivos.
+ */
+export function topeDeConexionesEnVivo(): number {
+  return topeDelEntorno('TURNOS_MAX_CANAL_EN_VIVO', MAXIMO_POR_DEFECTO)
+}
+
 /** Una plaza ocupada en el canal. Soltarla es idempotente. */
 export interface PlazaDelCanal {
   soltar: () => void
@@ -153,7 +167,7 @@ function crearPlaza(origen: string | null): PlazaDelCanal {
  * tope global (ver la nota de `MAXIMO_POR_ORIGEN_POR_DEFECTO`).
  */
 export function ocuparPlaza(origen: string | null): ResultadoDeAforo {
-  if (aforo.total >= topeDelEntorno('TURNOS_MAX_CANAL_EN_VIVO', MAXIMO_POR_DEFECTO)) {
+  if (aforo.total >= topeDeConexionesEnVivo()) {
     return { admitida: false, motivo: 'aforo_global' }
   }
 

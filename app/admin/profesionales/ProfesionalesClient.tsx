@@ -3,14 +3,33 @@
 /**
  * Catalogo de profesionales (doctores).
  *
- * Mientras la API del hospital no exista, los doctores se dan de alta a mano
- * aqui. Dos reglas del dominio que esta pantalla hace cumplir:
+ * LOS DOCTORES NO SE CREAN AQUI: los trae la carga diaria del reporte del
+ * hospital, que le abre la ficha a cada nombre que aparece en el archivo. Esta
+ * pantalla es para CORREGIR esa ficha —el servicio, el consultorio, la jornada
+ * habitual— y para desactivar a quien ya no atiende. Dar de alta uno a mano no
+ * ayudaba y si hacia dano: el nombre tecleado casi nunca coincide letra por
+ * letra con el del archivo, y en la siguiente carga el sistema no ve al mismo
+ * doctor sino a dos, cada uno con la mitad de las citas.
+ *
+ * Dos reglas del dominio que esta pantalla hace cumplir:
  *
  * 1. Un doctor no se borra, se DESACTIVA: su nombre quedo escrito en los
  *    turnos que ya llamo y borrarlo dejaria ese rastro huerfano.
  * 2. Solo existe en servicios que atienden POR CITA. En los de ventanilla la
  *    fila es compartida y la toma quien este libre, asi que un doctor asignado
  *    ahi no tendria pacientes propios a quien llamar.
+ *
+ * LA LISTA ES LA DEL DIA, NO EL CATALOGO ENTERO. Esto es lo que cambio: antes
+ * la tabla sacaba a todos los doctores registrados y a cada uno le ponia al
+ * lado "no trabaja". Un dia sin agenda cargada se veia, entonces, como una
+ * lista llena de doctores —veinte filas— cuando la respuesta correcta era que
+ * hoy no atiende ninguno. El catalogo crece con cada carga y nunca se apaga
+ * nada, asi que esa lista solo iba a ir a peor.
+ *
+ * Ahora la tabla arranca con los que ese dia TIENEN citas, y el catalogo
+ * completo esta a un boton. No se esconde en silencio: el boton dice cuantos
+ * quedan fuera, porque quien busca a un doctor concreto para editarlo tiene
+ * que poder llegar a el aunque hoy no venga.
  *
  * El enlace con el que cada doctor entra a su consultorio NO se maneja aqui,
  * sino en "Enlaces de consultorio". Van separados a proposito: repartir
@@ -19,26 +38,47 @@
  * la agenda a todo el hospital.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowsClockwise, IdentificationCard, Plus } from '@phosphor-icons/react/dist/ssr'
+import { createElement, useCallback, useEffect, useMemo, useState } from 'react'
+import type { Icon } from '@phosphor-icons/react'
+import {
+  Broom,
+  CalendarBlank,
+  CalendarCheck,
+  CalendarX,
+  CaretLeft,
+  CaretRight,
+  Clock,
+  Eye,
+  EyeSlash,
+  Faders,
+  IdentificationCard,
+  MagnifyingGlass,
+  MapPin,
+  MoonStars,
+  Prohibit,
+  Sun,
+  User,
+  UsersThree,
+} from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import EmptyState from '@/components/ui/EmptyState'
+import { TarjetaIndicador, TONOS_INDICADOR } from '@/components/ui/TarjetaIndicador'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { useValorConRetraso } from '@/lib/hooks'
 import type {
   Jornada,
   JornadaDelDia,
   Modulo,
   Profesional,
-  ResumenRecalculo,
   Servicio,
 } from '@/lib/turnos/types'
 
-const COLUMNAS = ['Profesional', 'Servicio', 'Ese dia', 'Jornada habitual', 'Consultorio', 'Estado']
+const COLUMNAS = ['Profesional', 'Especialidad', 'Jornada', 'Horario', 'Consultorio', 'Estado']
 
 type FormularioDoctor = {
   nombre: string
@@ -63,7 +103,7 @@ const DOCTOR_VACIO: FormularioDoctor = {
  *
  * NO ES LA JORNADA DE UN DIA. El mismo medico hace el lunes completo, el
  * martes solo la mañana y el miercoles no viene, y eso no cabe en un campo.
- * La de cada dia sale de las citas de ese dia y se ve en la columna "Ese dia".
+ * La de cada dia sale de las citas de ese dia y es la que manda en la tabla.
  * Esta solo decide a que horas se le puede agendar el PRIMER paciente de un
  * dia que todavia esta vacio; en cuanto tiene una cita, mandan sus citas.
  */
@@ -73,66 +113,59 @@ const etiquetaJornada: Record<Jornada, string> = {
   COMPLETA: 'Dia completo',
 }
 
-const tonoJornada: Record<Jornada, 'amber' | 'blue' | 'green'> = {
-  MANANA: 'amber',
-  TARDE: 'blue',
-  COMPLETA: 'green',
+/**
+ * Como se ve cada jornada.
+ *
+ * El sol y la luna no son adorno: la jornada se busca recorriendo la columna
+ * de arriba abajo, y a ese ritmo la forma del icono se reconoce antes que la
+ * palabra. El dia completo lleva reloj porque no es "ni mañana ni tarde", es
+ * las dos.
+ */
+const estiloJornada: Record<Jornada, { icono: Icon; chip: string }> = {
+  MANANA: { icono: Sun, chip: 'bg-amber-50 text-amber-700 ring-amber-100' },
+  TARDE: { icono: MoonStars, chip: 'bg-acento-50 text-acento-700 ring-acento-100' },
+  COMPLETA: { icono: Clock, chip: 'bg-emerald-50 text-emerald-700 ring-emerald-100' },
 }
 
 /**
- * Lo que un doctor trabajo el dia que se esta mirando.
+ * El icono de una jornada, ya pintado.
  *
- * "NO TRABAJA" ES UNA RESPUESTA, NO UN HUECO. El doctor sin ni una cita ese
- * dia no vino, y decirlo asi es la mitad de lo que se vino a preguntar aqui.
- * El rango de horas debajo esta para poder mirar el veredicto y creerlo sin
- * abrir la parrilla.
+ * Devuelve el elemento y no el componente: guardar un componente en una
+ * variable durante el render es lo que prohibe la regla de React que vigila
+ * este proyecto, porque un componente que nace en cada render pierde su estado.
  */
-function EseDia({
-  jornada,
-  cargando,
-  error,
-  esFutura,
-}: {
-  jornada?: JornadaDelDia
-  cargando: boolean
-  /** No se pudo consultar: no es lo mismo que "no trabaja". */
-  error?: boolean
-  esFutura?: boolean
-}) {
-  if (cargando) return <span className="text-sm font-semibold text-slate-300">…</span>
-
-  // UN FALLO DE LA CONSULTA NO ES UNA RESPUESTA. El estado de error dejaba el
-  // mapa vacio, y la ausencia se pintaba como "No trabaja": ante un corte de
-  // red la tabla afirmaba, fila por fila, que ese dia no vino nadie.
-  if (error) {
-    return (
-      <div className="flex flex-col gap-0.5">
-        <Badge tone="amber">Sin dato</Badge>
-        <span className="text-xs font-semibold text-slate-400">no se pudo consultar</span>
-      </div>
-    )
-  }
-
-  if (!jornada?.jornada) {
-    return (
-      <div className="flex flex-col gap-0.5">
-        <Badge tone="slate">{esFutura ? 'Sin agenda' : 'No trabaja'}</Badge>
-        <span className="text-xs font-semibold text-slate-400">
-          {esFutura ? 'todavia sin citas' : 'sin citas ese dia'}
-        </span>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex flex-col gap-0.5">
-      <Badge tone={tonoJornada[jornada.jornada]}>{etiquetaJornada[jornada.jornada]}</Badge>
-      <span className="text-xs font-semibold text-slate-400">
-        {jornada.citas} cita(s) · {jornada.desde}–{jornada.hasta}
-      </span>
-    </div>
-  )
+function iconoDeJornada(jornada: Jornada, size: number) {
+  return createElement(estiloJornada[jornada].icono, { size, weight: 'fill' })
 }
+
+/**
+ * Color del disco de cada doctor, por su servicio.
+ *
+ * Se asigna por posicion del servicio en el catalogo, no al azar, para que el
+ * mismo doctor tenga siempre el mismo color: en una tabla larga, el color es
+ * lo que deja ver de un golpe que tres filas seguidas son del mismo servicio.
+ */
+const COLORES_SERVICIO = [
+  'bg-acento-50 text-acento-600',
+  'bg-emerald-50 text-emerald-600',
+  'bg-violet-50 text-violet-600',
+  'bg-rose-50 text-rose-600',
+  'bg-amber-50 text-amber-600',
+  'bg-cyan-50 text-cyan-600',
+]
+
+/** "07:00" → "07:00 a. m.", que es como se dice y como se lee en el horario. */
+function enDoceHoras(hhmm: string) {
+  const [hora, minuto] = hhmm.split(':').map(Number)
+  return new Intl.DateTimeFormat('es-CO', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(2000, 0, 1, hora, minuto)))
+}
+
+/** Cuantas filas caben antes de paginar. */
+const TAMANOS_DE_PAGINA = [10, 25, 50]
 
 export default function ProfesionalesClient() {
   const [profesionales, setProfesionales] = useState<Profesional[]>([])
@@ -158,10 +191,27 @@ export default function ProfesionalesClient() {
   const [cargandoJornadas, setCargandoJornadas] = useState(true)
   const [errorJornadas, setErrorJornadas] = useState(false)
 
-  // Recalculo de la jornada habitual, sobre el periodo que elija quien lo pide.
-  const [recalculoAbierto, setRecalculoAbierto] = useState(false)
-  const [recalculando, setRecalculando] = useState(false)
-  const [periodo, setPeriodo] = useState({ desde: '', hasta: '' })
+  // Filtros de la tabla.
+  const [busqueda, setBusqueda] = useState('')
+  const [servicioFiltro, setServicioFiltro] = useState('')
+  const [jornadaFiltro, setJornadaFiltro] = useState('')
+  const [estadoFiltro, setEstadoFiltro] = useState('')
+  const busquedaDiferida = useValorConRetraso(busqueda, 250)
+
+  /**
+   * Si se muestra tambien a quien ese dia NO tiene agenda.
+   *
+   * Apagado a proposito: ver la cabecera del archivo. Se puede encender porque
+   * editar la ficha de un doctor —o volver a activarlo— hay que poder hacerlo
+   * cualquier dia, trabaje o no.
+   */
+  const [verSinAgenda, setVerSinAgenda] = useState(false)
+
+  // Paginacion. El catalogo del hospital pasa de sesenta doctores y la tabla
+  // entera de una vez obliga a recorrer la pagina con la rueda buscando un
+  // apellido.
+  const [porPagina, setPorPagina] = useState(TAMANOS_DE_PAGINA[0])
+  const [pagina, setPagina] = useState(1)
 
   const cargar = useCallback(async () => {
     try {
@@ -202,62 +252,6 @@ export default function ProfesionalesClient() {
     }
   }, [])
 
-  /**
-   * Vuelve a deducir la jornada HABITUAL de cada doctor de sus citas del
-   * periodo.
-   *
-   * Se deduce dia por dia y gana la que mas se repite. Juntando las horas de
-   * todo el periodo en un monton, bastaba una tarde suelta al mes para que un
-   * medico de mañanas saliera de "dia completo", y sobre treinta dias eso
-   * acababa poniendo a todo el mundo en dia completo.
-   */
-  const recalcularJornadas = useCallback(async () => {
-    setRecalculando(true)
-    try {
-      const resumen = await pedir<ResumenRecalculo>('/api/turnos/profesionales/jornadas', {
-        method: 'POST',
-        body: JSON.stringify(periodo),
-      })
-
-      const periodoLegible = `${resumen.desde} a ${resumen.hasta} · ${resumen.diasMirados} dia(s)`
-      if (resumen.ajustes.length === 0) {
-        toast.info(
-          'No hubo nada que cambiar',
-          `${periodoLegible}. La jornada habitual de cada doctor ya coincide con sus citas.`,
-        )
-      } else {
-        toast.success(
-          `${resumen.ajustes.length} doctor(es) cambiaron de jornada habitual`,
-          resumen.ajustes
-            .map(
-              (a) =>
-                `${a.nombre}: ${etiquetaJornada[a.anterior]} → ${etiquetaJornada[a.jornada]} (${a.diasTrabajados} dia(s) trabajados)`,
-            )
-            .join(' · '),
-        )
-      }
-
-      setRecalculoAbierto(false)
-      await cargar()
-    } catch (error) {
-      toast.error('No se pudieron recalcular las jornadas', mensajeDeError(error))
-    } finally {
-      setRecalculando(false)
-    }
-  }, [cargar, periodo])
-
-  function abrirRecalculo() {
-    // Por defecto, el ultimo mes hasta el dia que se esta mirando: es el
-    // periodo que hace falta para responder "que suele hacer este doctor", y
-    // se deja cambiar porque un mes no es lo mismo en enero que en diciembre.
-    const hasta = fecha
-    const desde = new Date(Date.parse(`${fecha}T12:00:00Z`) - 29 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .slice(0, 10)
-    setPeriodo({ desde, hasta })
-    setRecalculoAbierto(true)
-  }
-
   useEffect(() => {
     cargar()
   }, [cargar])
@@ -273,8 +267,114 @@ export default function ProfesionalesClient() {
 
   const nombreModulo = useMemo(() => {
     const mapa = new Map(modulos.map((m) => [m.id, m.nombre]))
-    return (id?: string | null) => (id ? (mapa.get(id) ?? '—') : '—')
+    return (id?: string | null) => (id ? (mapa.get(id) ?? null) : null)
   }, [modulos])
+
+  /** El color del disco de un doctor, estable por servicio. */
+  const colorDeServicio = useMemo(() => {
+    const orden = new Map(servicios.map((servicio, indice) => [servicio.id, indice]))
+    return (servicioId: string) =>
+      COLORES_SERVICIO[(orden.get(servicioId) ?? 0) % COLORES_SERVICIO.length]
+  }, [servicios])
+
+  /**
+   * Un dia adelante o atras.
+   *
+   * Se calcula sobre la fecha en texto y a mediodia UTC: partiendo de
+   * medianoche, un equipo configurado en otra zona saltaria dos dias o ninguno
+   * al sumar uno.
+   */
+  const moverDia = useCallback((dias: number) => {
+    setFecha((actual) => {
+      const dia = new Date(`${actual}T12:00:00Z`)
+      dia.setUTCDate(dia.getUTCDate() + dias)
+      return dia.toISOString().slice(0, 10)
+    })
+  }, [])
+
+  /**
+   * Cuando la consulta del dia falla no se puede filtrar por agenda.
+   *
+   * El mapa vacio significaria "no trabaja nadie" y esconderia el catalogo
+   * entero por un corte de red. Ante la duda se muestra todo y cada fila lo
+   * dice en su columna.
+   */
+  const puedeFiltrarPorAgenda = !errorJornadas && !cargandoJornadas
+
+  const tieneAgenda = useCallback(
+    (profesional: Profesional) => Boolean(jornadasDelDia.get(profesional.id)?.jornada),
+    [jornadasDelDia],
+  )
+
+  /** Las cuatro cifras de la cabecera, siempre sobre el catalogo completo. */
+  const resumen = useMemo(() => {
+    const conAgenda = profesionales.filter(tieneAgenda).length
+    const inactivos = profesionales.filter((p) => !p.activo).length
+    return {
+      total: profesionales.length,
+      conAgenda,
+      // Activo pero hoy sin un solo paciente: existe en el hospital y no vino.
+      sinAgenda: profesionales.filter((p) => p.activo && !tieneAgenda(p)).length,
+      inactivos,
+    }
+  }, [profesionales, tieneAgenda])
+
+  /** Cuantos quedan fuera por no tener agenda ese dia. */
+  const ocultosSinAgenda = useMemo(
+    () => (puedeFiltrarPorAgenda ? profesionales.filter((p) => !tieneAgenda(p)).length : 0),
+    [profesionales, tieneAgenda, puedeFiltrarPorAgenda],
+  )
+
+  const filtrando =
+    busquedaDiferida.trim() !== '' || servicioFiltro !== '' || jornadaFiltro !== '' || estadoFiltro !== ''
+
+  const filtrados = useMemo(() => {
+    const texto = busquedaDiferida.trim().toLowerCase()
+
+    return profesionales.filter((profesional) => {
+      const delDia = jornadasDelDia.get(profesional.id)
+
+      if (puedeFiltrarPorAgenda && !verSinAgenda && !delDia?.jornada) return false
+      if (servicioFiltro && profesional.servicioId !== servicioFiltro) return false
+      if (jornadaFiltro && delDia?.jornada !== jornadaFiltro) return false
+      if (estadoFiltro === 'activos' && !profesional.activo) return false
+      if (estadoFiltro === 'inactivos' && profesional.activo) return false
+
+      if (!texto) return true
+      // Se busca tambien por servicio y consultorio: al mostrador le llega
+      // "el de odontologia" o "el del consultorio 3" antes que el apellido.
+      const donde = `${profesional.nombre} ${nombreServicio(profesional.servicioId)} ${
+        nombreModulo(profesional.moduloId) ?? ''
+      }`
+      return donde.toLowerCase().includes(texto)
+    })
+  }, [
+    profesionales,
+    jornadasDelDia,
+    puedeFiltrarPorAgenda,
+    verSinAgenda,
+    servicioFiltro,
+    jornadaFiltro,
+    estadoFiltro,
+    busquedaDiferida,
+    nombreServicio,
+    nombreModulo,
+  ])
+
+  const paginas = Math.max(1, Math.ceil(filtrados.length / porPagina))
+  // La pagina se acota al vuelo en vez de corregirse con un efecto: al filtrar,
+  // un `setPagina` en un efecto pinta primero una tabla vacia y la corrige en
+  // el render siguiente, y ese parpadeo se ve.
+  const paginaActual = Math.min(pagina, paginas)
+  const visibles = filtrados.slice((paginaActual - 1) * porPagina, paginaActual * porPagina)
+
+  function limpiarFiltros() {
+    setBusqueda('')
+    setServicioFiltro('')
+    setJornadaFiltro('')
+    setEstadoFiltro('')
+    setPagina(1)
+  }
 
   /**
    * Servicios a los que se puede asignar un doctor: solo los que atienden por
@@ -309,12 +409,6 @@ export default function ProfesionalesClient() {
     [modulos, formulario.servicioId, formulario.moduloId],
   )
 
-  function abrirNuevo() {
-    setEditando(null)
-    setFormulario({ ...DOCTOR_VACIO, servicioId: serviciosConCita[0]?.id ?? '' })
-    setAbierto(true)
-  }
-
   function abrirEdicion(profesional: Profesional) {
     setEditando(profesional)
     setFormulario({
@@ -327,28 +421,32 @@ export default function ProfesionalesClient() {
     setAbierto(true)
   }
 
+  /**
+   * Guarda los cambios de la ficha. SOLO EDITA, NO CREA.
+   *
+   * Los doctores entran solos con la carga del reporte del hospital: el archivo
+   * trae el nombre y el sistema le abre la ficha. Dar de alta uno a mano aqui
+   * no ayudaba y si hacia dano: el nombre tecleado casi nunca coincide letra
+   * por letra con el del archivo, y cuando llega la carga el sistema no ve al
+   * mismo doctor sino a dos, cada uno con sus citas.
+   */
   async function guardar(evento: React.FormEvent) {
     evento.preventDefault()
+    if (!editando) return
+
     setGuardando(true)
-
-    const cuerpo = {
-      nombre: formulario.nombre,
-      servicioId: formulario.servicioId,
-      jornada: formulario.jornada,
-      moduloId: formulario.moduloId || null,
-    }
-
     try {
-      if (editando) {
-        await pedir(`/api/turnos/profesionales/${editando.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ ...cuerpo, activo: formulario.activo }),
-        })
-        toast.success('Profesional actualizado', formulario.nombre)
-      } else {
-        await pedir('/api/turnos/profesionales', { method: 'POST', body: JSON.stringify(cuerpo) })
-        toast.success('Profesional creado', `Ya se le pueden agendar citas a ${formulario.nombre}.`)
-      }
+      await pedir(`/api/turnos/profesionales/${editando.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          nombre: formulario.nombre,
+          servicioId: formulario.servicioId,
+          jornada: formulario.jornada,
+          moduloId: formulario.moduloId || null,
+          activo: formulario.activo,
+        }),
+      })
+      toast.success('Profesional actualizado', formulario.nombre)
       setAbierto(false)
       await cargar()
     } catch (error) {
@@ -358,58 +456,246 @@ export default function ProfesionalesClient() {
     }
   }
 
+  const esHoy = fecha === hoyEnColombia()
+
   return (
     <>
-      <Card padded={false}>
-        <CardHeader>
-          <CardTitle>Profesionales ({profesionales.length})</CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
-            {/*
-              La jornada sale de las citas y no de lo que alguien recuerde. El
-              boton esta aqui y no escondido en un menu porque hoy el catalogo
-              entero dice "dia completo": es lo primero que hay que corregir.
-            */}
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={abrirRecalculo}
-              title="Deduce la jornada habitual de cada doctor de las horas a las que tuvo citas en el periodo que elijas"
-            >
-              <ArrowsClockwise size={16} weight="bold" />
-              Recalcular jornadas
-            </Button>
-            <Button size="sm" onClick={abrirNuevo} disabled={serviciosConCita.length === 0}>
-              <Plus size={17} weight="bold" />
-              Nuevo doctor
-            </Button>
+      <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <TarjetaIndicador
+          icono={UsersThree}
+          etiqueta="Total"
+          valor={resumen.total}
+          detalle="Profesionales registrados"
+          tono={TONOS_INDICADOR.acento}
+        />
+        <TarjetaIndicador
+          icono={CalendarCheck}
+          etiqueta="Con agenda"
+          valor={resumen.conAgenda}
+          detalle={esHoy ? 'Atienden hoy' : 'Atienden ese dia'}
+          tono={TONOS_INDICADOR.verde}
+        />
+        <TarjetaIndicador
+          icono={CalendarX}
+          etiqueta="Sin agenda"
+          valor={resumen.sinAgenda}
+          detalle="Activos, sin citas ese dia"
+          tono={TONOS_INDICADOR.ambar}
+        />
+        <TarjetaIndicador
+          icono={Prohibit}
+          etiqueta="Inactivos"
+          valor={resumen.inactivos}
+          detalle="No se les puede agendar"
+          tono={TONOS_INDICADOR.rojo}
+        />
+      </div>
+
+      <Card padded={false} className="mb-5 rounded-[1.375rem] p-4 md:px-5 md:py-4">
+        <div className="flex flex-wrap items-center gap-3">
+          {/*
+            EL DIA MANDA SOBRE TODO LO DEMAS de esta pantalla: decide quien sale
+            en la tabla, que jornada se le pone al lado y que horario. Por eso
+            va el primero y con flechas, que es como se mueve de verdad —un dia
+            adelante, un dia atras— sin abrir el calendario.
+          */}
+          <div className="flex h-11 items-center gap-2 rounded-2xl border border-slate-200/70 bg-white px-3">
+            <CalendarBlank size={18} weight="bold" className="shrink-0 text-acento-500" />
+            <input
+              type="date"
+              value={fecha}
+              onChange={(e) => setFecha(e.target.value)}
+              aria-label="Dia que se esta mirando"
+              className="w-[8.5rem] border-0 bg-transparent p-0 text-sm font-semibold tabular-nums text-brand-950 outline-none"
+            />
+            <span className="flex items-center gap-0.5 border-l border-slate-200/80 pl-1.5">
+              <button
+                type="button"
+                onClick={() => moverDia(-1)}
+                aria-label="Dia anterior"
+                className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition-colors duration-[var(--suave)] ease-[var(--curva)] hover:bg-acento-50 hover:text-acento-600 active:scale-95 active:transition-transform active:duration-[var(--toque)]"
+              >
+                <CaretLeft size={15} weight="bold" />
+              </button>
+              <button
+                type="button"
+                onClick={() => moverDia(1)}
+                aria-label="Dia siguiente"
+                className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition-colors duration-[var(--suave)] ease-[var(--curva)] hover:bg-acento-50 hover:text-acento-600 active:scale-95 active:transition-transform active:duration-[var(--toque)]"
+              >
+                <CaretRight size={15} weight="bold" />
+              </button>
+            </span>
           </div>
-        </CardHeader>
-        {/*
-          EL DIA QUE SE ESTA MIRANDO. La columna "Ese dia" sale de las citas de
-          esta fecha, asi que sin poder moverla la tabla solo sabria contestar
-          por hoy, y la pregunta del hospital es "¿que trabajo este doctor el
-          lunes?". No hay tope hacia atras: las citas de todos los dias
-          cargados siguen ahi.
-        */}
-        <div className="flex flex-wrap items-end gap-3 border-b border-slate-100 px-5 py-4">
-          <Campo etiqueta="Dia" className="w-full max-w-[190px]">
-            <Entrada type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-          </Campo>
-          {fecha !== hoyEnColombia() ? (
-            <Button size="sm" variant="secondary" className="mb-0.5" onClick={() => setFecha(hoyEnColombia())}>
+
+          {!esHoy ? (
+            <Button variant="secondary" onClick={() => setFecha(hoyEnColombia())}>
+              <CalendarBlank size={17} weight="bold" />
               Hoy
             </Button>
           ) : null}
-          <p className="mb-1.5 max-w-md text-sm leading-6 text-slate-500">
-            <strong className="font-semibold text-slate-600">Ese dia</strong> es lo que dicen sus citas
-            de esa fecha; <strong className="font-semibold text-slate-600">jornada habitual</strong> es
-            la de su ficha, y solo decide a que horas se le agenda el primer paciente de un dia
-            vacio.
-          </p>
+
+          {/*
+            La busqueda se lleva el sitio que sobre, con un minimo por debajo
+            del cual no baja: en una caja de 150px el texto que se acaba de
+            teclear ya no se ve entero, y entonces no hay forma de saber si lo
+            que no aparece es porque no existe o porque hay una errata.
+          */}
+          <div className="relative min-w-[15rem] flex-1">
+            <MagnifyingGlass
+              size={17}
+              weight="bold"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <Entrada
+              value={busqueda}
+              onChange={(e) => {
+                setBusqueda(e.target.value)
+                setPagina(1)
+              }}
+              placeholder="Buscar por nombre, especialidad o consultorio..."
+              aria-label="Buscar profesional"
+              className="pl-9"
+            />
+          </div>
         </div>
 
+        {/*
+          LOS FILTROS EN SU PROPIA FILA, Y CADA UNO CON EL ANCHO DE LO QUE DICE.
+
+          Iban apretados junto al dia y a la busqueda, con un ancho maximo
+          pensado a ojo, y el resultado era "Todos los estad…": un desplegable
+          que no deja leer la opcion que tiene puesta no informa de nada, porque
+          justo lo que hay que saber de un filtro es en que esta.
+
+          Cada uno lleva ahora el ancho de su opcion mas larga, puesto en el
+          contenedor y no en el campo: las clases base de `Seleccion` traen
+          `w-full`, y sobrescribirlas desde fuera dependeria del orden en que
+          Tailwind emita las dos reglas, que es una forma silenciosa de que el
+          ancho quede al azar el dia de mañana.
+        */}
+        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
+          <div className="relative w-full sm:w-[16.5rem]">
+            <Faders
+              size={17}
+              weight="bold"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <Seleccion
+              value={servicioFiltro}
+              onChange={(e) => {
+                setServicioFiltro(e.target.value)
+                setPagina(1)
+              }}
+              aria-label="Especialidad"
+              className="pl-9"
+            >
+              <option value="">Todas las especialidades</option>
+              {servicios.map((servicio) => (
+                <option key={servicio.id} value={servicio.id}>
+                  {servicio.nombre}
+                </option>
+              ))}
+            </Seleccion>
+          </div>
+
+          <div className="w-full sm:w-[13rem]">
+            <Seleccion
+              value={jornadaFiltro}
+              onChange={(e) => {
+                setJornadaFiltro(e.target.value)
+                setPagina(1)
+              }}
+              aria-label="Jornada"
+            >
+              <option value="">Todas las jornadas</option>
+              <option value="MANANA">{etiquetaJornada.MANANA}</option>
+              <option value="TARDE">{etiquetaJornada.TARDE}</option>
+              <option value="COMPLETA">{etiquetaJornada.COMPLETA}</option>
+            </Seleccion>
+          </div>
+
+          <div className="w-full sm:w-[13rem]">
+            <Seleccion
+              value={estadoFiltro}
+              onChange={(e) => {
+                setEstadoFiltro(e.target.value)
+                setPagina(1)
+              }}
+              aria-label="Estado"
+            >
+              <option value="">Todos los estados</option>
+              <option value="activos">Activos</option>
+              <option value="inactivos">Inactivos</option>
+            </Seleccion>
+          </div>
+
+          {filtrando ? (
+            <Button variant="secondary" className="sm:ml-auto" onClick={limpiarFiltros}>
+              <Broom size={16} weight="bold" className="text-slate-500" />
+              Limpiar filtros
+            </Button>
+          ) : null}
+        </div>
+      </Card>
+
+      <Card padded={false} className="rounded-[1.375rem]">
+        <CardHeader>
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-acento-50 text-acento-600">
+              <IdentificationCard size={20} weight="fill" />
+            </span>
+            <div className="min-w-0">
+              <CardTitle>Lista de profesionales ({filtrados.length})</CardTitle>
+              <p className="mt-0.5 text-xs font-medium text-slate-500">
+                {verSinAgenda || !puedeFiltrarPorAgenda
+                  ? 'Todo el catalogo, con lo que cada uno trabaja ese dia'
+                  : 'Solo quienes tienen citas el dia seleccionado'}
+              </p>
+            </div>
+          </div>
+
+          {/*
+            Los doctores sin agenda ese dia estan fuera, pero se dice cuantos
+            son y se pueden traer. Esconderlos en silencio haria que quien
+            busca a uno concreto creyera que no esta registrado y lo diera de
+            alta otra vez, duplicando el catalogo.
+          */}
+          {ocultosSinAgenda > 0 ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setVerSinAgenda((antes) => !antes)
+                setPagina(1)
+              }}
+              aria-pressed={verSinAgenda}
+              title={
+                verSinAgenda
+                  ? 'Dejar en la lista solo a los doctores que atienden ese dia'
+                  : 'Traer a la lista los doctores que ese dia no tienen citas'
+              }
+            >
+              {verSinAgenda ? (
+                <EyeSlash size={16} weight="bold" className="text-slate-500" />
+              ) : (
+                <Eye size={16} weight="bold" className="text-slate-500" />
+              )}
+              {verSinAgenda ? 'Ocultar' : 'Mostrar'} {ocultosSinAgenda} sin agenda
+            </Button>
+          ) : null}
+        </CardHeader>
+
         <CardContent padded={false}>
-          {cargando ? (
+          {/*
+            Se espera TAMBIEN a las jornadas del dia, no solo al catalogo.
+
+            Es lo que decide que filas hay: pintando antes, la tabla aparecia
+            con los veinte doctores del catalogo y medio segundo despues se
+            quedaba en tres, o en ninguno. Ese salto se lee como un fallo, y
+            quien va rapido alcanza a creerse la lista equivocada.
+          */}
+          {cargando || cargandoJornadas ? (
             <TablaSkeleton columnas={COLUMNAS} />
           ) : profesionales.length === 0 ? (
             <div className="p-5">
@@ -419,97 +705,256 @@ export default function ProfesionalesClient() {
                 description="Crea el primer doctor para poder agendarle citas."
               />
             </div>
+          ) : filtrados.length === 0 ? (
+            <div className="p-5">
+              {/*
+                EL VACIO TIENE DOS CAUSAS Y NO SE PARECEN EN NADA. O ese dia no
+                atiende nadie —y entonces la respuesta correcta es justamente
+                una lista vacia—, o los filtros son demasiado estrechos. Cada
+                una lleva a una salida distinta, asi que se distinguen.
+              */}
+              <EmptyState
+                icon={filtrando ? MagnifyingGlass : CalendarX}
+                title={filtrando ? 'Ningun profesional coincide' : 'Ese dia no atiende nadie'}
+                description={
+                  filtrando
+                    ? 'Prueba con otro nombre, otra especialidad o quita algun filtro.'
+                    : 'No hay ni una cita cargada para esta fecha, asi que ningun doctor tiene jornada. Carga la agenda del dia en Citas, o mira el catalogo completo.'
+                }
+                action={
+                  filtrando ? (
+                    <Button variant="secondary" onClick={limpiarFiltros}>
+                      Limpiar filtros
+                    </Button>
+                  ) : ocultosSinAgenda > 0 ? (
+                    <Button variant="secondary" onClick={() => setVerSinAgenda(true)}>
+                      <Eye size={16} weight="bold" className="text-slate-500" />
+                      Ver el catalogo completo ({ocultosSinAgenda})
+                    </Button>
+                  ) : undefined
+                }
+              />
+            </div>
           ) : (
-            <Tabla columnas={COLUMNAS}>
-              {profesionales.map((profesional) => (
-                <tr
-                  key={profesional.id}
-                  className="cursor-pointer hover:bg-slate-50"
-                  onClick={() => abrirEdicion(profesional)}
-                >
-                  <td className="px-4 py-3 font-semibold text-brand-950">{profesional.nombre}</td>
-                  <td className="px-4 py-3 text-slate-600">{nombreServicio(profesional.servicioId)}</td>
-                  <td className="px-4 py-3">
-                    <EseDia
-                      jornada={jornadasDelDia.get(profesional.id)}
-                      cargando={cargandoJornadas}
-                      error={errorJornadas}
-                      esFutura={fecha > hoyEnColombia()}
-                    />
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge tone={tonoJornada[profesional.jornada]}>
-                      {etiquetaJornada[profesional.jornada]}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{nombreModulo(profesional.moduloId)}</td>
-                  <td className="px-4 py-3">
-                    <Badge tone={profesional.activo ? 'green' : 'slate'}>
-                      {profesional.activo ? 'Activo' : 'Inactivo'}
-                    </Badge>
-                  </td>
-                </tr>
-              ))}
-            </Tabla>
+            <>
+              <Tabla columnas={COLUMNAS}>
+                {visibles.map((profesional) => {
+                  const delDia = jornadasDelDia.get(profesional.id)
+                  const consultorio = nombreModulo(profesional.moduloId)
+                  const jornada = delDia?.jornada
+
+                  return (
+                    <tr
+                      key={profesional.id}
+                      tabIndex={0}
+                      onClick={() => abrirEdicion(profesional)}
+                      onKeyDown={(evento) => {
+                        // La fila entera es el boton de editar —no hay columna
+                        // de acciones—, asi que tiene que poder pulsarse
+                        // tambien con el teclado o queda fuera del alcance de
+                        // quien no usa raton.
+                        if (evento.key === 'Enter' || evento.key === ' ') {
+                          evento.preventDefault()
+                          abrirEdicion(profesional)
+                        }
+                      }}
+                      aria-label={`Editar ${profesional.nombre}`}
+                      className="cursor-pointer outline-none transition-colors duration-[var(--suave)] ease-[var(--curva)] hover:bg-acento-50/40 focus-visible:bg-acento-50/60"
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${colorDeServicio(
+                              profesional.servicioId,
+                            )}`}
+                          >
+                            <User size={18} weight="fill" />
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold tracking-[-0.012em] text-brand-950">
+                              {profesional.nombre}
+                            </p>
+                            {/*
+                              Debajo del nombre va la jornada HABITUAL, que es
+                              el dato de su ficha. En la maqueta aqui se repetia
+                              la especialidad, que ya tiene su propia columna al
+                              lado; asi el hueco dice algo que no esta en
+                              ninguna otra parte de la fila.
+                            */}
+                            <p className="truncate text-xs font-medium text-slate-400">
+                              Habitual: {etiquetaJornada[profesional.jornada].toLowerCase()}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-600">
+                        {nombreServicio(profesional.servicioId)}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {/* Sin rama de "cargando": mientras las jornadas del
+                            dia estan en camino, la tabla entera es el esqueleto
+                            de arriba y aqui no se llega. */}
+                        {errorJornadas ? (
+                          // UN FALLO DE LA CONSULTA NO ES UNA RESPUESTA. Con el
+                          // mapa vacio, la ausencia se pintaba como "no
+                          // trabaja": ante un corte de red la tabla afirmaba,
+                          // fila por fila, que ese dia no vino nadie.
+                          <Badge tone="amber">Sin dato</Badge>
+                        ) : jornada ? (
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.015em] ring-1 ${
+                              estiloJornada[jornada].chip
+                            }`}
+                          >
+                            {iconoDeJornada(jornada, 13)}
+                            {etiquetaJornada[jornada]}
+                          </span>
+                        ) : (
+                          <Badge tone="slate">
+                            {fecha > hoyEnColombia() ? 'Sin agenda' : 'No trabaja'}
+                          </Badge>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {delDia?.desde && delDia.hasta ? (
+                          <>
+                            <p className="text-sm font-medium tabular-nums text-slate-700">
+                              {enDoceHoras(delDia.desde)} – {enDoceHoras(delDia.hasta)}
+                            </p>
+                            <p className="text-xs font-medium text-slate-400">
+                              {delDia.citas} {delDia.citas === 1 ? 'cita' : 'citas'}
+                            </p>
+                          </>
+                        ) : (
+                          <span className="text-sm text-slate-300">—</span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {consultorio ? (
+                          <span className="flex items-center gap-1.5 text-slate-600">
+                            <MapPin size={14} weight="fill" className="shrink-0 text-slate-300" />
+                            {consultorio}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-slate-300">Sin asignar</span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.015em] ring-1 ${
+                            profesional.activo
+                              ? 'bg-emerald-50 text-emerald-700 ring-emerald-100'
+                              : 'bg-rose-50 text-rose-700 ring-rose-100'
+                          }`}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              profesional.activo ? 'bg-emerald-500' : 'bg-rose-500'
+                            }`}
+                          />
+                          {profesional.activo ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </Tabla>
+
+              {/* La paginacion solo aparece cuando hay algo que paginar. */}
+              {filtrados.length > TAMANOS_DE_PAGINA[0] ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                    Mostrar
+                    {/*
+                      Aqui va un `select` suelto y no el `Seleccion` de la casa:
+                      ese campo mide 44px de alto, que es lo que pide un
+                      formulario, y en una barra de paginacion se come la fila.
+                      Sus clases base no se pueden sobrescribir sin depender del
+                      orden en que Tailwind emita `h-9` y `h-11`, que es una
+                      forma silenciosa de que el dia de mañana quede al azar.
+                    */}
+                    <select
+                      value={String(porPagina)}
+                      onChange={(e) => {
+                        setPorPagina(Number(e.target.value))
+                        setPagina(1)
+                      }}
+                      aria-label="Registros por pagina"
+                      className="h-9 rounded-xl border border-slate-200 bg-white px-2 text-xs font-semibold tabular-nums text-brand-950 outline-none transition focus:border-acento-400"
+                    >
+                      {TAMANOS_DE_PAGINA.map((tamano) => (
+                        <option key={tamano} value={tamano}>
+                          {tamano}
+                        </option>
+                      ))}
+                    </select>
+                    registros por pagina
+                  </label>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setPagina((p) => Math.max(1, p - 1))}
+                      disabled={paginaActual === 1}
+                      aria-label="Pagina anterior"
+                      className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200/70 text-slate-500 transition-colors duration-[var(--suave)] hover:bg-slate-50 hover:text-acento-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <CaretLeft size={14} weight="bold" />
+                    </button>
+
+                    {Array.from({ length: paginas }, (_, i) => i + 1).map((numero) => (
+                      <button
+                        key={numero}
+                        type="button"
+                        onClick={() => setPagina(numero)}
+                        aria-current={numero === paginaActual ? 'page' : undefined}
+                        className={`grid h-9 min-w-9 place-items-center rounded-xl px-2 text-xs font-semibold tabular-nums transition-colors duration-[var(--suave)] ${
+                          numero === paginaActual
+                            ? 'bg-acento-600 text-white'
+                            : 'border border-slate-200/70 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {numero}
+                      </button>
+                    ))}
+
+                    <button
+                      type="button"
+                      onClick={() => setPagina((p) => Math.min(paginas, p + 1))}
+                      disabled={paginaActual === paginas}
+                      aria-label="Pagina siguiente"
+                      className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200/70 text-slate-500 transition-colors duration-[var(--suave)] hover:bg-slate-50 hover:text-acento-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <CaretRight size={14} weight="bold" />
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </>
           )}
         </CardContent>
       </Card>
 
       <p className="mt-4 text-sm leading-6 text-slate-500">
-        El enlace con el que cada doctor entra a su consultorio se genera en{' '}
+        <strong className="font-semibold text-slate-600">Jornada</strong> y{' '}
+        <strong className="font-semibold text-slate-600">horario</strong> son lo que dicen las citas
+        del dia seleccionado; la jornada habitual de la ficha solo decide a que horas se le agenda el
+        primer paciente de un dia vacio, y la carga del reporte la reajusta sola. El enlace con el
+        que cada doctor entra a su consultorio se genera en{' '}
         <strong className="font-semibold text-slate-600">Enlaces de consultorio</strong>.
       </p>
 
       <Modal
-        open={recalculoAbierto}
-        onClose={() => setRecalculoAbierto(false)}
-        title="Recalcular jornadas habituales"
-        description="Mira las citas que los doctores tuvieron de verdad en el periodo y le pone a cada uno la jornada que mas dias repitio."
-      >
-        <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Campo etiqueta="Desde">
-              <Entrada
-                type="date"
-                value={periodo.desde}
-                onChange={(e) => setPeriodo((p) => ({ ...p, desde: e.target.value }))}
-              />
-            </Campo>
-            <Campo etiqueta="Hasta">
-              <Entrada
-                type="date"
-                value={periodo.hasta}
-                onChange={(e) => setPeriodo((p) => ({ ...p, hasta: e.target.value }))}
-              />
-            </Campo>
-          </div>
-
-          <p className="text-sm leading-6 text-slate-500">
-            Al doctor que no tenga ni una cita en el periodo no se le toca: sin citas no hay nada
-            que deducir, y cambiarsela seria pisar la que se puso a mano. Esto no cambia ninguna
-            cita ya agendada.
-          </p>
-
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setRecalculoAbierto(false)}>
-              Cancelar
-            </Button>
-            <Button
-              onClick={recalcularJornadas}
-              loading={recalculando}
-              disabled={!periodo.desde || !periodo.hasta || periodo.hasta < periodo.desde}
-            >
-              Recalcular
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal
         open={abierto}
         onClose={() => setAbierto(false)}
-        title={editando ? 'Editar profesional' : 'Nuevo doctor'}
-        description="Los doctores atienden por cita: el servicio decide en que fila entran sus pacientes."
+        title="Editar profesional"
+        description="Los doctores entran solos con la carga del reporte; aqui se corrige su ficha."
       >
         <form onSubmit={guardar} className="space-y-4">
           <Campo etiqueta="Nombre">
@@ -541,7 +986,7 @@ export default function ProfesionalesClient() {
               </Seleccion>
             </Campo>
 
-            <Campo etiqueta="Jornada" ayuda="En que parte del dia atiende. Decide a que horas se le puede agendar.">
+            <Campo etiqueta="Jornada habitual" ayuda="Solo decide a que horas se le agenda el primer paciente de un dia vacio.">
               <Seleccion
                 value={formulario.jornada}
                 onChange={(e) => setFormulario((f) => ({ ...f, jornada: e.target.value as Jornada }))}
@@ -590,7 +1035,7 @@ export default function ProfesionalesClient() {
               Cancelar
             </Button>
             <Button type="submit" loading={guardando}>
-              {editando ? 'Guardar cambios' : 'Crear doctor'}
+              Guardar cambios
             </Button>
           </div>
         </form>

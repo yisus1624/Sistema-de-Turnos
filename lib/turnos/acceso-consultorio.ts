@@ -3,7 +3,34 @@
  *
  * El doctor entra por un enlace temporal, sin usuario ni contrasena (ver
  * `lib/turnos/in-memory-repository.ts`, `crearAccesoProfesional`). Estas
- * rutas NO usan `requireRol`: la sesion aqui es el token de la URL.
+ * rutas NO usan `requireRol`: la sesion aqui es el token.
+ *
+ * EL TOKEN YA NO VIAJA EN LA RUTA, Y ESO NO ES COSMETICA.
+ *
+ * Estaba en el path de cada llamada (`/api/consultorio/<token>/...`). Nginx
+ * escribe `$request` entero en su `access.log` por defecto, asi que cada
+ * "siguiente", cada "repetir" y cada refresco de la fila dejaba el token EN
+ * CLARO en un archivo del servidor —decenas de lineas por doctor y por
+ * jornada—. Quien pudiera leer esos logs, o una copia de seguridad de ellos,
+ * se llevaba una llave que abre la agenda con nombres y documentos de
+ * pacientes sin pedir contrasena, valida hasta que venciera. De paso dejaba sin
+ * sentido que la copia del token se guarde cifrada en la base: la misma llave
+ * estaba en texto plano en otro archivo del mismo servidor.
+ *
+ * Ahora el token llega por una de estas dos vias, ninguna de las cuales queda
+ * en el registro de peticiones:
+ *
+ *   1. La COOKIE `turnos_consultorio`, que pone el proxy de entrada la primera vez
+ *      que el doctor abre su enlace y que el navegador manda sola a partir de
+ *      ahi. Es `HttpOnly`, asi que el JavaScript de la pagina ni siquiera
+ *      puede leerla, y `SameSite=Strict`, asi que no viaja desde otro sitio.
+ *   2. La cabecera `x-consultorio-token`, para el panel de simulacion de
+ *      carga, que hace de varios doctores a la vez desde una sola pestaña y
+ *      por tanto no puede usar una unica cookie.
+ *
+ * El enlace sigue conteniendo el token —es lo que se le manda al doctor— asi
+ * que su PRIMERA visita si deja una linea. Una por jornada en vez de cientos, y
+ * `proxy.ts` lo saca de la barra de direcciones en el acto.
  *
  * SE CUENTAN FALLOS, NO USOS. El limite estaba puesto sobre el token y sin
  * limpiarlo al entrar bien, asi que no medía "cuantas veces han fallado" sino
@@ -31,6 +58,39 @@ import {
 } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { apiError } from '@/lib/permissions/session'
+
+/**
+ * Nombre de la cookie de sesion del consultorio. Lo comparten `proxy.ts`
+ * (que la pone) y estas rutas (que la leen); si se cambia en un sitio y no en
+ * el otro, el doctor entra y la pantalla se queda en "enlace no valido".
+ */
+export const COOKIE_CONSULTORIO = 'turnos_consultorio'
+
+/** Cabecera alternativa, solo para el panel de simulacion de carga. */
+export const CABECERA_CONSULTORIO = 'x-consultorio-token'
+
+/**
+ * El token de esta peticion, o cadena vacia si no trae ninguno.
+ *
+ * Se lee de la cabecera `Cookie` de la propia peticion y no de `cookies()` de
+ * Next a proposito: asi la funcion depende solo del `Request` estandar, que es
+ * lo que la hace verificable en las pruebas sin montar el entorno de Next.
+ */
+export function tokenDeLaPeticion(request: Request): string {
+  const enCabecera = request.headers.get(CABECERA_CONSULTORIO)
+  if (enCabecera) return enCabecera.trim()
+
+  const cookies = request.headers.get('cookie')
+  if (!cookies) return ''
+
+  for (const parte of cookies.split(';')) {
+    const separador = parte.indexOf('=')
+    if (separador === -1) continue
+    if (parte.slice(0, separador).trim() !== COOKIE_CONSULTORIO) continue
+    return decodeURIComponent(parte.slice(separador + 1).trim())
+  }
+  return ''
+}
 
 export class AccesoInvalidoError extends Error {
   readonly status = 401
@@ -73,6 +133,12 @@ async function rechazoRegistrado(ip: string | null, motivo: string) {
 export async function requireProfesionalPorToken(token: string): Promise<Profesional> {
   const { ip } = await contextoPeticion()
 
+  // Sin token no se gasta el cupo del limitador: la clave seria la cadena
+  // vacia, un mismo cubo compartido por todas las peticiones sin cookie, y
+  // bastaria un bucle sin token para agotarlo y dejar fuera al doctor cuya
+  // cookie no llego. Se rechaza y se apunta, que es lo que hace falta.
+  if (!token) throw await rechazoRegistrado(ip, 'sin_token')
+
   if (ip && !limitarIntentos('acceso_consultorio_ip', ip, INTENTOS_POR_IP, MS_VENTANA).permitido) {
     throw await rechazoRegistrado(ip, 'demasiados_intentos_ip')
   }
@@ -102,6 +168,18 @@ export async function requireProfesionalPorToken(token: string): Promise<Profesi
   }
 
   return profesional
+}
+
+/**
+ * El profesional de esta peticion, a partir de su cookie o cabecera.
+ *
+ * Es lo que llaman las rutas del consultorio. Sin token no se distingue de un
+ * token malo: las dos cosas son `AccesoInvalidoError` y el doctor lee el mismo
+ * mensaje, que es lo correcto —decirle "no mandaste token" frente a "tu token
+ * no sirve" solo ayuda a quien esta probando a ciegas—.
+ */
+export async function requireProfesionalDelConsultorio(request: Request): Promise<Profesional> {
+  return requireProfesionalPorToken(tokenDeLaPeticion(request))
 }
 
 /**

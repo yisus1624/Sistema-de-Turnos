@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
-import { errorConsultorio, requireProfesionalPorToken } from '@/lib/turnos/acceso-consultorio'
+import { errorConsultorio, requireProfesionalDelConsultorio } from '@/lib/turnos/acceso-consultorio'
 import { verificarTurnoDelProfesional } from '@/lib/turnos/acceso-consultorio-turno'
 import { registrarRepeticion } from '@/lib/turnos/rastro-llamado'
 
-export async function POST(_request: Request, context: { params: Promise<{ token: string; turnoId: string }> }) {
+export async function POST(request: Request, context: { params: Promise<{ turnoId: string }> }) {
   try {
-    const { token, turnoId } = await context.params
-    const profesional = await requireProfesionalPorToken(token)
+    const { turnoId } = await context.params
+    const profesional = await requireProfesionalDelConsultorio(request)
     await verificarTurnoDelProfesional(turnoId, profesional.id)
 
     const turno = await turnoRepository.repetirLlamado(turnoId)

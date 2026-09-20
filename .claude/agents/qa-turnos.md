@@ -171,8 +171,10 @@ Revisa el diff y marca lo que encuentres. Estas son violaciones reportables:
 - Sin datos de paciente en logs, en URLs ni en mensajes de error al usuario.
 - Errores hacia el usuario sin stack traces ni detalles internos.
 - Auditoria presente en toda accion clinica: llamar, repetir, atendido, ausente, cancelar.
-- Los enlaces de acceso por consultorio (`app/consultorio/[token]`) no deben ser adivinables ni
-  quedar expuestos en logs o en el referer.
+- Los enlaces de acceso por consultorio no deben ser adivinables ni quedar expuestos en logs
+  ni en el referer. El token se canjea una sola vez en `proxy.ts` por una cookie `HttpOnly`
+  (`lib/turnos/acceso-consultorio.ts`); no debe volver a aparecer en la ruta de ninguna
+  peticion —hay una prueba que lo vigila en `tests/token-consultorio-fuera-de-la-url.test.mjs`—.
 
 ## Usabilidad y accesibilidad
 - **WCAG AA**: contraste suficiente, foco visible, navegacion completa por teclado, etiquetas

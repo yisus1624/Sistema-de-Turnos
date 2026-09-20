@@ -51,8 +51,8 @@ mock.module('@/lib/seguridad/registro', {
 
 mock.module('next/headers', { namedExports: { headers: async () => new Headers() } })
 
-const consultorioLlamar = await import('@/app/api/consultorio/[token]/llamar-siguiente/route')
-const consultorioRepetir = await import('@/app/api/consultorio/[token]/[turnoId]/repetir/route')
+const consultorioLlamar = await import('@/app/api/consultorio/llamar-siguiente/route')
+const consultorioRepetir = await import('@/app/api/consultorio/turnos/[turnoId]/repetir/route')
 const operadorLlamar = await import('@/app/api/turnos/llamar-siguiente/route')
 const operadorRepetir = await import('@/app/api/turnos/[id]/repetir/route')
 const rutaConfiguracion = await import('@/app/api/turnos/configuracion/route')
@@ -69,6 +69,22 @@ const parametros = (valores) => ({ params: Promise.resolve(valores) })
 function peticion(cuerpo) {
   return new Request('http://localhost/api', {
     method: 'POST',
+    body: cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
+  })
+}
+
+/**
+ * Una peticion del consultorio, con el token donde va de verdad: en la cookie.
+ *
+ * Antes el token viajaba en los parametros de la ruta y estas pruebas lo
+ * pasaban por ahi. Al sacarlo de la URL (ver `proxy.ts`), pasarlo por
+ * parametros dejaria de probar nada: el handler lo ignora. Se manda por cookie
+ * para que lo que se ejercita aqui sea el camino real del doctor.
+ */
+function peticionDeConsultorio(cuerpo, token) {
+  return new Request('http://localhost/api', {
+    method: 'POST',
+    headers: { cookie: `turnos_consultorio=${token}` },
     body: cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
   })
 }
@@ -120,10 +136,7 @@ test('llamar al siguiente desde el consultorio deja quien, a quien y desde donde
   await pacienteEnEspera(doctor.id)
   const token = await tokenDe(doctor.id)
 
-  const respuesta = await consultorioLlamar.POST(
-    peticion({ moduloId: modulo.id }),
-    parametros({ token }),
-  )
+  const respuesta = await consultorioLlamar.POST(peticionDeConsultorio({ moduloId: modulo.id }, token))
   const { turno } = await respuesta.json()
   assert.equal(respuesta.status, 200)
 
@@ -141,12 +154,12 @@ test('repetir el llamado queda como repeticion y dice cuantas van', async () => 
   await pacienteEnEspera(doctor.id)
   const token = await tokenDe(doctor.id)
 
-  const llamada = await consultorioLlamar.POST(peticion({ moduloId: modulo.id }), parametros({ token }))
+  const llamada = await consultorioLlamar.POST(peticionDeConsultorio({ moduloId: modulo.id }, token))
   const { turno } = await llamada.json()
 
   const respuesta = await consultorioRepetir.POST(
-    peticion(),
-    parametros({ token, turnoId: turno.id }),
+    peticionDeConsultorio(undefined, token),
+    parametros({ turnoId: turno.id }),
   )
   assert.equal(respuesta.status, 200)
 
@@ -163,7 +176,7 @@ test('con la fila vacia no se llama a nadie y no se inventa un apunte', async ()
   const llamados = () => apuntes.filter((evento) => evento.tipo === 'TURNO_LLAMADO').length
   const antes = llamados()
 
-  const respuesta = await consultorioLlamar.POST(peticion({ moduloId: modulo.id }), parametros({ token }))
+  const respuesta = await consultorioLlamar.POST(peticionDeConsultorio({ moduloId: modulo.id }, token))
 
   assert.equal(respuesta.status, 404)
   assert.equal(llamados(), antes, 'sin turno llamado no hay nada que registrar')

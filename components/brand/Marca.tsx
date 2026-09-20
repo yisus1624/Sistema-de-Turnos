@@ -11,8 +11,20 @@
  */
 import Image from 'next/image'
 
-export const NOMBRE_INSTITUCION = 'ESE Hospital San Rafael de Chinu'
+/**
+ * El nombre institucional, partido en sus dos lineas naturales.
+ *
+ * La barra lateral lo muestra en dos renglones ("ESE Hospital" encima y la sede
+ * debajo, mas grande), que es como se lee el nombre de verdad. Se parte aqui, y
+ * no en la barra, para que el nombre completo siga teniendo UNA sola fuente en
+ * vez de dos que se desincronicen el dia que cambie.
+ */
+export const NOMBRE_ENTIDAD = 'ESE Hospital'
+export const NOMBRE_SEDE = 'San Rafael de Chinu'
+export const NOMBRE_INSTITUCION = `${NOMBRE_ENTIDAD} ${NOMBRE_SEDE}`
 export const NOMBRE_SISTEMA = 'Sistema de Turnos'
+/** Lema institucional. Acompana a la marca donde hay sitio para el. */
+export const LEMA_INSTITUCION = 'Tu salud, nuestra prioridad'
 
 const RUTA_LOGO = '/img/logo-hospital.png'
 
@@ -43,11 +55,57 @@ type LogotipoProps = {
   /** `claro` para fondos oscuros (barra lateral), `oscuro` para fondos claros. */
   tono?: 'claro' | 'oscuro'
   compacto?: boolean
+  /**
+   * Que nombre manda en la marca.
+   *
+   * `sistema` (el de siempre) pone arriba "Sistema de Turnos". `institucion`
+   * pone arriba el nombre del hospital y anade el lema: es lo que va en la
+   * cabecera de la barra lateral, donde a quien trabaja no hay que recordarle
+   * en que sistema esta —lleva el dia entero dentro— sino dejarle ver de un
+   * vistazo de que hospital es la pantalla que tiene delante.
+   */
+  variante?: 'sistema' | 'institucion'
   className?: string
 }
 
-export function Logotipo({ tono = 'oscuro', compacto = false, className }: LogotipoProps) {
+export function Logotipo({
+  tono = 'oscuro',
+  compacto = false,
+  variante = 'sistema',
+  className,
+}: LogotipoProps) {
   const claro = tono === 'claro'
+
+  if (variante === 'institucion') {
+    return (
+      <span className={`flex min-w-0 items-center gap-3 ${className ?? ''}`}>
+        <Isotipo size={compacto ? 38 : 44} />
+        <span className="min-w-0">
+          <span
+            className={`block truncate text-[11px] font-semibold leading-tight tracking-[0.01em] ${
+              claro ? 'text-brand-200' : 'text-slate-500'
+            }`}
+          >
+            {NOMBRE_ENTIDAD}
+          </span>
+          <span
+            className={`block truncate font-black leading-tight tracking-[-0.02em] ${
+              compacto ? 'text-sm' : 'text-[15px]'
+            } ${claro ? 'text-white' : 'text-brand-950'}`}
+          >
+            {NOMBRE_SEDE}
+          </span>
+          <span
+            className={`block truncate text-[10px] font-medium leading-tight ${
+              claro ? 'text-brand-300/80' : 'text-slate-400'
+            }`}
+          >
+            {LEMA_INSTITUCION}
+          </span>
+        </span>
+      </span>
+    )
+  }
 
   return (
     <span className={`flex min-w-0 items-center gap-3 ${className ?? ''}`}>

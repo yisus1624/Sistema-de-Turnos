@@ -515,18 +515,53 @@ async function aplicarCitas(filas: FilaReporte[], catalogo: Catalogo, cargaId: s
     cambios.push({ id: decision.id, datos: { ...decision.datos, cargaId } })
   }
 
+  /*
+    LA AGENDA DEL DIA ENTRA COMPLETA O NO ENTRA.
+
+    Las altas y las modificaciones iban sueltas: un `createMany` y despues un
+    bucle de `update` uno por uno, cada cual con su propia transaccion
+    implicita. Si la conexion con la base se cortaba en la actualizacion 150 de
+    300 —y el reporte del hospital tiene ese tamaño—, quedaban las creadas
+    aplicadas, la mitad de las modificadas, y la fila de `CargaCitas` sin cerrar
+    con su resumen. La agenda quedaba a medias y el operador no tenia forma de
+    saberlo: no veia un error de "se aplico la mitad", veia un error cualquiera.
+
+    Volver a subir el archivo siempre reparo el estado, porque la operacion es
+    idempotente (la clave de deduplicacion coincide con el indice unico
+    `citaDelDia`). Pero "se arregla repitiendolo" solo sirve si alguien sabe que
+    tiene que repetirlo. Con todo en una transaccion, o se aplica el archivo
+    entero o no se toca ni una cita, y el error que ve el operador significa
+    exactamente lo que dice.
+
+    Se usa la forma de LISTA de `$transaction` y no la interactiva: la
+    interactiva tiene un tope de tiempo de cinco segundos por defecto, que
+    trescientas escrituras contra una base remota se pueden comer.
+  */
+  const escrituras = []
+
   if (nuevas.length > 0) {
     // `skipDuplicates` cubre la carrera de dos operadores subiendo el archivo
     // al mismo tiempo: el indice unico rechaza la repetida en vez de tumbar la
     // carga entera.
-    const creadas = await prisma.cita.createMany({ data: nuevas, skipDuplicates: true })
-    resultado.creadas = creadas.count
-    resultado.omitidas += nuevas.length - creadas.count
+    escrituras.push(prisma.cita.createMany({ data: nuevas, skipDuplicates: true }))
   }
 
   for (const cambio of cambios) {
-    await prisma.cita.update({ where: { id: cambio.id }, data: cambio.datos })
+    escrituras.push(prisma.cita.update({ where: { id: cambio.id }, data: cambio.datos }))
   }
+
+  if (escrituras.length > 0) {
+    const resultados = await prisma.$transaction(escrituras)
+
+    if (nuevas.length > 0) {
+      // El primero de la lista es el `createMany`, y es el unico que devuelve
+      // un conteo: las que no entraron son las que el indice unico rechazo.
+      const creadas = resultados[0] as { count: number }
+      resultado.creadas = creadas.count
+      resultado.omitidas += nuevas.length - creadas.count
+    }
+  }
+
   resultado.actualizadas = cambios.length
 
   return resultado

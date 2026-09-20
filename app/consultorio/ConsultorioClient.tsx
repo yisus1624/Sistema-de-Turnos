@@ -94,7 +94,18 @@ function AvisoAPantallaCompleta({
   )
 }
 
-export default function ConsultorioClient({ token }: { token: string }) {
+/*
+  YA NO RECIBE EL TOKEN, Y NO PUEDE RECIBIRLO.
+
+  Lo tenia como propiedad y lo pegaba en la ruta de cada llamada, que es como
+  acababa escrito en el registro de peticiones del servidor. Ahora el token
+  vive en una cookie `HttpOnly` que pone `proxy.ts` al canjear el enlace: el
+  navegador la manda sola en cada peticion a `/api/consultorio` y este codigo
+  ni la ve ni puede verla. Si algun dia alguien quisiera volver a mandarlo por
+  la URL, tendria que ir a buscarlo a otra parte, que es justo la friccion que
+  se busca.
+*/
+export default function ConsultorioClient() {
   const [cargando, setCargando] = useState(true)
   const [tokenInvalido, setTokenInvalido] = useState(false)
   const [sinConexion, setSinConexion] = useState(false)
@@ -126,7 +137,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
         pendientes: Turno[]
         turnoActual: Turno | null
         agenda: ItemAgendaProfesional[]
-      }>(`/api/consultorio/${token}?fecha=${fecha}`, SIN_LOGIN)
+      }>(`/api/consultorio?fecha=${fecha}`, SIN_LOGIN)
 
       setProfesional(data.profesional)
       setModulos(data.modulos)
@@ -154,7 +165,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
     } finally {
       setCargando(false)
     }
-  }, [token, fecha])
+  }, [fecha])
 
   useEffect(() => {
     cargarEstado()
@@ -201,7 +212,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
 
   const llamarSiguiente = () =>
     ejecutar('llamar', async () => {
-      const { turno } = await pedir<{ turno: Turno }>(`/api/consultorio/${token}/llamar-siguiente`, {
+      const { turno } = await pedir<{ turno: Turno }>('/api/consultorio/llamar-siguiente', {
         method: 'POST', ...SIN_LOGIN,
         body: JSON.stringify({ moduloId }),
       })
@@ -213,7 +224,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
   const repetirLlamado = () =>
     ejecutar('repetir', async () => {
       if (!turnoActual) return
-      const { turno } = await pedir<{ turno: Turno }>(`/api/consultorio/${token}/${turnoActual.id}/repetir`, {
+      const { turno } = await pedir<{ turno: Turno }>(`/api/consultorio/turnos/${turnoActual.id}/repetir`, {
         method: 'POST', ...SIN_LOGIN,
       })
       setTurnoActual(turno)
@@ -223,7 +234,7 @@ export default function ConsultorioClient({ token }: { token: string }) {
   const cerrarTurno = (tipo: 'atendido' | 'ausente') =>
     ejecutar(tipo, async () => {
       if (!turnoActual) return
-      await pedir(`/api/consultorio/${token}/${turnoActual.id}/${tipo}`, { method: 'POST', ...SIN_LOGIN })
+      await pedir(`/api/consultorio/turnos/${turnoActual.id}/${tipo}`, { method: 'POST', ...SIN_LOGIN })
       toast[tipo === 'atendido' ? 'success' : 'warning'](
         tipo === 'atendido' ? 'Atencion finalizada' : 'Paciente ausente',
         turnoActual.nombrePaciente ?? turnoActual.codigo,

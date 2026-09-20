@@ -28,6 +28,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { cifrarSiSePuede, descifrar } from '@/lib/seguridad/cifrado'
 import { realtimeHub } from '@/lib/realtime/hub'
 import { errorDeNegocio } from './errores'
 import { ordenAtencion, resumir, type PuestoEnLaFila } from './estadisticas'
@@ -2066,17 +2067,32 @@ export class PrismaTurnoRepository implements TurnoRepository {
     const acceso = await prisma.$transaction(async (tx) => {
       // Un doctor, un enlace activo: el anterior deja de servir en cuanto se
       // genera uno nuevo, para que no queden varias llaves vivas sueltas.
+      // El anterior se revoca y ADEMAS pierde su copia cifrada en la misma
+      // transaccion: un enlace que ya no abre nada tampoco tiene por que poder
+      // volver a mostrarse en la pantalla de enlaces.
       await tx.accesoProfesional.updateMany({
         where: { profesionalId, revocadoEn: null },
-        data: { revocadoEn: new Date() },
+        data: { revocadoEn: new Date(), tokenCifrado: null },
       })
 
       return tx.accesoProfesional.create({
         data: {
           profesionalId,
-          // El token EN CLARO no se guarda: solo su hash. Un volcado de la
-          // tabla no sirve para entrar a ningun consultorio.
+          // Lo que VALIDA la entrada es el hash, nunca el token guardado: un
+          // volcado de la tabla sin la clave de cifrado no abre ningun
+          // consultorio.
           tokenHash: hashToken(token),
+          // Y aparte, la copia cifrada, que es lo que deja volver a enseñar el
+          // enlace mientras el doctor esta en su turno. Se borra al revocarlo,
+          // al generar otro y al vencer.
+          //
+          // SI EL CIFRADO FALLA, EL ENLACE SE GENERA IGUAL. Poder volver a
+          // verlo es una comodidad; poder entrar al consultorio es la funcion.
+          // Con `cifrar` llamado en seco, un despliegue sin el secreto en el
+          // entorno —o una rotacion a medias— tumbaba la transaccion entera y
+          // dejaba a TODO el hospital sin poder generar un solo enlace, aunque
+          // la validacion por hash habria seguido funcionando perfectamente.
+          tokenCifrado: cifrarSiSePuede(token),
           expiraEn: new Date(Date.now() + duracionMinutos * 60 * 1000),
         },
       })
@@ -2094,7 +2110,24 @@ export class PrismaTurnoRepository implements TurnoRepository {
     })
     if (!acceso) return null
     if (acceso.revocadoEn) return null
-    if (acceso.expiraEn.getTime() <= Date.now()) return null
+
+    if (acceso.expiraEn.getTime() <= Date.now()) {
+      // VENCIDO: se aprovecha el paso por aqui para borrar la copia.
+      //
+      // El borrado estaba solo en `tokenVigenteDeProfesional`, es decir, solo
+      // ocurria si alguien abria la pantalla de enlaces. Un enlace generado el
+      // viernes que vencia esa noche, para un doctor al que nadie le vuelve a
+      // generar otro, dejaba su copia descifrable en la tabla para siempre. El
+      // doctor que reabre su pestaña vencida pasa por aqui, asi que este es el
+      // camino que de verdad se recorre.
+      if (acceso.tokenCifrado) {
+        await prisma.accesoProfesional.update({
+          where: { id: acceso.id },
+          data: { tokenCifrado: null },
+        })
+      }
+      return null
+    }
     if (!acceso.profesional.activo) return null
 
     await prisma.accesoProfesional.update({
@@ -2126,13 +2159,44 @@ export class PrismaTurnoRepository implements TurnoRepository {
     const acceso = await prisma.accesoProfesional.findUnique({ where: { id } })
     if (!acceso) errorDeNegocio('El acceso indicado no existe.')
 
-    if (acceso.revocadoEn) return aAcceso(acceso)
+    // Ya revocado: se limpia igualmente por si quedo copia de una version
+    // anterior del sistema. Revocar dos veces no puede dejar rastro legible.
+    if (acceso.revocadoEn) {
+      if (acceso.tokenCifrado) {
+        await prisma.accesoProfesional.update({ where: { id }, data: { tokenCifrado: null } })
+      }
+      return aAcceso(acceso)
+    }
 
     const fila = await prisma.accesoProfesional.update({
       where: { id },
-      data: { revocadoEn: new Date() },
+      // El enlace deja de servir Y deja de poder mostrarse, en la misma
+      // escritura: si se borrara despues, entre las dos habria una ventana en
+      // la que el mostrador todavia podia enseñar un enlace ya muerto.
+      data: { revocadoEn: new Date(), tokenCifrado: null },
     })
     return aAcceso(fila)
+  }
+
+  /** Ver `tokenVigenteDeProfesional` en el contrato del repositorio. */
+  async tokenVigenteDeProfesional(profesionalId: string): Promise<string | null> {
+    const acceso = await prisma.accesoProfesional.findFirst({
+      where: { profesionalId, revocadoEn: null },
+      orderBy: { creadoEn: 'desc' },
+    })
+    if (!acceso?.tokenCifrado) return null
+
+    // Vencido: se limpia la copia al pasar por aqui. No hace falta una tarea
+    // programada para que la tabla no acumule llaves muertas legibles.
+    if (acceso.expiraEn.getTime() <= Date.now()) {
+      await prisma.accesoProfesional.update({
+        where: { id: acceso.id },
+        data: { tokenCifrado: null },
+      })
+      return null
+    }
+
+    return descifrar(acceso.tokenCifrado)
   }
 }
 

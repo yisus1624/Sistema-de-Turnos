@@ -255,9 +255,12 @@ export interface TurnoRepository {
    * Genera un enlace nuevo para el profesional, vigente por `duracionMinutos`
    * desde ahora (el hospital tiene turnos de manana, tarde y noche: la
    * vigencia la elige el administrador, no es fija). Revoca cualquier acceso
-   * vigente que tuviera: un doctor, un enlace activo a la vez. El `token` en
-   * claro solo viaja en este retorno; el repositorio guarda unicamente su
-   * hash.
+   * vigente que tuviera: un doctor, un enlace activo a la vez, y la copia
+   * cifrada del anterior se borra en la misma operacion.
+   *
+   * Lo que valida la entrada sigue siendo el hash. Ademas se guarda una copia
+   * CIFRADA del token para poder volver a mostrarlo mientras esta vigente (ver
+   * `tokenVigenteDeProfesional`).
    */
   crearAccesoProfesional(
     profesionalId: string,
@@ -268,7 +271,22 @@ export interface TurnoRepository {
    * revocado. Si es valido, registra `ultimoUsoEn`.
    */
   validarAccesoProfesional(token: string): Promise<Profesional | null>
+  /**
+   * El token EN CLARO del enlace vigente de un doctor, o `null` si no tiene
+   * ninguno vivo (o si su copia cifrada ya no se puede leer).
+   *
+   * EXISTE PARA NO TENER QUE REGENERAR. En el mostrador se pierde el mensaje
+   * con el enlace, o lo genero otro equipo, y hasta ahora la unica salida era
+   * crear uno nuevo: eso revoca el anterior y expulsa al doctor que en ese
+   * momento esta llamando pacientes.
+   *
+   * NUNCA devuelve el token de un acceso revocado o vencido, y de paso limpia
+   * la copia cifrada del que encuentre vencido: la tabla no tiene por que
+   * seguir guardando una llave que ya no abre nada.
+   */
+  tokenVigenteDeProfesional(profesionalId: string): Promise<string | null>
   listarAccesosProfesional(): Promise<AccesoProfesional[]>
+  /** Revoca el acceso y borra su copia cifrada: deja de poder mostrarse. */
   revocarAccesoProfesional(id: string): Promise<AccesoProfesional>
 }
 

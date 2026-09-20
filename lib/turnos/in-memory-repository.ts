@@ -77,7 +77,18 @@ interface EstadoMemoria {
    * minimizar datos sensibles; un enlace filtrado del estado no sirve para
    * entrar).
    */
-  accesosProfesional: Array<AccesoProfesional & { tokenHash: string }>
+  /**
+   * Los accesos, con el hash que valida la entrada y una copia del token para
+   * poder volver a mostrar el enlace.
+   *
+   * AQUI LA COPIA VA EN CLARO, y en Postgres va cifrada. No es una
+   * incoherencia: este almacen vive en la memoria del proceso, asi que cifrar
+   * no protegeria de nada —la clave estaria en el mismo sitio que el dato—. Lo
+   * que si es identico en las dos implementaciones es CUANDO se borra: al
+   * revocar, al generar otro y al encontrarlo vencido. Esa es la regla que
+   * importa y la que se puede probar.
+   */
+  accesosProfesional: Array<AccesoProfesional & { tokenHash: string; tokenGuardado: string | null }>
 }
 
 function crearId() {
@@ -1949,6 +1960,8 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     for (const previo of estado.accesosProfesional) {
       if (previo.profesionalId === profesionalId && !previo.revocadoEn) {
         previo.revocadoEn = ahoraISO()
+        // Y pierde la copia: un enlace revocado no puede seguir mostrandose.
+        previo.tokenGuardado = null
       }
     }
 
@@ -1956,7 +1969,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     const creadoEn = ahoraISO()
     const expiraEn = new Date(Date.now() + duracionMinutos * 60 * 1000).toISOString()
 
-    const acceso: AccesoProfesional & { tokenHash: string } = {
+    const acceso: AccesoProfesional & { tokenHash: string; tokenGuardado: string | null } = {
       id: `acc-${crearId()}`,
       profesionalId,
       creadoEn,
@@ -1964,10 +1977,11 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       revocadoEn: null,
       ultimoUsoEn: null,
       tokenHash: hashToken(token),
+      tokenGuardado: token,
     }
     estado.accesosProfesional.push(acceso)
 
-    const { tokenHash: _tokenHash, ...accesoPublico } = acceso
+    const { tokenHash: _tokenHash, tokenGuardado: _tokenGuardado, ...accesoPublico } = acceso
     return { acceso: accesoPublico, token }
   }
 
@@ -1977,7 +1991,14 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     const acceso = estado.accesosProfesional.find((a) => a.tokenHash === hash)
     if (!acceso) return null
     if (acceso.revocadoEn) return null
-    if (new Date(acceso.expiraEn).getTime() <= Date.now()) return null
+    if (new Date(acceso.expiraEn).getTime() <= Date.now()) {
+      // Vencido: se limpia la copia al pasar por aqui, igual que en Postgres.
+      // El doctor que reabre su pestaña vencida recorre este camino, que es el
+      // que de verdad ocurre; el de la pantalla de enlaces puede no ocurrir
+      // nunca para un doctor al que ya nadie le genera enlaces.
+      acceso.tokenGuardado = null
+      return null
+    }
 
     const profesional = estado.profesionales.find((p) => p.id === acceso.profesionalId && p.activo)
     if (!profesional) return null
@@ -1986,10 +2007,27 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     return profesional
   }
 
+  /** Ver `tokenVigenteDeProfesional` en el contrato del repositorio. */
+  async tokenVigenteDeProfesional(profesionalId: string): Promise<string | null> {
+    const acceso = estado.accesosProfesional
+      .filter((a) => a.profesionalId === profesionalId && !a.revocadoEn)
+      .sort((a, b) => new Date(b.creadoEn).getTime() - new Date(a.creadoEn).getTime())[0]
+
+    if (!acceso?.tokenGuardado) return null
+
+    // Vencido: se limpia la copia al pasar por aqui, igual que en Postgres.
+    if (new Date(acceso.expiraEn).getTime() <= Date.now()) {
+      acceso.tokenGuardado = null
+      return null
+    }
+
+    return acceso.tokenGuardado
+  }
+
   /** Ver `listarAccesosProfesional` en la implementacion contra Postgres. */
   async listarAccesosProfesional(): Promise<AccesoProfesional[]> {
     const masRecientesPrimero = estado.accesosProfesional
-      .map(({ tokenHash: _tokenHash, ...acceso }) => acceso)
+      .map(({ tokenHash: _tokenHash, tokenGuardado: _tokenGuardado, ...acceso }) => acceso)
       .sort((a, b) => new Date(b.creadoEn).getTime() - new Date(a.creadoEn).getTime())
 
     // El ULTIMO de cada doctor, igual que la otra implementacion: como la lista
@@ -2007,8 +2045,11 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     const acceso = estado.accesosProfesional.find((a) => a.id === id)
     if (!acceso) errorDeNegocio('El acceso indicado no existe.')
     if (!acceso.revocadoEn) acceso.revocadoEn = ahoraISO()
+    // Se borra SIEMPRE, tambien si ya estaba revocado: revocar dos veces no
+    // puede dejar el enlace legible.
+    acceso.tokenGuardado = null
 
-    const { tokenHash: _tokenHash, ...accesoPublico } = acceso
+    const { tokenHash: _tokenHash, tokenGuardado: _tokenGuardado, ...accesoPublico } = acceso
     return accesoPublico
   }
 }

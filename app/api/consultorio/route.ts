@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
-import { errorConsultorio, requireProfesionalPorToken } from '@/lib/turnos/acceso-consultorio'
+import { errorConsultorio, requireProfesionalDelConsultorio } from '@/lib/turnos/acceso-consultorio'
 
 /** Fecha de hoy en Colombia, en formato AAAA-MM-DD (mismo criterio que estadisticas). */
 function hoyEnColombia() {
@@ -17,10 +17,9 @@ function hoyEnColombia() {
  * consultorio, asi que es de las rutas mas repetidas del sistema: las cuatro
  * consultas van en paralelo y ninguna construye el historico entero.
  */
-export async function GET(request: Request, context: { params: Promise<{ token: string }> }) {
+export async function GET(request: Request) {
   try {
-    const { token } = await context.params
-    const profesional = await requireProfesionalPorToken(token)
+    const profesional = await requireProfesionalDelConsultorio(request)
 
     const url = new URL(request.url)
     const fecha = url.searchParams.get('fecha') || hoyEnColombia()

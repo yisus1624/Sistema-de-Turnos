@@ -1,0 +1,12 @@
+-- Copia cifrada del enlace de consultorio, para poder volver a mostrarlo
+-- mientras dura el turno del doctor sin tener que generar otro (generar otro
+-- revoca el anterior y expulsa al doctor que esta llamando pacientes).
+--
+-- El `tokenHash` sigue siendo lo unico que valida la entrada. Esta columna se
+-- borra al revocar el acceso, al generar uno nuevo y la primera vez que se
+-- consulta uno ya vencido, asi que lo descifrable en cualquier momento son
+-- solo enlaces vivos, que ademas caducan solos en horas.
+--
+-- Nace en NULL para los accesos que ya existen: de esos el sistema nunca tuvo
+-- el token en claro y no hay forma de recuperarlo.
+ALTER TABLE "accesos_profesional" ADD COLUMN "tokenCifrado" TEXT;

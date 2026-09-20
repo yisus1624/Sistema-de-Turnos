@@ -196,6 +196,15 @@ model AccesoProfesional {
   id            String    @id @default(cuid())
   profesionalId String
   tokenHash     String    @unique
+  /// Copia CIFRADA del enlace, para poder volver a mostrarlo mientras dura el
+  /// turno del doctor (ver `lib/seguridad/cifrado.ts`). El `tokenHash` de
+  /// arriba sigue siendo lo unico que valida la entrada; esto es aparte.
+  ///
+  /// SE BORRA EN CUANTO EL ENLACE DEJA DE SERVIR: al revocarlo, al generar uno
+  /// nuevo (que revoca el anterior) y la primera vez que alguien lo consulta
+  /// ya vencido. Asi, lo descifrable de esta tabla en cualquier momento son
+  /// solo los enlaces vivos, que ademas caducan solos en horas.
+  tokenCifrado  String?
   creadoEn      DateTime  @default(now())
   expiraEn      DateTime
   revocadoEn    DateTime?

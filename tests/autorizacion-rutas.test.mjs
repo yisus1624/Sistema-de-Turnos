@@ -126,11 +126,11 @@ async function metodosDe(ruta) {
 }
 
 /** Invoca el handler como lo hace Next: una peticion y los parametros de la URL. */
-async function invocar({ ruta, metodo, ejecutar }) {
+async function invocar({ ruta, metodo, ejecutar }, cabecerasExtra = {}) {
   const url = `http://localhost/${ruta.slice('app/'.length)}`.replace(/\[[^\]]+\]/g, 'x')
   const peticion = new Request(url, {
     method: metodo,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...cabecerasExtra },
     body: metodo === 'GET' ? undefined : '{}',
   })
   const parametros = { id: 'x', token: 'token-inventado', turnoId: 'x' }
@@ -187,14 +187,36 @@ test('el enlace del consultorio no sirve con un token inventado, ni acompanado d
   // Estas rutas no van por sesion sino por el token del enlace del medico: da
   // igual quien pregunte, con un token que no vale no se llama a ningun
   // paciente ni se cierra la atencion de nadie.
-  const delConsultorio = RUTAS.filter((ruta) => ruta.startsWith('app/api/consultorio/'))
+  // Sin barra al final: la raiz es `app/api/consultorio` desde que el token
+  // salio de la ruta, y las cinco cuelgan de ahi.
+  const delConsultorio = RUTAS.filter((ruta) => ruta.startsWith('app/api/consultorio'))
   assert.ok(delConsultorio.length >= 5, 'faltan rutas del consultorio por comprobar')
+
+  /*
+    TRES MANERAS DE NO TENER PERMISO, Y LAS TRES SE COMPRUEBAN.
+
+    El token ya no viaja en la ruta sino por cookie o por cabecera, asi que
+    "sin token" dejo de ser el unico caso: hay que probar tambien que un token
+    inventado por cualquiera de esas dos vias se rechaza igual. Si no, el dia
+    que alguien invierta una condicion en el lector de la cookie el barrido
+    seguiria en verde, porque solo estaria probando la peticion vacia.
+  */
+  const credenciales = [
+    {},
+    { cookie: 'turnos_consultorio=token-inventado' },
+    { 'x-consultorio-token': 'token-inventado' },
+  ]
 
   for (const quien of [null, OPERADOR_SIN_SECCIONES]) {
     sesion = quien
     for (const ruta of delConsultorio) {
       for (const handler of await metodosDe(ruta)) {
-        await assertRechazo(await invocar(handler), `${handler.metodo} ${ruta} con token inventado`)
+        for (const cabeceras of credenciales) {
+          await assertRechazo(
+            await invocar(handler, cabeceras),
+            `${handler.metodo} ${ruta} con ${JSON.stringify(cabeceras)}`,
+          )
+        }
       }
     }
   }
@@ -293,4 +315,38 @@ test('la carga de la agenda la puede hacer el operador, no solo el administrador
     assert.equal(respuesta.status, 400, `${rol} deberia poder cargar la agenda`)
     assert.match((await respuesta.json()).error, /archivo/i)
   }
+})
+
+test('el enlace vigente lo puede ver el operador al que se le dio la seccion, no solo el administrador', async () => {
+  // Quien reparte los enlaces es el mostrador, no el administrador: el doctor
+  // llega a su turno y ahi mismo necesita el suyo. Si ver el enlace vigente
+  // fuera solo del administrador, el operador que perdio el mensaje no tendria
+  // mas salida que generar otro —y eso revoca el que el doctor esta usando—.
+  //
+  // El barrido de arriba ya fija lo contrario (un operador SIN secciones queda
+  // fuera); esta fija quien SI entra, y que el que no tiene esa seccion no.
+  const { GET } = await import('@/app/api/profesionales/[id]/acceso/enlace/route')
+
+  const pedir = () =>
+    GET(new Request('http://localhost/api/profesionales/pro-perez/acceso/enlace'), {
+      params: Promise.resolve({ id: 'pro-perez' }),
+    })
+
+  const conPermiso = [
+    { id: 'usr-admin', rol: 'ADMINISTRADOR', secciones: null, nombre: 'Admin' },
+    // Operador al que le dieron Enlaces de consultorio y nada mas.
+    { id: 'usr-op', rol: 'OPERADOR', secciones: ['/admin/enlaces'], nombre: 'Operador' },
+  ]
+
+  for (const user of conPermiso) {
+    sesion = { user }
+    const respuesta = await pedir()
+    // 404 porque ese doctor no tiene enlace vivo en esta prueba, NO 403: el
+    // permiso paso y lo que falta es el enlace.
+    assert.equal(respuesta.status, 404, `${user.rol} deberia poder consultar el enlace`)
+  }
+
+  // Y el operador al que NO se le dio esa seccion sigue fuera.
+  sesion = { user: { id: 'usr-otro', rol: 'OPERADOR', secciones: ['/operador'], nombre: 'Otro' } }
+  assert.equal((await pedir()).status, 403, 'un operador sin la seccion no puede ver enlaces')
 })

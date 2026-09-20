@@ -4,12 +4,19 @@
 
 @layer base {
   :root {
-    --turnos-bg: #f2f7f9;
+    --turnos-bg: #f4f8fc;
     --turnos-ink: #0a2634;
     --turnos-muted: #64748b;
     --turnos-brand: #1c86a8;
     --turnos-brand-dark: #135872;
     --turnos-sidebar: #0a2634;
+    /*
+     * El azul de lo que se puede tocar (ver `acento` en tailwind.config.ts).
+     * Aqui en CSS para el anillo de foco: es el mismo color que enciende la
+     * seccion activa, asi que "donde estoy" y "donde tengo el teclado" hablan
+     * el mismo idioma.
+     */
+    --turnos-acento: #1d6fe0;
 
     /*
      * PROFUNDIDAD EN CAPAS, NO UNA SOMBRA PLANA.
@@ -127,8 +134,32 @@
   }
 
   :is(button, [role='button'], a):focus-visible {
-    outline: 3px solid var(--turnos-brand) !important;
+    outline: 3px solid var(--turnos-acento) !important;
     outline-offset: 3px !important;
+  }
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * LA BARRA LATERAL ES UNA SUPERFICIE, NO UN RECTANGULO DE COLOR
+ * ---------------------------------------------------------------------------
+ *
+ * Un plano de un solo tono se lee como un bloque pegado al borde de la
+ * pantalla. Con una caida muy leve de arriba a abajo —tres tonos del mismo
+ * azul, sin que se note el degradado— la barra parece tener profundidad y el
+ * pie (la cuenta, la salida) se asienta en vez de flotar.
+ *
+ * El filo derecho es una linea clara, no oscura: es el canto de un panel que
+ * recibe la luz de la pagina, igual que el borde superior de un material
+ * traslucido.
+ */
+.superficie-menu {
+  background: linear-gradient(180deg, #0e3346 0%, var(--turnos-sidebar) 58%, #071d28 100%);
+}
+
+@media (prefers-contrast: more) {
+  .superficie-menu {
+    background: var(--turnos-sidebar);
   }
 }
 

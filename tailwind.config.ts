@@ -25,6 +25,33 @@ const config: Config = {
           900: '#143d4f',
           950: '#0a2634',
         },
+
+        /*
+         * ACENTO: EL AZUL DE LO QUE SE PUEDE TOCAR.
+         *
+         * El teal de `brand` es la identidad —la barra lateral, el logo, la
+         * pantalla de sala de espera— y por eso esta en todas partes. Eso era
+         * justo el problema: cuando el color de la marca tambien es el color
+         * del boton, de la pestaña encendida y de la seccion activa, nada
+         * destaca, porque todo lleva el mismo tono.
+         *
+         * Este azul se reserva para UNA cosa: donde esta el usuario y que
+         * puede pulsar. Es mas saturado y mas frio que el teal, asi que salta
+         * sobre el, y no se usa para superficies grandes ni para decorar.
+         */
+        acento: {
+          50:  '#eff5ff',
+          100: '#dbe8fe',
+          200: '#bfd7fe',
+          300: '#93bbfd',
+          400: '#6098fa',
+          500: '#3b78f6',
+          600: '#1d6fe0',
+          700: '#1a54b8',
+          800: '#1b4794',
+          900: '#1c3f75',
+          950: '#152847',
+        },
       },
     },
   },

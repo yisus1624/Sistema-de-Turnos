@@ -18,6 +18,7 @@
  * (Redis pub/sub, etc.). Para el despliegue en una sola VPS es suficiente.
  */
 import { EventEmitter } from 'events'
+import { topeDeConexionesEnVivo } from './aforo'
 import type { CasillaPantalla } from '@/lib/turnos/types'
 
 export type EventoTurno =
@@ -53,12 +54,28 @@ export type EventoTurno =
 
 const EVENTO = 'turno'
 
+/**
+ * Oyentes que no son conexiones de navegador: hoy solo la cache de la pantalla
+ * publica (`lib/turnos/pantalla-cacheada.ts`), que se suscribe una vez y se
+ * queda. Se deja holgura para no tener que tocar esto al añadir otro.
+ */
+const MARGEN_DE_OYENTES = 10
+
 class RealtimeHub {
   private emitter = new EventEmitter()
 
   constructor() {
-    // Puede haber varias pantallas y consultorios conectados a la vez.
-    this.emitter.setMaxListeners(100)
+    /*
+      El tope de oyentes sale del aforo del canal, no de un numero escrito aqui.
+
+      Cada conexion SSE engancha un oyente (mas el permanente de la cache de la
+      pantalla, y de ahi el margen). Estaba fijo en 100 mientras el aforo
+      admitia 200: pasando de cien televisores y consultorios conectados, Node
+      avisaba de una fuga que no existia —las conexiones estaban admitidas a
+      proposito— y ensuciaba el log con trazas en cada suscripcion. Ahora subir
+      el aforo con `TURNOS_MAX_CANAL_EN_VIVO` sube los dos a la vez.
+    */
+    this.emitter.setMaxListeners(topeDeConexionesEnVivo() + MARGEN_DE_OYENTES)
   }
 
   publish(evento: EventoTurno) {

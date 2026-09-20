@@ -168,7 +168,7 @@ export default function PruebasClient() {
             agenda: ItemAgendaProfesional[]
             pendientes: Turno[]
             turnoActual: Turno | null
-          }>(`/api/consultorio/${token}?fecha=${hoy}`)
+          }>(`/api/consultorio?fecha=${hoy}`, { headers: { 'x-consultorio-token': token } })
 
         let estado = await leerEstado()
         let porLlegar = estado.agenda.filter((item) => item.estado === 'PROGRAMADA')
@@ -254,8 +254,18 @@ export default function PruebasClient() {
     async (doctor: DoctorSimulado) => {
       setDoctores((prev) => prev.map((d) => (d.profesionalId === doctor.profesionalId ? { ...d, llamando: true } : d)))
       try {
-        const { turno } = await pedir<{ turno: Turno }>(`/api/consultorio/${doctor.token}/llamar-siguiente`, {
+        /*
+          LA SIMULACION MANDA EL TOKEN EN UNA CABECERA, NO EN LA RUTA.
+
+          El doctor de verdad entra con cookie (ver `proxy.ts`), pero este
+          panel hace de ocho doctores a la vez desde una sola pestaña y una
+          cookie no puede ser ocho cosas. La cabecera sirve para las dos cosas
+          que importan: no aparece en el registro de peticiones del servidor
+          —que era el problema— y deja que cada llamada diga de que doctor es.
+        */
+        const { turno } = await pedir<{ turno: Turno }>('/api/consultorio/llamar-siguiente', {
           method: 'POST',
+          headers: { 'x-consultorio-token': doctor.token },
           body: JSON.stringify({ moduloId: doctor.moduloId }),
         })
         agregarLog(`${doctor.nombre} llamo a ${turno.codigo}${turno.nombrePaciente ? ` — ${turno.nombrePaciente}` : ''}.`)

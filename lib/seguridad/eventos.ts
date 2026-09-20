@@ -51,6 +51,15 @@ export const EVENTOS = {
   ACCESO_PROFESIONAL: 'ACCESO_PROFESIONAL',
   ACCESO_PROFESIONAL_GENERADO: 'ACCESO_PROFESIONAL_GENERADO',
   ACCESO_PROFESIONAL_REVOCADO: 'ACCESO_PROFESIONAL_REVOCADO',
+  /**
+   * Alguien volvio a mirar un enlace ya generado.
+   *
+   * Se apunta porque el enlace es una llave que abre la agenda con nombres de
+   * pacientes sin pedir contrasena: quien pudo tenerla en la mano es parte de
+   * la respuesta a "¿quien entro a ese consultorio?", y sin esto solo quedaba
+   * registrado quien la genero, no quien la copio despues.
+   */
+  ACCESO_PROFESIONAL_CONSULTADO: 'ACCESO_PROFESIONAL_CONSULTADO',
 
   CITA_CREADA: 'CITA_CREADA',
   CITA_CANCELADA: 'CITA_CANCELADA',

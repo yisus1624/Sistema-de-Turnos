@@ -118,6 +118,26 @@ const nextConfig = {
         ],
       },
       {
+        /*
+          EL CONSULTORIO NO MANDA REFERER A NADIE.
+
+          La politica general, `strict-origin-when-cross-origin`, envia la URL
+          COMPLETA en las peticiones del mismo origen. Mientras la pagina del
+          doctor vivio en `/consultorio/<token>`, eso significaba que cada
+          `fetch` a la API y cada reconexion del canal de eventos salia con
+          `Referer: https://host/consultorio/<TOKEN>` —y el referer si acaba en
+          los registros del proxy—.
+
+          El token ya no esta en la direccion de la pagina (lo canjea el
+          middleware por una cookie), asi que esta regla es la segunda linea:
+          cubre el instante de la PRIMERA visita, cuando la pagina todavia se
+          esta sirviendo desde la URL que si lo lleva, y cualquier recurso que
+          esa pagina llegue a pedir antes de la redireccion.
+        */
+        source: '/consultorio/:path*',
+        headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }],
+      },
+      {
         // La pantalla de sala de espera se puede embeber (ej. dentro del
         // panel de pruebas del administrador), pero solo desde el mismo
         // sitio: no se abre la puerta a que cualquier pagina externa la

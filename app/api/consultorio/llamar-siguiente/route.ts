@@ -1,17 +1,16 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
-import { errorConsultorio, requireProfesionalPorToken } from '@/lib/turnos/acceso-consultorio'
+import { errorConsultorio, requireProfesionalDelConsultorio } from '@/lib/turnos/acceso-consultorio'
 import { registrarLlamado } from '@/lib/turnos/rastro-llamado'
 
 const bodySchema = z.object({
   moduloId: z.string().min(1, 'Debes indicar el consultorio.'),
 })
 
-export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
+export async function POST(request: Request) {
   try {
-    const { token } = await context.params
-    const profesional = await requireProfesionalPorToken(token)
+    const profesional = await requireProfesionalDelConsultorio(request)
 
     const body = await request.json().catch(() => null)
     const parsed = bodySchema.safeParse(body)

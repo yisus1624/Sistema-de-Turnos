@@ -8,7 +8,9 @@ export default function Pagina() {
     <RoleShell
       rol="ADMINISTRADOR" seccion="/admin/profesionales"
       title="Profesionales"
-      description="Genera el enlace temporal con el que cada doctor entra a su consultorio, sin usuario ni contrasena."
+      // La de antes describia "Enlaces de consultorio", que es otra pantalla:
+      // esta no genera ningun enlace, muestra quien atiende cada dia.
+      description="Quien atiende el dia que elijas, con su jornada, su horario y su consultorio. Los doctores entran solos con la carga del reporte; aqui se corrige su ficha."
     >
       <ProfesionalesClient />
     </RoleShell>

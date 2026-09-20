@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { CaretLeft, CaretRight, List, SignOut, UserCircle } from '@phosphor-icons/react'
+import { CaretDown, CaretLeft, CaretRight, List, SignOut, UserCircle } from '@phosphor-icons/react'
 import { logoutAction } from '@/app/actions/auth'
 import { Isotipo, Logotipo } from '@/components/brand/Marca'
 import type { RolUsuario } from '@/lib/usuarios/types'
@@ -104,7 +104,7 @@ export default function AppShell({
                 mantiene la presencia y se lee. El espaciado amplio se queda,
                 que es lo que hace legible una mayuscula pequena.
               */
-              'px-3 text-[11px] font-semibold uppercase tracking-[0.09em] text-brand-200/70',
+              'px-3 text-[10px] font-semibold uppercase tracking-[0.13em] text-brand-200/45',
               sidebarColapsado && 'lg:sr-only',
             )}
           >
@@ -129,13 +129,35 @@ export default function AppShell({
 
                       El encogido responde en 110ms, no en los 150 genericos.
                     */
-                    'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm',
-                    'transition-[background-color,color] duration-[var(--suave)]',
+                    'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm tracking-[-0.006em]',
+                    /*
+                      El color responde en el acto al pasar y al pulsar: la
+                      curva de la casa es la misma que usa el resto del sistema,
+                      y a 220ms el cambio se nota sin llamar la atencion.
+                    */
+                    'transition-[background-color,color] duration-[var(--suave)] ease-[var(--curva)]',
                     'active:scale-[.98] active:transition-transform active:duration-[var(--toque)]',
                     sidebarColapsado && 'lg:h-12 lg:w-12 lg:justify-center lg:gap-0 lg:px-0 lg:py-0',
+                    /*
+                      LA SECCION ACTIVA ES UNA PASTILLA AZUL, NO UN HUECO BLANCO.
+
+                      En blanco sobre el fondo oscuro parecia un agujero
+                      recortado en la barra y, de lejos, competia con el logo,
+                      que tambien es blanco. En el teal de la marca tampoco
+                      funcionaba: la barra entera ya es teal, asi que la pastilla
+                      se confundia con su propio fondo. El azul de acento es el
+                      unico color de la barra que no esta en ninguna otra parte
+                      de ella, y por eso se ve antes que nada.
+
+                      El degradado es minimo —dos tonos vecinos— pero es lo que
+                      hace que la pastilla se lea como una tecla iluminada y no
+                      como un rectangulo relleno. Hace el trabajo que aqui no
+                      puede hacer una sombra: las sombras en botones y enlaces
+                      estan desactivadas en todo el sistema (ver globals.css).
+                    */
                     activa
-                      ? 'bg-white font-semibold text-brand-950'
-                      : 'font-medium text-brand-100 hover:bg-white/10 hover:text-white',
+                      ? 'bg-gradient-to-b from-acento-500 to-acento-600 font-semibold text-white'
+                      : 'font-medium text-brand-100/85 hover:bg-white/[0.07] hover:text-white',
                   )}
                 >
                   <item.icon size={20} weight={activa ? 'fill' : 'regular'} className="shrink-0" />
@@ -162,9 +184,9 @@ export default function AppShell({
       href="/mi-cuenta"
       title="Mi cuenta"
       className={cn(
-        'mt-4 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-white/10 hover:text-white active:scale-[.98]',
+        'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-white/10 hover:text-white active:scale-[.98]',
         esActiva(pathname, '/mi-cuenta')
-          ? 'bg-white font-semibold text-brand-950 hover:bg-white hover:text-brand-950'
+          ? 'font-semibold text-white'
           : 'font-medium text-brand-100',
         sidebarColapsado && 'lg:h-12 lg:w-12 lg:justify-center lg:gap-0 lg:self-center lg:px-0 lg:py-0',
       )}
@@ -180,7 +202,7 @@ export default function AppShell({
       onClick={cerrarSesion}
       disabled={cerrandoSesion}
       className={cn(
-        'mt-4 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold text-brand-100 transition hover:bg-white/10 hover:text-white active:scale-[.98] disabled:cursor-wait disabled:opacity-70',
+        'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-brand-100 transition hover:bg-white/10 hover:text-white active:scale-[.98] disabled:cursor-wait disabled:opacity-70',
         sidebarColapsado && 'lg:h-12 lg:w-12 lg:justify-center lg:gap-0 lg:self-center lg:px-0 lg:py-0',
       )}
       aria-busy={cerrandoSesion}
@@ -191,6 +213,23 @@ export default function AppShell({
         {cerrandoSesion ? 'Cerrando sesion...' : 'Cerrar sesion'}
       </span>
     </button>
+  )
+
+  /*
+    El pie de la barra se separa del menu con una linea tenue. Ni la cuenta ni
+    la salida son secciones del sistema, y sin esa separacion "Cerrar sesion"
+    se leia como una seccion mas del menu, justo debajo de la ultima.
+  */
+  const pieDeBarra = (
+    <div
+      className={cn(
+        'mt-4 space-y-1 border-t border-white/10 pt-3',
+        sidebarColapsado && 'lg:flex lg:flex-col lg:items-center lg:space-y-2',
+      )}
+    >
+      {enlaceMiCuenta}
+      {botonSalir}
+    </div>
   )
 
   return (
@@ -208,14 +247,14 @@ export default function AppShell({
       <aside
         id="menu-lateral"
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-[280px] max-w-[82vw] flex-col bg-[var(--turnos-sidebar)] px-4 py-6 text-white shadow-2xl transition-transform duration-300 ease-out lg:hidden',
+          'fixed inset-y-0 left-0 z-50 flex w-[280px] max-w-[82vw] flex-col superficie-menu px-4 py-6 text-white shadow-2xl transition-transform duration-300 ease-out lg:hidden',
           menuMovilAbierto ? 'translate-x-0' : '-translate-x-full',
         )}
         aria-hidden={!menuMovilAbierto}
         inert={!menuMovilAbierto}
       >
         <div className="flex items-center justify-between gap-3">
-          <Logotipo tono="claro" />
+          <Logotipo tono="claro" variante="institucion" />
           <button
             type="button"
             onClick={() => setMenuMovilAbierto(false)}
@@ -227,42 +266,32 @@ export default function AppShell({
         </div>
 
         <nav className="custom-scrollbar mt-7 flex-1 space-y-6 overflow-y-auto pr-1">{navegacion}</nav>
-        {enlaceMiCuenta}
-        {botonSalir}
+        {pieDeBarra}
       </aside>
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-white/5 bg-[var(--turnos-sidebar)] py-5 text-white transition-[width,padding] duration-300 lg:flex',
+          'fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-white/[0.07] superficie-menu py-5 text-white transition-[width,padding] duration-300 lg:flex',
           sidebarColapsado ? 'w-20 px-2.5' : 'w-[264px] px-4',
         )}
       >
+        {/*
+          LA CABECERA DE LA BARRA ES SOLO LA MARCA.
+
+          El boton de plegar vivia aqui, pegado al logo, y eran dos cosas
+          distintas compartiendo el sitio mas visible de la pantalla. Ahora
+          plegar se hace desde la barra superior, junto al titulo, que es donde
+          se mira cuando se quiere mas ancho para el contenido; aqui queda la
+          identidad del hospital y nada mas.
+        */}
         {sidebarColapsado ? (
-          <button
-            type="button"
-            onClick={alternarSidebar}
-            className="grid h-12 w-12 shrink-0 place-items-center self-center rounded-2xl bg-white text-brand-950 transition hover:bg-brand-50 active:scale-95"
-            aria-label="Expandir menu lateral"
-          >
-            <CaretRight size={20} weight="bold" />
-          </button>
+          <Isotipo size={40} className="self-center" />
         ) : (
-          <div className="flex items-center justify-between gap-2">
-            <Logotipo tono="claro" compacto />
-            <button
-              type="button"
-              onClick={alternarSidebar}
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/5 text-brand-100 transition hover:bg-white/10 hover:text-white active:scale-95"
-              aria-label="Contraer menu lateral"
-            >
-              <CaretLeft size={17} weight="bold" />
-            </button>
-          </div>
+          <Logotipo tono="claro" variante="institucion" compacto />
         )}
 
         <nav className="sidebar-scrollbar mt-6 flex-1 space-y-5 overflow-y-auto pr-1">{navegacion}</nav>
-        {enlaceMiCuenta}
-        {botonSalir}
+        {pieDeBarra}
       </aside>
 
       <section
@@ -301,44 +330,65 @@ export default function AppShell({
           </span>
         </div>
 
-        <header className="border-b border-slate-200/80 bg-[var(--turnos-bg)] px-4 py-4 md:px-7">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              {/*
-                El rastro de ubicacion (rol › area) es una referencia, no un
-                titular: en negra maxima competia con el nombre de la pantalla
-                que tiene justo debajo. Baja a peso medio y abre el espaciado,
-                que es lo que pide un texto de 12px para leerse limpio.
-              */}
-              <div className="hidden items-center gap-2 text-xs font-medium tracking-[0.02em] text-brand-600 lg:flex">
-                {rolLabels[rol]}
-                {area ? (
-                  <>
-                    <CaretRight size={13} />
-                    <span className="truncate text-slate-500">{area}</span>
-                  </>
-                ) : null}
-              </div>
-              {/*
-                El nombre de la pantalla es lo mas grande que hay aqui, asi que
-                el tamano ya manda: no necesita ademas el grosor maximo. En
-                semi-negrita y algo mas apretado se lee como un titulo
-                cuidado en vez de como un grito.
-              */}
-              <h1 className="truncate text-2xl font-semibold tracking-[-0.028em] text-brand-950 lg:mt-1">{title}</h1>
-            </div>
+        <header className="border-b border-slate-200/60 bg-[var(--turnos-bg)] px-4 pb-4 md:px-7">
+          {/*
+            BARRA SUPERIOR: PLEGAR A LA IZQUIERDA, LA CUENTA A LA DERECHA.
 
-            <div className="hidden items-center gap-3 rounded-2xl border border-slate-200/70 bg-white px-3 py-2 shadow-[var(--sombra-sm)] lg:flex">
-              <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand-50 text-sm font-semibold text-brand-700">
+            Las dos cosas que no pertenecen a ninguna pantalla en concreto —el
+            ancho del menu y quien tiene la sesion abierta— viven en la misma
+            franja y siempre en el mismo sitio, por encima del titulo. Asi el
+            bloque del titulo queda limpio: rastro, nombre de la pantalla y de
+            que va, sin nada mas compitiendo a su lado.
+          */}
+          <div className="hidden items-center justify-between gap-4 py-3 lg:flex">
+            <button
+              type="button"
+              onClick={alternarSidebar}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-slate-500 transition-colors duration-[var(--suave)] ease-[var(--curva)] hover:bg-white hover:text-acento-600 active:scale-[.98] active:transition-transform active:duration-[var(--toque)]"
+              aria-label={sidebarColapsado ? 'Expandir menu lateral' : 'Contraer menu lateral'}
+              aria-expanded={!sidebarColapsado}
+              title={sidebarColapsado ? 'Expandir menu lateral' : 'Contraer menu lateral'}
+            >
+              <List size={22} weight="bold" />
+            </button>
+
+            <div className="flex items-center gap-3 rounded-2xl border border-slate-200/70 bg-white px-3 py-2 shadow-[var(--sombra-sm)]">
+              <span className="grid h-9 w-9 place-items-center rounded-full bg-acento-50 text-sm font-semibold text-acento-700">
                 {iniciales.slice(0, 1)}
               </span>
               <span className="max-w-[170px]">
                 <span className="block truncate text-sm font-semibold text-slate-800">{nombreUsuario || rolLabels[rol]}</span>
                 <span className="block truncate text-xs font-medium tracking-[0.01em] text-slate-500">{rolLabels[rol]}</span>
               </span>
+              <CaretDown size={14} weight="bold" className="shrink-0 text-slate-300" aria-hidden="true" />
             </div>
           </div>
-          <p className="mt-1.5 max-w-3xl text-sm leading-[1.65] text-slate-600">{description}</p>
+
+          <div className="min-w-0 pt-4 lg:pt-1">
+            {/*
+              El rastro de ubicacion (rol › area) es una referencia, no un
+              titular: en negra maxima competia con el nombre de la pantalla
+              que tiene justo debajo. Baja a peso medio y abre el espaciado,
+              que es lo que pide un texto de 12px para leerse limpio.
+            */}
+            <div className="hidden items-center gap-2 text-xs font-medium tracking-[0.02em] text-brand-600 lg:flex">
+              {rolLabels[rol]}
+              {area ? (
+                <>
+                  <CaretRight size={13} />
+                  <span className="truncate text-slate-500">{area}</span>
+                </>
+              ) : null}
+            </div>
+            {/*
+              El nombre de la pantalla es lo mas grande que hay aqui, asi que
+              el tamano ya manda: no necesita ademas el grosor maximo. En
+              semi-negrita y algo mas apretado se lee como un titulo
+              cuidado en vez de como un grito.
+            */}
+            <h1 className="truncate text-2xl font-semibold tracking-[-0.028em] text-brand-950 lg:mt-1">{title}</h1>
+            <p className="mt-1.5 max-w-3xl text-sm leading-[1.65] text-slate-600">{description}</p>
+          </div>
         </header>
 
         <div className="mx-auto w-full max-w-[1520px] px-4 py-5 pb-10 md:px-7 md:py-7 xl:px-8">{children}</div>

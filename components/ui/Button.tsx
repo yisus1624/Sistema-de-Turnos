@@ -12,7 +12,17 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 }
 
 const variants: Record<ButtonVariant, string> = {
-  primary: 'bg-brand-500 text-white hover:bg-brand-600',
+  /*
+   * LA ACCION PRINCIPAL VA EN EL AZUL DE ACENTO, NO EN EL TEAL DE LA MARCA.
+   *
+   * El teal esta en la barra lateral, en los encabezados, en las etiquetas y
+   * en media pantalla: cuando el boton que hay que pulsar lleva el mismo color
+   * que el fondo que lo rodea, deja de sobresalir y hay que buscarlo. El azul
+   * de acento se reserva para lo que se toca —la seccion activa, la pestaña
+   * encendida, el anillo de foco y este boton—, asi que el ojo aprende un solo
+   * color y lo encuentra en cualquier pantalla del sistema.
+   */
+  primary: 'bg-acento-600 text-white hover:bg-acento-700',
   secondary: 'border border-slate-200 bg-white text-slate-800 hover:bg-slate-50',
   danger: 'bg-red-600 text-white hover:bg-red-700',
   ghost: 'text-slate-700 hover:bg-slate-100',
