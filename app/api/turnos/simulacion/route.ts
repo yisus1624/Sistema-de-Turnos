@@ -1,46 +1,40 @@
 /**
  * Reinicio de los datos del dia para el panel de simulacion de carga.
  *
- * TEMPORAL (solo pruebas): borra los turnos de hoy y vuelve a dejar las citas
- * de ejemplo en PROGRAMADA. Sin esto, la segunda corrida de la simulacion
- * arranca sin pacientes: las citas ya se gastaron en la primera y ademas el
- * tope de citas por profesional impide seguir agregando.
+ * TEMPORAL (solo pruebas): deja el dia sin turnos y devuelve las citas de hoy
+ * a PROGRAMADA. Sin esto, la segunda corrida de la simulacion arranca sin
+ * pacientes: las citas ya se gastaron en la primera y ademas el tope de citas
+ * por profesional impide seguir agregando.
  *
- * ESTA RUTA BORRA DATOS REALES. No distingue una cita de ejemplo de una que
- * acaba de cargar el mostrador: se lleva TODAS las citas y TODOS los turnos
- * del dia. Por eso queda cerrada salvo que se abra a proposito con
- * TURNOS_SIMULACION=1. En el hospital, un clic de mas en una pantalla del menu
- * de administracion no puede costar la agenda de la jornada.
+ * ESTO SE LLEVA POR DELANTE LA JORNADA EN CURSO. Contra la base de verdad no
+ * borra ninguna cita (ver `reiniciarDatosDeHoy` en el repositorio de Prisma),
+ * pero si borra TODOS los turnos de hoy y deshace el registro de llegada de
+ * los pacientes que ya estaban en la fila. Por eso queda cerrada salvo que se
+ * abra a proposito con TURNOS_SIMULACION=1: en el hospital, un clic de mas en
+ * una pantalla del menu de administracion no puede vaciar la sala de espera.
  */
 import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
+import { MOTIVO_SIMULACION_APAGADA, simulacionHabilitada } from '@/lib/turnos/simulacion'
 
-/**
- * Fuera de desarrollo hay que habilitarla explicitamente. La variable se pone
- * en el entorno de pruebas del hospital, nunca en el de produccion.
+/*
+ * El interruptor vive en `lib/turnos/simulacion.ts` porque lo lee tambien la
+ * pantalla del panel: ahi los botones salen apagados en vez de dejar que el
+ * administrador confirme un reinicio que este servidor no va a hacer.
  */
-export function simulacionHabilitada() {
-  return process.env.TURNOS_SIMULACION === '1' || process.env.NODE_ENV !== 'production'
-}
 
 export async function POST() {
   try {
     const session = await requireSeccion('/admin/pruebas')
 
     if (!simulacionHabilitada()) {
-      return NextResponse.json(
-        {
-          error:
-            'La simulacion de carga esta deshabilitada en este servidor porque borra las citas y los turnos del dia.',
-        },
-        { status: 403 },
-      )
+      return NextResponse.json({ error: MOTIVO_SIMULACION_APAGADA }, { status: 403 })
     }
 
-    // Borrar la jornada es de las cosas que hay que poder rastrear despues.
+    // Rehacer la jornada es de las cosas que hay que poder rastrear despues.
     await registrarEvento({
       tipo: EVENTOS.SIMULACION_REINICIO_DEL_DIA,
       exito: true,

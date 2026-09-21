@@ -9,7 +9,15 @@
  */
 
 import { useCallback, useRef, useState } from 'react'
-import { ArrowClockwise, Broadcast, FastForward, Megaphone, PlayCircle, Stop } from '@phosphor-icons/react/dist/ssr'
+import {
+  ArrowClockwise,
+  Broadcast,
+  FastForward,
+  Megaphone,
+  PlayCircle,
+  Stop,
+  Warning,
+} from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -116,7 +124,15 @@ type DoctorSimulado = {
   llamando: boolean
 }
 
-export default function PruebasClient() {
+/**
+ * @param habilitada Si ESTE servidor deja correr la simulacion (lo decide
+ *   `simulacionHabilitada()` en el servidor, ver `page.tsx`). En falso, el
+ *   panel se muestra entero pero apagado y explicado: antes ofrecia los
+ *   botones, pedia una confirmacion en rojo para "borrar el dia" y recien
+ *   entonces el servidor respondia 403, con lo que parecia una falla del
+ *   sistema y no una proteccion puesta a proposito.
+ */
+export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
   const [doctores, setDoctores] = useState<DoctorSimulado[]>([])
   const [preparando, setPreparando] = useState(false)
   const [enOleada, setEnOleada] = useState(false)
@@ -124,17 +140,19 @@ export default function PruebasClient() {
   const [tamanoOleada, setTamanoOleada] = useState(2)
   const [pausaSegundos, setPausaSegundos] = useState(4)
   const [log, setLog] = useState<string[]>([])
-  // Preparar la simulacion BORRA las citas y los turnos de hoy, sean de
-  // ejemplo o de verdad. Nunca debe pasar por un solo clic.
+  // Preparar la simulacion borra los turnos de hoy y devuelve las citas a
+  // PROGRAMADA, sean de ejemplo o de verdad. Nunca debe pasar por un solo clic.
   const [confirmarReinicio, setConfirmarReinicio] = useState(false)
   /**
-   * Cuantas citas hay hoy de verdad, para el aviso de borrado.
+   * Cuantas citas hay hoy de verdad, para el aviso de reinicio.
    *
    * `null` mientras se averigua o si no se pudo. El aviso decia siempre "se
    * van a borrar todas las citas y todos los turnos de hoy" en rojo, tambien
    * los dias en los que no hay ni una: daba miedo sin motivo y hacia dudar de
-   * si la pantalla estaba fallando. Decir el numero convierte un susto en una
-   * decision informada.
+   * si la pantalla estaba fallando. Y ademas no era cierto contra la base de
+   * verdad, que no borra ni una cita (ver `reiniciarDatosDeHoy` en el
+   * repositorio de Prisma). Decir el numero, y decir lo que de verdad pasa,
+   * convierte un susto en una decision informada.
    */
   const [citasQueSeBorran, setCitasQueSeBorran] = useState<number | null>(null)
   const detenerRef = useRef(false)
@@ -386,6 +404,26 @@ export default function PruebasClient() {
   return (
     <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_26rem] xl:items-start">
       <div className="space-y-5">
+        {!habilitada && (
+          <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <Warning size={20} weight="fill" className="mt-0.5 shrink-0 text-amber-600" />
+            <div className="space-y-2 text-sm leading-6 text-amber-900">
+              <p className="font-semibold">La simulacion esta apagada en este servidor.</p>
+              <p>
+                Este es el servidor con la agenda real del hospital. La simulacion rehace los turnos del dia
+                y les cambia el enlace a los doctores, asi que aqui queda cerrada a proposito: no es una
+                falla.
+              </p>
+              <p>
+                Para mostrarla, entra al servidor de demostracion, que tiene el mismo sistema y una base
+                aparte con pacientes de mentira. Se enciende con{' '}
+                <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-xs">TURNOS_SIMULACION=1</code>
+                .
+              </p>
+            </div>
+          </div>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle>Controles</CardTitle>
@@ -399,7 +437,11 @@ export default function PruebasClient() {
               vayan pasando en oleadas.
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <Button onClick={() => void pedirConfirmacion()} loading={preparando} disabled={enOleada}>
+              <Button
+                onClick={() => void pedirConfirmacion()}
+                loading={preparando}
+                disabled={!habilitada || enOleada}
+              >
                 <PlayCircle size={18} weight="bold" />
                 {doctores.length > 0 ? 'Volver a preparar' : 'Preparar simulacion'}
               </Button>
@@ -407,7 +449,7 @@ export default function PruebasClient() {
                 variant="dark"
                 onClick={siguienteParaTodos}
                 loading={enOleada}
-                disabled={preparando || doctores.length === 0}
+                disabled={!habilitada || preparando || doctores.length === 0}
               >
                 <FastForward size={18} weight="bold" />
                 Siguiente para todos
@@ -415,7 +457,7 @@ export default function PruebasClient() {
               <Button
                 variant="danger"
                 onClick={detenerSimulacion}
-                disabled={!preparando && !enOleada && doctores.length === 0}
+                disabled={!habilitada || (!preparando && !enOleada && doctores.length === 0)}
               >
                 <Stop size={18} weight="bold" />
                 Detener simulacion
@@ -549,30 +591,28 @@ export default function PruebasClient() {
           setConfirmarReinicio(false)
           void prepararSimulacion()
         }}
-        title="Esto borra la jornada de hoy"
-        description="Preparar la simulacion deja el dia en blanco antes de empezar."
-        confirmLabel="Borrar el dia y preparar"
+        title="Esto rehace la jornada de hoy"
+        description="Preparar la simulacion vacia la sala de espera antes de empezar."
+        confirmLabel="Rehacer el dia y preparar"
         danger
       >
         {citasQueSeBorran === null ? (
           <p className="text-sm leading-6 text-slate-600">
-            Se van a <strong className="font-semibold text-red-700">borrar todas las citas y todos los turnos
-            de hoy</strong>, incluidos los que haya cargado el mostrador y los pacientes que ya esten en la
-            fila.
+            Se van a <strong className="font-semibold text-red-700">borrar todos los turnos de hoy</strong> y
+            a deshacer el registro de llegada de los pacientes que ya esten en la fila. Las citas no se
+            borran: vuelven a quedar como PROGRAMADA.
           </p>
         ) : citasQueSeBorran === 0 ? (
           <p className="text-sm leading-6 text-slate-600">
-            Hoy <strong className="font-semibold">no hay ninguna cita cargada</strong>, asi que no se pierde
-            nada de la agenda. Se borran los turnos que haya podido generar una prueba anterior y se siembran
+            Hoy <strong className="font-semibold">no hay ninguna cita cargada</strong>, asi que no se
+            interrumpe a nadie. Se borran los turnos que haya podido dejar una prueba anterior y se agregan
             pacientes de mentira para la simulacion.
           </p>
         ) : (
           <p className="text-sm leading-6 text-slate-600">
-            Se van a{' '}
-            <strong className="font-semibold text-red-700">
-              borrar las {citasQueSeBorran} citas de hoy y todos sus turnos
-            </strong>
-            , incluidas las que haya cargado el mostrador y los pacientes que ya esten en la fila.
+            Hoy hay <strong className="font-semibold text-red-700">{citasQueSeBorran} cita(s)</strong>: se
+            borran sus turnos y las que ya se hayan presentado vuelven a quedar como PROGRAMADA, o sea que
+            el mostrador tendria que registrarles la llegada otra vez. Las citas en si no se borran.
           </p>
         )}
         <p className="mt-3 text-sm leading-6 text-slate-600">
