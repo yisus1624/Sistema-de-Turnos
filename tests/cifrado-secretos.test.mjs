@@ -31,13 +31,36 @@ test('cifrar dos veces lo mismo da resultados distintos', () => {
 })
 
 test('un texto manipulado no se descifra: devuelve null', () => {
-  const guardado = cifrar(ENLACE)
-  // Se cambia un caracter del cuerpo. AES-GCM autentica, asi que el descifrado
-  // falla en vez de devolver un texto corrupto que alguien tomaria por bueno.
-  const ultimo = guardado.at(-2)
-  const manipulado = guardado.slice(0, -2) + (ultimo === 'A' ? 'B' : 'A') + guardado.at(-1)
+  /*
+    SE MANIPULA UN BYTE, NO UN CARACTER DEL BASE64.
 
-  assert.equal(descifrar(manipulado), null)
+    La primera version cambiaba el penultimo caracter del texto guardado, y era
+    una prueba inestable: nuestro cifrado mide 71 bytes (12 del vector + 16 de
+    la etiqueta + 43 del cuerpo), un tamaño que en base64 deja dos bits de
+    relleno que no significan nada. Cuando el cambio caia justo en esos bits,
+    el texto decodificaba EXACTAMENTE a los mismos bytes, el descifrado
+    funcionaba y la prueba fallaba. Medido: 39 de cada 500 intentos, o sea que
+    reventaba mas o menos una de cada trece ejecuciones.
+
+    Tocando el buffer decodificado no hay ambiguedad posible: el byte cambia
+    siempre, y AES-GCM tiene que rechazarlo por la etiqueta de autenticacion.
+  */
+  const bytes = Buffer.from(cifrar(ENLACE), 'base64')
+
+  // Un byte del cuerpo, pasados el vector de inicializacion y la etiqueta.
+  bytes[30] = bytes[30] ^ 0xff
+
+  assert.equal(descifrar(bytes.toString('base64')), null)
+})
+
+test('manipular la etiqueta de autenticacion tampoco cuela', () => {
+  // La etiqueta es lo que hace que esto sea cifrado autenticado y no solo
+  // cifrado: sin comprobarla, alguien podria cambiar el contenido y el sistema
+  // devolveria basura creyendola buena.
+  const bytes = Buffer.from(cifrar(ENLACE), 'base64')
+  bytes[12] = bytes[12] ^ 0xff
+
+  assert.equal(descifrar(bytes.toString('base64')), null)
 })
 
 test('basura que no es un cifrado devuelve null en vez de reventar', () => {

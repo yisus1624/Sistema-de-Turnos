@@ -237,9 +237,60 @@ const Casilla = memo(function Casilla({ casilla, resaltada }: { casilla: Casilla
   )
 })
 
+/**
+ * Donde recuerda cada televisor si lo dejaron en mudo.
+ *
+ * ES UNA DECISION DE ESA SALA, NO DEL HOSPITAL, y por eso va en el navegador
+ * del televisor y no en la configuracion de la base. La de la base
+ * (`audioActivo`, `volumen`) la toma el administrador una vez y vale para
+ * todas las salas; esta es la de la enfermera que silencia LA SUYA porque al
+ * lado hay consultorios, y silenciarlas todas desde aqui seria justo lo
+ * contrario de lo que pidio.
+ *
+ * Las dos mandan: suena solo si el hospital tiene el audio encendido Y este
+ * televisor no esta en mudo (ver el llamado, mas abajo).
+ */
+const CLAVE_SONIDO = 'turnos-pantalla-sonido'
+
+/**
+ * Lee el mudo guardado. Ante cualquier duda, CON SONIDO.
+ *
+ * El navegador puede tener el almacenamiento bloqueado o lleno, o estar en
+ * modo privado. Si no se sabe que se quiso, se prefiere que la sala oiga el
+ * llamado: un televisor mudo por accidente hace que un paciente pierda su
+ * turno, y uno que suena de mas solo molesta hasta que alguien lo silencia.
+ */
+function leerSonidoGuardado(): boolean {
+  try {
+    return localStorage.getItem(CLAVE_SONIDO) !== 'mudo'
+  } catch {
+    return true
+  }
+}
+
+/**
+ * Deja recordado el mudo de este televisor.
+ *
+ * Si el almacenamiento esta bloqueado o lleno no se insiste: el mudo vale para
+ * esta sesion igual, solo que no sobrevive a la recarga. Silenciar la sala es
+ * lo urgente; recordarlo es lo comodo, y lo comodo no puede romper lo urgente.
+ */
+function guardarSonido(activo: boolean) {
+  try {
+    localStorage.setItem(CLAVE_SONIDO, activo ? 'suena' : 'mudo')
+  } catch {
+    // Ver arriba.
+  }
+}
+
 export default function PantallaPublicaPage() {
   const [activo, setActivo] = useState(false)
   const [conexion, setConexion] = useState<EstadoConexionEnVivo>('reconectando')
+  /*
+    Arranca con sonido y se corrige al montar, como el resto de lo que depende
+    del navegador: en el servidor no hay `localStorage` que leer, y pintar en
+    el servidor una cosa y en el cliente otra rompe la hidratacion.
+  */
   const [sonidoActivo, setSonidoActivo] = useState(true)
   const [pantallaCompleta, setPantallaCompleta] = useState(false)
   // Ancho real de la pantalla donde esta puesta, para repartir las tarjetas.
@@ -293,12 +344,40 @@ export default function PantallaPublicaPage() {
   // depender del estado sin volver a suscribirse al SSE en cada llamado.
   const modulosRef = useRef<Set<string>>(new Set())
 
+  // El mudo de ESTE televisor, recuperado al montar.
+  //
+  // Sin esto se perdia en cada recarga, y un televisor de sala de espera se
+  // recarga mas de lo que parece: corte de luz, reinicio del equipo, o
+  // simplemente porque lo vuelven a abrir cada mañana. La sala que alguien
+  // dejo en silencio a proposito amanecia sonando otra vez.
+  useEffect(() => {
+    setSonidoActivo(leerSonidoGuardado())
+  }, [])
+
   useEffect(() => {
     sonidoRef.current = sonidoActivo
     // Al silenciar hay que vaciar la cola: si no, las campanadas que ya estaban
     // esperando su segundo salen igual despues de pulsar el boton de mudo.
     if (!sonidoActivo) campana.reiniciar()
   }, [sonidoActivo, campana])
+
+  /**
+   * Silencia o devuelve el sonido a ESTE televisor, y lo deja recordado.
+   *
+   * Guardar fuera del actualizador de estado y no dentro: React puede llamar
+   * al actualizador dos veces para comprobar que es puro, y escribir en el
+   * almacenamiento desde ahi es justo lo que esa comprobacion busca cazar.
+   * Aqui el valor siguiente se calcula una vez y se usa para las dos cosas.
+   */
+  const alternarSonido = useCallback(() => {
+    // `sonidoRef` va siempre al dia (lo sincroniza el efecto de arriba), asi
+    // que sirve para leer el valor actual sin volver a crear este manejador en
+    // cada cambio: la barra de controles esta memoizada y una funcion nueva la
+    // haria repintarse cada vez que alguien toca el mudo.
+    const siguiente = !sonidoRef.current
+    setSonidoActivo(siguiente)
+    guardarSonido(siguiente)
+  }, [])
 
   // Al cerrar la pantalla no puede quedar ningun temporizador de campana vivo.
   useEffect(() => {
@@ -643,7 +722,7 @@ export default function PantallaPublicaPage() {
           <ControlesPantalla
             conexion={conexion}
             sonidoActivo={sonidoActivo}
-            alternarSonido={() => setSonidoActivo((v) => !v)}
+            alternarSonido={alternarSonido}
             pantallaCompleta={pantallaCompleta}
             alternarPantallaCompleta={alternarPantallaCompleta}
             tono="oscuro"
@@ -700,7 +779,7 @@ export default function PantallaPublicaPage() {
           <ControlesPantalla
             conexion={conexion}
             sonidoActivo={sonidoActivo}
-            alternarSonido={() => setSonidoActivo((v) => !v)}
+            alternarSonido={alternarSonido}
             pantallaCompleta={pantallaCompleta}
             alternarPantallaCompleta={alternarPantallaCompleta}
           />
