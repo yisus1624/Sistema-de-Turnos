@@ -18,18 +18,14 @@ import { Campo, Entrada } from '@/components/admin/Campos'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { HorarioDia, ItemAgendaProfesional, Modulo, Profesional, Turno } from '@/lib/turnos/types'
 
-const PROFESIONALES_SIMULACION = [
-  'pro-perez',
-  'pro-gomez',
-  'pro-salas',
-  'pro-rios',
-  'pro-torres',
-  'pro-mejia',
-  'pro-vega',
-  'pro-lopez',
-  'pro-ramirez',
-  'pro-castro',
-]
+/**
+ * Cuantos consultorios se simulan como maximo.
+ *
+ * Es un tope de la PANTALLA, no del sistema: con veinte tarjetas el panel deja
+ * de caber y la oleada tarda tanto que no se ve lo que se queria ver. Los
+ * doctores salen de la agenda real del dia (ver `doctoresSimulablesDeHoy`).
+ */
+const MAXIMO_CONSULTORIOS_SIMULADOS = 10
 
 /** Pacientes ficticios para rellenar la agenda cuando ya se gastaron las citas sembradas. */
 const NOMBRES_SIMULACION = [
@@ -53,19 +49,37 @@ function pacienteSimulado(indice: number) {
 }
 
 /**
- * Franjas que tiene libres cada doctor hoy, sacadas del horario REAL.
+ * Los doctores que HOY se pueden simular, con las horas que tienen libres.
  *
- * La simulacion no puede inventarse las horas: una cita solo entra si cae en
- * una franja de la jornada de ese doctor y el cupo esta libre. Se pide el
- * horario una sola vez, despues de reiniciar el dia, y de ahi salen las horas
- * que se van repartiendo.
+ * LOS DOCTORES SALEN DE LA AGENDA REAL, NO DE UNA LISTA ESCRITA A MANO. Antes
+ * habia aqui diez identificadores fijos —'pro-perez', 'pro-gomez'...— que son
+ * los del catalogo de ejemplo con el que se desarrolla. En el hospital de
+ * verdad los doctores entran con la carga del reporte y llevan otros
+ * identificadores, asi que NINGUNO de esos diez existia: la simulacion fallaba
+ * en el primer paso, doctor por doctor, con "el profesional indicado no
+ * existe", y el panel quedaba vacio sin explicar por que.
+ *
+ * Salen del horario del dia por dos razones. La primera es que asi son
+ * siempre los del hospital que este montado, sin nada que actualizar a mano.
+ * La segunda es que el horario es EXACTAMENTE lo que el servidor va a aceptar
+ * despues: si un doctor tiene columna ahi, se le puede agendar; si no la
+ * tiene, no. Pedir los doctores por un lado y las horas por otro era abrir la
+ * puerta a que las dos listas no coincidieran.
+ *
+ * Se quedan fuera los que no tienen ni un cupo libre: no se les podria sembrar
+ * un paciente y su tarjeta apareceria en cero.
  */
-async function franjasLibresPorDoctor(fecha: string): Promise<Map<string, string[]>> {
+async function doctoresSimulablesDeHoy(fecha: string): Promise<{
+  doctores: { profesionalId: string; nombre: string }[]
+  libres: Map<string, string[]>
+}> {
   const { horario } = await pedir<{ horario: HorarioDia }>(`/api/turnos/agenda/horario?fecha=${fecha}`)
   const libres = new Map<string, string[]>()
+  const nombres = new Map<string, string>()
 
   for (const bloque of horario.bloques) {
     for (const columna of bloque.columnas) {
+      nombres.set(columna.profesionalId, columna.profesionalNombre)
       // Solo franjas de la configuracion: en las horas sueltas que trae la
       // agenda del hospital (7:09) el servidor no deja agendar.
       const horas = bloque.filas
@@ -75,7 +89,12 @@ async function franjasLibresPorDoctor(fecha: string): Promise<Map<string, string
     }
   }
 
-  return libres
+  const doctores = [...nombres.entries()]
+    .filter(([id]) => (libres.get(id)?.length ?? 0) > 0)
+    .slice(0, MAXIMO_CONSULTORIOS_SIMULADOS)
+    .map(([profesionalId, nombre]) => ({ profesionalId, nombre }))
+
+  return { doctores, libres }
 }
 
 /**
@@ -108,6 +127,16 @@ export default function PruebasClient() {
   // Preparar la simulacion BORRA las citas y los turnos de hoy, sean de
   // ejemplo o de verdad. Nunca debe pasar por un solo clic.
   const [confirmarReinicio, setConfirmarReinicio] = useState(false)
+  /**
+   * Cuantas citas hay hoy de verdad, para el aviso de borrado.
+   *
+   * `null` mientras se averigua o si no se pudo. El aviso decia siempre "se
+   * van a borrar todas las citas y todos los turnos de hoy" en rojo, tambien
+   * los dias en los que no hay ni una: daba miedo sin motivo y hacia dudar de
+   * si la pantalla estaba fallando. Decir el numero convierte un susto en una
+   * decision informada.
+   */
+  const [citasQueSeBorran, setCitasQueSeBorran] = useState<number | null>(null)
   const detenerRef = useRef(false)
 
   const agregarLog = useCallback((linea: string) => {
@@ -117,14 +146,32 @@ export default function PruebasClient() {
     setLog((prev) => [...prev.slice(-79), `${hora}  ${linea}`])
   }, [])
 
+  /** Abre la confirmacion y, mientras, averigua que hay hoy que perder. */
+  async function pedirConfirmacion() {
+    setCitasQueSeBorran(null)
+    setConfirmarReinicio(true)
+
+    try {
+      const { horario } = await pedir<{ horario: HorarioDia }>(
+        `/api/turnos/agenda/horario?fecha=${hoyEnColombia()}`,
+      )
+      const enParrilla = horario.bloques.reduce(
+        (total, bloque) => total + bloque.columnas.reduce((suma, columna) => suma + columna.citas, 0),
+        0,
+      )
+      setCitasQueSeBorran(enParrilla + horario.fueraDeHorario.length)
+    } catch {
+      // No se pudo saber: se queda el aviso generico, que es el prudente.
+      setCitasQueSeBorran(null)
+    }
+  }
+
   async function prepararSimulacion() {
     detenerRef.current = false
     setPreparando(true)
     setDoctores([])
     setLog([])
-    agregarLog(
-      `Preparando ${PROFESIONALES_SIMULACION.length} consultorios con ${pacientesPorConsultorio} paciente(s) cada uno...`,
-    )
+    agregarLog('Reiniciando los datos del dia...')
 
     // Se arranca de cero: los turnos de hoy se borran y las citas de ejemplo
     // vuelven a quedar PROGRAMADA. Sin esto, la segunda corrida encuentra
@@ -140,19 +187,43 @@ export default function PruebasClient() {
 
     const hoy = hoyEnColombia()
 
-    // Las horas libres de cada doctor, para poder agendarle mas pacientes sin
-    // chocar con la parrilla ni con las citas de ejemplo que acaba de sembrar
-    // el reinicio.
+    // Quienes se pueden simular hoy y con que horas, sacado de la agenda real.
+    let doctoresDelDia: { profesionalId: string; nombre: string }[]
     let libresPorDoctor: Map<string, string[]>
     try {
-      libresPorDoctor = await franjasLibresPorDoctor(hoy)
+      const encontrados = await doctoresSimulablesDeHoy(hoy)
+      doctoresDelDia = encontrados.doctores
+      libresPorDoctor = encontrados.libres
     } catch (error) {
       agregarLog(`No se pudo leer el horario del dia: ${mensajeDeError(error) ?? 'error desconocido'}`)
       setPreparando(false)
       return
     }
 
-    for (const [indiceDoctor, profesionalId] of PROFESIONALES_SIMULACION.entries()) {
+    /*
+      SIN DOCTORES NO HAY SIMULACION, Y HAY QUE DECIR POR QUE.
+
+      Pasa cuando el hospital no tiene doctores activos en servicios que
+      atiendan por cita, o cuando la configuracion de jornadas no deja ni una
+      franja libre. Antes esto se veia como un panel vacio sin una sola linea
+      en el registro, que es la peor forma de fallar: parece que la pantalla
+      esta rota.
+    */
+    if (doctoresDelDia.length === 0) {
+      agregarLog(
+        'No hay ningun doctor al que se le pueda sembrar un paciente hoy. Revisa que existan ' +
+          'profesionales activos en un servicio que atienda POR CITA, y que su jornada tenga ' +
+          'franjas libres (Pantalla y audio define las horas de cada jornada).',
+      )
+      setPreparando(false)
+      return
+    }
+
+    agregarLog(
+      `Preparando ${doctoresDelDia.length} consultorio(s) con ${pacientesPorConsultorio} paciente(s) cada uno...`,
+    )
+
+    for (const [indiceDoctor, { profesionalId }] of doctoresDelDia.entries()) {
       if (detenerRef.current) break
       try {
         const { url } = await pedir<{ url: string; expiraEn: string }>(`/api/profesionales/${profesionalId}/acceso`, {
@@ -321,14 +392,14 @@ export default function PruebasClient() {
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm leading-6 text-slate-600">
-              Primero prepara la simulacion: genera un acceso temporal para cada uno de los 10 profesionales
-              sembrados y registra la llegada de las citas de hoy (crea las que falten para llegar al numero de
-              pacientes que elijas), para que tengan pacientes en espera. Luego llama
-              pacientes uno por uno desde cada tarjeta, o dale a &quot;Siguiente para todos&quot; para que vayan
-              pasando en oleadas.
+              Primero prepara la simulacion: toma los doctores que hoy pueden atender (hasta{' '}
+              {MAXIMO_CONSULTORIOS_SIMULADOS}), le genera a cada uno un acceso temporal y registra la llegada
+              de las citas de hoy, creando las que falten para llegar al numero de pacientes que elijas. Luego
+              llama pacientes uno por uno desde cada tarjeta, o dale a &quot;Siguiente para todos&quot; para que
+              vayan pasando en oleadas.
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <Button onClick={() => setConfirmarReinicio(true)} loading={preparando} disabled={enOleada}>
+              <Button onClick={() => void pedirConfirmacion()} loading={preparando} disabled={enOleada}>
                 <PlayCircle size={18} weight="bold" />
                 {doctores.length > 0 ? 'Volver a preparar' : 'Preparar simulacion'}
               </Button>
@@ -483,10 +554,29 @@ export default function PruebasClient() {
         confirmLabel="Borrar el dia y preparar"
         danger
       >
-        <p className="text-sm leading-6 text-slate-600">
-          Se van a <strong className="font-semibold text-red-700">borrar todas las citas y todos los turnos de
-          hoy</strong>, incluidos los que haya cargado el mostrador y los pacientes que ya esten en la fila.
-          Tambien se generan enlaces nuevos para los 10 doctores de ejemplo, con lo que{' '}
+        {citasQueSeBorran === null ? (
+          <p className="text-sm leading-6 text-slate-600">
+            Se van a <strong className="font-semibold text-red-700">borrar todas las citas y todos los turnos
+            de hoy</strong>, incluidos los que haya cargado el mostrador y los pacientes que ya esten en la
+            fila.
+          </p>
+        ) : citasQueSeBorran === 0 ? (
+          <p className="text-sm leading-6 text-slate-600">
+            Hoy <strong className="font-semibold">no hay ninguna cita cargada</strong>, asi que no se pierde
+            nada de la agenda. Se borran los turnos que haya podido generar una prueba anterior y se siembran
+            pacientes de mentira para la simulacion.
+          </p>
+        ) : (
+          <p className="text-sm leading-6 text-slate-600">
+            Se van a{' '}
+            <strong className="font-semibold text-red-700">
+              borrar las {citasQueSeBorran} citas de hoy y todos sus turnos
+            </strong>
+            , incluidas las que haya cargado el mostrador y los pacientes que ya esten en la fila.
+          </p>
+        )}
+        <p className="mt-3 text-sm leading-6 text-slate-600">
+          Tambien se generan enlaces nuevos para los doctores que entren en la simulacion, con lo que{' '}
           <strong className="font-semibold">se invalidan los enlaces que esten usando ahora</strong>.
         </p>
         <p className="mt-3 text-sm leading-6 text-slate-600">
