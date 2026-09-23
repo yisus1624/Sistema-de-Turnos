@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { errorConsultorio, requireProfesionalDelConsultorio } from '@/lib/turnos/acceso-consultorio'
+import { diaColombia } from '@/lib/turnos/tiempo'
 
-/** Fecha de hoy en Colombia, en formato AAAA-MM-DD (mismo criterio que estadisticas). */
-function hoyEnColombia() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(new Date())
-}
 
 /**
  * Estado inicial de la pantalla del doctor: quien es, sus consultorios
@@ -22,7 +19,8 @@ export async function GET(request: Request) {
     const profesional = await requireProfesionalDelConsultorio(request)
 
     const url = new URL(request.url)
-    const fecha = url.searchParams.get('fecha') || hoyEnColombia()
+    const hoy = diaColombia(new Date())
+    const fecha = url.searchParams.get('fecha') || hoy
 
     // El paciente que tiene enfrente es SIEMPRE el de hoy, aunque este mirando
     // la agenda de otro dia. Antes se buscaba con la `fecha` consultada: al
@@ -32,7 +30,7 @@ export async function GET(request: Request) {
     const [modulos, pendientes, turnoActual, agenda] = await Promise.all([
       turnoRepository.listarModulos(profesional.servicioId),
       turnoRepository.listarPendientes({ profesionalId: profesional.id }),
-      turnoRepository.turnoEnAtencion(profesional.id, hoyEnColombia()),
+      turnoRepository.turnoAbierto({ profesionalId: profesional.id }, hoy),
       turnoRepository.agendaProfesional(profesional.id, fecha),
     ])
 

@@ -12,25 +12,20 @@ import { useCallback, useEffect, useState } from 'react'
 import { DownloadSimple, FileText } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
-import { hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
-import { useValorConRetraso } from '@/lib/hooks'
+import { Campo, Entrada, Seleccion, TablaSkeleton } from '@/components/admin/Campos'
+import {
+  COLUMNAS_DE_TURNOS,
+  ETIQUETA_ESTADO_TURNO,
+  TablaDeTurnos,
+  nombreDeModulo,
+  nombreEnCatalogo,
+} from '@/components/admin/TablaDeTurnos'
+import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { useCatalogosDeTurnos, useUltimaPeticion, useValorConRetraso } from '@/lib/hooks'
 import { generarReportePdf } from '@/lib/reportes/pdf'
-import type { EstadoTurno, Modulo, Servicio, Turno } from '@/lib/turnos/types'
-
-const COLUMNAS = ['Turno', 'Servicio', 'Modulo', 'Generado', 'Llamado', 'Cierre', 'Llamadas', 'Estado']
-
-const etiquetaEstado: Record<EstadoTurno, { texto: string; tono: 'blue' | 'green' | 'amber' | 'red' | 'slate' }> = {
-  EN_ESPERA: { texto: 'En espera', tono: 'slate' },
-  LLAMADO: { texto: 'Llamado', tono: 'blue' },
-  EN_ATENCION: { texto: 'En atencion', tono: 'blue' },
-  ATENDIDO: { texto: 'Atendido', tono: 'green' },
-  AUSENTE: { texto: 'Ausente', tono: 'amber' },
-  CANCELADO: { texto: 'Cancelado', tono: 'red' },
-}
+import type { Turno } from '@/lib/turnos/types'
 
 type Filtros = {
   fechaDesde: string
@@ -45,26 +40,28 @@ export default function ReportesClient() {
     return { fechaDesde: hoy, fechaHasta: hoy, servicioId: '', estado: '' }
   })
   const [turnos, setTurnos] = useState<Turno[]>([])
-  const [servicios, setServicios] = useState<Servicio[]>([])
-  const [modulos, setModulos] = useState<Modulo[]>([])
+  // Con reintento, y con aviso si todavia no se pudieron cargar (ver el hook).
+  const { servicios, modulos, fallo: falloCatalogos } = useCatalogosDeTurnos()
   const [buscando, setBuscando] = useState(true)
   const [generando, setGenerando] = useState(false)
+  // El servidor devuelve como mucho un techo de filas. Si hay mas, el reporte
+  // es PARCIAL: se dice en pantalla (fijo, no en un aviso que se va) y en el
+  // PDF, que si no diria el rango completo con datos que faltan.
+  const [truncado, setTruncado] = useState(false)
+  // Los filtros con los que se obtuvo lo que hay en la tabla. El PDF sale con
+  // ESTOS, no con los del formulario: si la ultima busqueda fallo, el titulo
+  // diria un rango y la tabla traeria otro.
+  const [filtrosDeLaTabla, setFiltrosDeLaTabla] = useState<Filtros | null>(null)
 
   const rangoValido = filtros.fechaDesde <= filtros.fechaHasta
 
-  useEffect(() => {
-    Promise.all([
-      pedir<{ servicios: Servicio[] }>('/api/turnos/servicios'),
-      pedir<{ modulos: Modulo[] }>('/api/turnos/modulos'),
-    ])
-      .then(([s, m]) => {
-        setServicios(s.servicios)
-        setModulos(m.modulos)
-      })
-      .catch(() => {})
-  }, [])
+
+  // La ultima consulta gana: la respuesta lenta de un filtro anterior no puede
+  // pisar la tabla (ni el PDF) del filtro que marca la pantalla.
+  const consultas = useUltimaPeticion()
 
   const buscar = useCallback(async (activos: Filtros) => {
+    const consulta = consultas.iniciar()
     setBuscando(true)
     const params = new URLSearchParams()
     for (const [clave, valor] of Object.entries(activos)) {
@@ -72,14 +69,26 @@ export default function ReportesClient() {
     }
 
     try {
-      const { turnos: lista } = await pedir<{ turnos: Turno[] }>(`/api/turnos/historico?${params}`)
+      const { turnos: lista, truncado } = await pedir<{ turnos: Turno[]; truncado?: boolean }>(
+        `/api/turnos/historico?${params}`,
+        { signal: consulta.signal },
+      )
+      if (!consulta.esVigente()) return
       setTurnos(lista)
+      setTruncado(Boolean(truncado))
+      setFiltrosDeLaTabla(activos)
     } catch (error) {
+      if (!consulta.esVigente()) return
+      // Se vacia: dejar los resultados anteriores bajo un filtro nuevo hacia
+      // que se descargara un PDF con datos de una busqueda y titulo de otra.
+      setTurnos([])
+      setTruncado(false)
+      setFiltrosDeLaTabla(null)
       toast.error('No se pudo consultar los turnos', mensajeDeError(error))
     } finally {
-      setBuscando(false)
+      if (consulta.esVigente()) setBuscando(false)
     }
-  }, [])
+  }, [consultas])
 
   // Buscar solo cuando el usuario deja de teclear, y nunca con un rango al
   // reves: mientras corrige la fecha no tiene sentido consultar.
@@ -89,11 +98,8 @@ export default function ReportesClient() {
     buscar(filtrosDiferidos)
   }, [buscar, filtrosDiferidos])
 
-  const nombre = (lista: Array<{ id: string; nombre: string }>, id?: string | null) =>
-    id ? (lista.find((x) => x.id === id)?.nombre ?? '—') : 'Ventanilla general'
-
   async function descargar() {
-    if (turnos.length === 0) {
+    if (turnos.length === 0 || !filtrosDeLaTabla) {
       toast.error('Nada para descargar', 'No hay turnos en el rango seleccionado.')
       return
     }
@@ -103,11 +109,12 @@ export default function ReportesClient() {
       await generarReportePdf({
         filas: turnos.map((turno) => ({
           turno,
-          servicioNombre: nombre(servicios, turno.servicioId),
-          moduloNombre: nombre(modulos, turno.moduloId),
+          servicioNombre: nombreEnCatalogo(servicios, turno.servicioId),
+          moduloNombre: nombreDeModulo(modulos, turno.moduloId),
         })),
-        fechaDesde: filtros.fechaDesde,
-        fechaHasta: filtros.fechaHasta,
+        fechaDesde: filtrosDeLaTabla.fechaDesde,
+        fechaHasta: filtrosDeLaTabla.fechaHasta,
+        parcial: truncado,
       })
     } catch (error) {
       toast.error('No se pudo generar el PDF', mensajeDeError(error))
@@ -118,6 +125,11 @@ export default function ReportesClient() {
 
   return (
     <div className="space-y-5">
+      {falloCatalogos ? (
+        <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+          No se pudieron cargar los servicios y consultorios: los nombres pueden salir vacios. Se sigue intentando solo.
+        </p>
+      ) : null}
       <Card>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <Campo etiqueta="Desde">
@@ -158,7 +170,7 @@ export default function ReportesClient() {
               onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))}
             >
               <option value="">Todos</option>
-              {Object.entries(etiquetaEstado).map(([valor, { texto }]) => (
+              {Object.entries(ETIQUETA_ESTADO_TURNO).map(([valor, { texto }]) => (
                 <option key={valor} value={valor}>
                   {texto}
                 </option>
@@ -180,6 +192,13 @@ export default function ReportesClient() {
           </div>
         </div>
 
+        {truncado ? (
+          <p role="status" className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            Hay mas turnos de los que se muestran: el reporte es PARCIAL y el PDF saldra marcado asi. Acota las
+            fechas o los filtros para tenerlo completo.
+          </p>
+        ) : null}
+
         {rangoValido ? null : (
           <p className="mt-3 text-sm font-semibold text-red-600">
             La fecha inicial no puede ser posterior a la final.
@@ -193,7 +212,7 @@ export default function ReportesClient() {
         </CardHeader>
         <CardContent padded={false}>
           {buscando ? (
-            <TablaSkeleton columnas={COLUMNAS} />
+            <TablaSkeleton columnas={COLUMNAS_DE_TURNOS} />
           ) : turnos.length === 0 ? (
             <div className="p-5">
               <EmptyState
@@ -203,22 +222,7 @@ export default function ReportesClient() {
               />
             </div>
           ) : (
-            <Tabla columnas={COLUMNAS}>
-              {turnos.map((turno) => (
-                <tr key={turno.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-semibold text-brand-950">{turno.codigo}</td>
-                  <td className="px-4 py-3 text-slate-600">{nombre(servicios, turno.servicioId)}</td>
-                  <td className="px-4 py-3 text-slate-600">{nombre(modulos, turno.moduloId)}</td>
-                  <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.fechaGeneracion)}</td>
-                  <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.horaLlamado)}</td>
-                  <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.horaAtencion)}</td>
-                  <td className="px-4 py-3 tabular-nums text-slate-600">{turno.vecesLlamado}</td>
-                  <td className="px-4 py-3">
-                    <Badge tone={etiquetaEstado[turno.estado].tono}>{etiquetaEstado[turno.estado].texto}</Badge>
-                  </td>
-                </tr>
-              ))}
-            </Tabla>
+            <TablaDeTurnos turnos={turnos} servicios={servicios} modulos={modulos} />
           )}
         </CardContent>
       </Card>

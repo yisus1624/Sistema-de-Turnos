@@ -3,19 +3,26 @@ import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { errorConsultorio, requireProfesionalDelConsultorio } from '@/lib/turnos/acceso-consultorio'
 import { registrarLlamado } from '@/lib/turnos/rastro-llamado'
+import { PIDE_RECARGAR, cuerpoJson, faltaElTurnoVisto, idSchema, turnoAbiertoIdSchema } from '@/lib/validators/turnos'
 
 const bodySchema = z.object({
-  moduloId: z.string().min(1, 'Debes indicar el consultorio.'),
+  moduloId: idSchema,
+  // El turno que el doctor ve abierto. Si el real es otro (se perdio la
+  // respuesta de un llamado anterior), el servidor responde 409 con el real en
+  // vez de llamar a otro paciente y cerrar al primero sin que haya entrado.
+  turnoAbiertoId: turnoAbiertoIdSchema,
 })
 
 export async function POST(request: Request) {
   try {
     const profesional = await requireProfesionalDelConsultorio(request)
 
-    const body = await request.json().catch(() => null)
-    const parsed = bodySchema.safeParse(body)
+    const cuerpo = await cuerpoJson(request)
+    if (faltaElTurnoVisto(cuerpo)) return NextResponse.json({ error: PIDE_RECARGAR }, { status: 400 })
+
+    const parsed = bodySchema.safeParse(cuerpo)
     if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos invalidos.' }, { status: 400 })
+      return NextResponse.json({ error: 'Debes indicar el consultorio.' }, { status: 400 })
     }
 
     const turno = await turnoRepository.llamarSiguiente({
@@ -23,6 +30,7 @@ export async function POST(request: Request) {
       moduloId: parsed.data.moduloId,
       // No hay usuario de sistema: el propio profesional queda como quien llamo.
       funcionarioId: profesional.id,
+      turnoAbiertoEsperado: parsed.data.turnoAbiertoId,
     })
 
     if (!turno) {

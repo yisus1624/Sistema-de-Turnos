@@ -17,20 +17,21 @@
  * solo va a ver su numero de turno.
  */
 
-import { useEffect, useState } from 'react'
-import { CheckCircle, DoorOpen, Stethoscope, UserFocus } from '@phosphor-icons/react/dist/ssr'
+import { useCallback, useEffect, useState } from 'react'
+import { ArrowClockwise, CheckCircle, DoorOpen, Stethoscope, UserFocus, WifiSlash } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Loader'
 import { toast } from '@/components/ui/toast'
-import { useValorConRetraso } from '@/lib/hooks'
+import { useCargaConReintento, useUltimaPeticion, useValorConRetraso } from '@/lib/hooks'
+import { esReintentable, type ResultadoDeCarga } from '@/lib/api/reintento'
 // El cliente COMPARTIDO, no una copia local. Esta pantalla tenia la suya, y por
 // eso se quedaba fuera del manejo de sesion caducada: el funcionario seguia
 // viendo la busqueda de siempre y creia haber registrado llegadas que la API
 // estaba rechazando con un 401. Justo aqui es donde peor duele.
-import { horaCorta, pedir } from '@/lib/api/cliente'
+import { horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { Cita, ComprobanteLlegada, Turno } from '@/lib/turnos/types'
 
 /** Digitos minimos antes de consultar: menos que esto da media EPS. */
@@ -44,6 +45,16 @@ function fechaLarga(iso: string) {
     month: 'long',
     timeZone: 'America/Bogota',
   }).format(new Date(iso))
+}
+
+/**
+ * Lo que hay que decirle al paciente si su turno ya se cerro. Sin esto, "Ver
+ * comprobante" dictaba un turno que ya no lo van a llamar.
+ */
+const AVISO_TURNO_CERRADO: Partial<Record<ComprobanteLlegada['estadoTurno'], string>> = {
+  ATENDIDO: 'Este paciente ya fue atendido: su turno esta cerrado.',
+  AUSENTE: 'A este paciente se le marco ausente cuando lo llamaron. Agendale una cita nueva.',
+  CANCELADO: 'Este turno fue cancelado. Agendale una cita nueva.',
 }
 
 const etiquetaEstado: Record<Cita['estado'], { texto: string; tono: 'blue' | 'green' | 'amber' | 'red' }> = {
@@ -63,57 +74,90 @@ export default function AdmisionesClient() {
   const [registrando, setRegistrando] = useState<string | null>(null)
   const [comprobante, setComprobante] = useState<ComprobanteLlegada | null>(null)
 
+  // Si la ultima busqueda fallo. Mientras tanto no se muestra ninguna cita:
+  // antes quedaban a la vista las del paciente ANTERIOR, con su boton de
+  // "Registrar llegada", bajo el documento del nuevo.
+  // Y si se reintenta sola: un 400 o un 403 no, y decirlo seria mentirle.
+  const [falloBusqueda, setFalloBusqueda] = useState<{ mensaje: string; reintentable: boolean } | null>(null)
+
   // Busca sola al dejar de escribir: no hay boton que presionar.
   const documentoDiferido = useValorConRetraso(documento, 400)
+  // La ultima busqueda gana: la respuesta de un documento que el operador ya
+  // reemplazo al seguir escribiendo se descarta.
+  const busquedas = useUltimaPeticion()
 
-  useEffect(() => {
+  const buscar = useCallback(async (): Promise<ResultadoDeCarga> => {
     const buscado = documentoDiferido.trim()
+    const peticion = busquedas.iniciar()
+    setCitas(null)
+    setOtras([])
+    setFalloBusqueda(null)
     if (buscado.length < MINIMO_DIGITOS) {
-      setCitas(null)
-      setOtras([])
       setBuscando(false)
       return
     }
-
-    // `vigente` descarta la respuesta de una busqueda que el operador ya
-    // reemplazo al seguir escribiendo.
-    let vigente = true
     setBuscando(true)
     setComprobante(null)
-
-    pedir<{ citas: Cita[]; otras: Cita[] }>(`/api/turnos/citas?documento=${encodeURIComponent(buscado)}`)
-      .then(({ citas: encontradas, otras: deOtrosDias }) => {
-        if (!vigente) return
-        setCitas(encontradas)
-        setOtras(deOtrosDias ?? [])
+    try {
+      // Por POST y en el cuerpo: en la URL, la cedula quedaba en el log del servidor.
+      const encontradas = await pedir<{ citas: Cita[]; otras: Cita[] }>('/api/turnos/citas', {
+        method: 'POST',
+        body: JSON.stringify({ documento: buscado }),
+        signal: peticion.signal,
       })
-      .catch((error) => {
-        if (vigente) toast.error('No se pudo buscar', error instanceof Error ? error.message : undefined)
+      if (!peticion.esVigente()) return 'reemplazada'
+      setCitas(encontradas.citas)
+      setOtras(encontradas.otras ?? [])
+    } catch (error) {
+      if (!peticion.esVigente()) return 'reemplazada'
+      setFalloBusqueda({
+        mensaje: mensajeDeError(error) ?? 'No hubo respuesta del servidor.',
+        reintentable: esReintentable(error),
       })
-      .finally(() => {
-        if (vigente) setBuscando(false)
-      })
-
-    return () => {
-      vigente = false
+      // Se relanza para que `useCargaConReintento` lo reintente solo si el
+      // fallo es pasajero (sin red, 429, 500).
+      throw error
+    } finally {
+      if (peticion.esVigente()) setBuscando(false)
     }
-  }, [documentoDiferido])
+  }, [documentoDiferido, busquedas])
 
+  // Con reintento: un corte de red no deja al operador esperando a que vuelva
+  // a escribir el mismo documento, que antes no buscaba de nuevo.
+  const reintentarBusqueda = useCargaConReintento(buscar)
+
+  useEffect(() => {
+    void reintentarBusqueda()
+  }, [buscar, reintentarBusqueda])
+
+  /**
+   * Registra la llegada, o recupera el comprobante si ya estaba registrada.
+   *
+   * El servidor es idempotente: si la respuesta de la primera vez se perdio por
+   * la red, el reintento devuelve el MISMO turno (`yaRegistrada`) en vez de un
+   * error. Antes el funcionario leia "esta cita ya registro la llegada" y el
+   * turno y el consultorio que tenia que dictarle al paciente no aparecian
+   * nunca. El mismo camino sirve para volver a ver el comprobante.
+   */
   async function registrarLlegada(cita: Cita) {
     setRegistrando(cita.id)
     try {
-      const { comprobante: entregado } = await pedir<{
+      const { comprobante: entregado, yaRegistrada } = await pedir<{
         turno: Turno
         comprobante: ComprobanteLlegada
+        yaRegistrada?: boolean
       }>('/api/turnos/citas/llegada', {
         method: 'POST',
         body: JSON.stringify({ citaId: cita.id }),
       })
       setComprobante(entregado)
       setCitas((previas) =>
-        previas?.map((c) => (c.id === cita.id ? { ...c, estado: 'PRESENTADO' } : c)) ?? null,
+        previas?.map((c) =>
+          c.id === cita.id ? { ...c, estado: 'PRESENTADO', codigoTurno: entregado.codigo } : c,
+        ) ?? null,
       )
-      toast.success('Llegada registrada', `Turno ${entregado.codigo} para ${cita.nombrePaciente}.`)
+      if (yaRegistrada) toast.info('La llegada ya estaba registrada', `Su turno es el ${entregado.codigo}.`)
+      else toast.success('Llegada registrada', `Turno ${entregado.codigo} para ${cita.nombrePaciente}.`)
     } catch (error) {
       toast.error('No se pudo registrar la llegada', error instanceof Error ? error.message : undefined)
     } finally {
@@ -133,6 +177,7 @@ export default function AdmisionesClient() {
             <input
               type="text"
               inputMode="numeric"
+              maxLength={20}
               autoComplete="off"
               autoFocus
               value={documento}
@@ -147,7 +192,12 @@ export default function AdmisionesClient() {
         </CardContent>
       </Card>
 
-      {comprobante ? (
+      {comprobante && AVISO_TURNO_CERRADO[comprobante.estadoTurno] ? (
+        <div role="status" className="rounded-2xl border border-amber-200 bg-amber-50 px-6 py-5 text-center">
+          <p className="text-sm font-bold uppercase tracking-wide text-amber-700">Turno {comprobante.codigo}</p>
+          <p className="mt-1 text-lg font-semibold text-amber-900">{AVISO_TURNO_CERRADO[comprobante.estadoTurno]}</p>
+        </div>
+      ) : comprobante ? (
         <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50">
           <div className="px-6 pt-5 text-center">
             <p className="text-sm font-bold uppercase tracking-wide text-emerald-700">Turno asignado</p>
@@ -214,6 +264,22 @@ export default function AdmisionesClient() {
             </ul>
           </CardContent>
         </Card>
+      ) : falloBusqueda ? (
+        <EmptyState
+          icon={WifiSlash}
+          title="No se pudo buscar"
+          description={
+            falloBusqueda.reintentable
+              ? `${falloBusqueda.mensaje} La busqueda se reintenta sola.`
+              : falloBusqueda.mensaje
+          }
+          action={
+            <Button variant="secondary" onClick={() => void reintentarBusqueda()}>
+              <ArrowClockwise size={17} weight="bold" />
+              Reintentar
+            </Button>
+          }
+        />
       ) : citas === null ? (
         <EmptyState
           icon={UserFocus}
@@ -240,6 +306,8 @@ export default function AdmisionesClient() {
               {citas.map((cita) => {
                 const estado = etiquetaEstado[cita.estado]
                 const puedeRegistrar = cita.estado === 'PROGRAMADA'
+                // Ya llego: se le puede volver a dictar su turno sin crear otro.
+                const puedeVerComprobante = cita.estado === 'PRESENTADO'
 
                 return (
                   <li
@@ -250,6 +318,12 @@ export default function AdmisionesClient() {
                       <p className="truncate text-base font-semibold text-brand-950">{cita.nombrePaciente}</p>
                       <p className="mt-0.5 text-sm text-slate-600">
                         {horaCorta(cita.horaCita)} · documento {cita.documentoPaciente}
+                        {cita.codigoTurno ? (
+                          <>
+                            {' · turno '}
+                            <strong className="font-semibold text-brand-950">{cita.codigoTurno}</strong>
+                          </>
+                        ) : null}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-3">
@@ -262,6 +336,16 @@ export default function AdmisionesClient() {
                         >
                           <CheckCircle size={17} weight="bold" />
                           Registrar llegada
+                        </Button>
+                      ) : null}
+                      {puedeVerComprobante ? (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          loading={registrando === cita.id}
+                          onClick={() => registrarLlegada(cita)}
+                        >
+                          Ver comprobante
                         </Button>
                       ) : null}
                     </div>

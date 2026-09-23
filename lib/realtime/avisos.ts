@@ -24,3 +24,8 @@ export function avisarFilaCambiada(turno: Turno): void {
     profesionalId: turno.profesionalId ?? null,
   })
 }
+
+/** Los turnos de hoy se reiniciaron (panel de simulacion): todos a resincronizar. */
+export function avisarDatosReiniciados(): void {
+  realtimeHub.publish({ tipo: 'datos.reiniciados' })
+}

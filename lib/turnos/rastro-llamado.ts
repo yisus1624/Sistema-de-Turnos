@@ -28,26 +28,63 @@ export interface QuienLlama {
 }
 
 export async function registrarLlamado(turno: Turno, quien: QuienLlama = {}) {
-  await apuntarLlamado(EVENTOS.TURNO_LLAMADO, turno, quien)
+  await apuntarSinTumbar(EVENTOS.TURNO_LLAMADO, turno, quien)
 }
 
 export async function registrarRepeticion(turno: Turno, quien: QuienLlama = {}) {
-  await apuntarLlamado(EVENTOS.TURNO_REPETIDO, turno, quien)
+  await apuntarSinTumbar(EVENTOS.TURNO_REPETIDO, turno, quien)
 }
 
-async function apuntarLlamado(tipo: string, turno: Turno, quien: QuienLlama) {
-  const { ip } = await contextoPeticion()
+/**
+ * El cierre de un turno (atendido o ausente).
+ *
+ * Vivia repetido en cuatro rutas, dos con la IP y dos sin ella: el mismo cierre
+ * dejaba un rastro distinto segun desde que pantalla se hiciera.
+ */
+export async function registrarCierre(
+  tipo: string,
+  turno: Turno,
+  quien: QuienLlama & { detalle?: Record<string, unknown> } = {},
+) {
+  await sinTumbar(async () => {
+    const { ip } = await contextoPeticion()
+    await registrarEvento({ tipo, exito: true, ...firma(quien), identificador: turno.codigo, ip, detalle: quien.detalle })
+  })
+}
 
-  await registrarEvento({
-    tipo,
-    exito: true,
-    usuarioId: quien.usuarioId ?? null,
-    usuarioNombre: quien.usuarioNombre ?? null,
-    // El codigo del turno, no su id: es lo que el paciente vio y lo que se
-    // puede buscar despues.
-    identificador: turno.codigo,
-    ip,
-    detalle: await detalleDelLlamado(turno),
+/**
+ * El apunte NUNCA tumba la accion que audita.
+ *
+ * Llega despues de que el llamado o el cierre ya quedaron guardados. Si armar
+ * el detalle falla (una consulta de nombres que se cae), responder error le
+ * haria creer al funcionario que no paso nada, y al reintentar cerraria o
+ * llamaria a otro paciente. Se grita en el registro del servidor y se sigue.
+ */
+async function sinTumbar(apuntar: () => Promise<void>) {
+  try {
+    await apuntar()
+  } catch (error) {
+    console.error('[rastro] la accion quedo hecha pero no se pudo apuntar', error)
+  }
+}
+
+function firma(quien: QuienLlama) {
+  return { usuarioId: quien.usuarioId ?? null, usuarioNombre: quien.usuarioNombre ?? null }
+}
+
+async function apuntarSinTumbar(tipo: string, turno: Turno, quien: QuienLlama) {
+  await sinTumbar(async () => {
+    const { ip } = await contextoPeticion()
+    await registrarEvento({
+      tipo,
+      exito: true,
+      ...firma(quien),
+      // El codigo del turno, no su id: es lo que el paciente vio y lo que se
+      // puede buscar despues.
+      identificador: turno.codigo,
+      ip,
+      detalle: await detalleDelLlamado(turno),
+    })
   })
 }
 

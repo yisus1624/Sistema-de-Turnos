@@ -33,7 +33,7 @@ import {
 } from '@phosphor-icons/react/dist/ssr'
 import { Button } from '@/components/ui/Button'
 import Modal from '@/components/ui/Modal'
-import { mensajeDeError } from '@/lib/api/cliente'
+import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import { toast } from '@/components/ui/toast'
 
 interface ErrorFila {
@@ -89,6 +89,12 @@ const ERRORES_VISIBLES = 20
  */
 const EXTENSIONES = ['.xml', '.xls', '.xlsx']
 
+/**
+ * Cuanto se espera la carga del reporte: leerlo y escribir la agenda tarda mas
+ * que una consulta normal. Por debajo de los 180 s que le da nginx a esa ruta.
+ */
+const MS_LIMITE_IMPORTACION = 170_000
+
 /** Que se rechaza aqui mismo, sin gastarle al funcionario una subida entera. */
 function extensionNoValida(nombre: string) {
   return !EXTENSIONES.some((extension) => nombre.toLowerCase().endsWith(extension))
@@ -130,16 +136,17 @@ export default function CargarReporteCitas({ alTerminar }: { alTerminar: () => v
       const cuerpo = new FormData()
       cuerpo.append('archivo', archivo)
 
-      // Se usa `fetch` directo y no el cliente comun: ese pone
-      // `Content-Type: application/json`, y con un formulario multiparte hay
-      // que dejar que el navegador ponga el suyo con el separador. Con la
-      // cabecera equivocada el servidor no encuentra el archivo.
-      const respuesta = await fetch('/api/turnos/citas/importar', { method: 'POST', body: cuerpo })
-      const datos = await respuesta.json().catch(() => ({}))
+      // El cliente comun, no `fetch` directo: asi un corte de red dice "sin
+      // conexion" y no "Failed to fetch", un 413 de nginx explica que el
+      // archivo es grande, y una sesion caida lleva al login. Con limite largo:
+      // leer y cargar el reporte tarda (nginx le da hasta 180 s).
+      const datos = await pedir<ResumenCarga>('/api/turnos/citas/importar', {
+        method: 'POST',
+        body: cuerpo,
+        msLimite: MS_LIMITE_IMPORTACION,
+      })
 
-      if (!respuesta.ok) throw new Error(datos?.error ?? 'No se pudo cargar el archivo.')
-
-      setResumen(datos as ResumenCarga)
+      setResumen(datos)
       // La ventana de instrucciones ya cumplio: se cierra para dejar sitio al
       // resumen, que es lo que de verdad hay que leer.
       setAbierto(false)

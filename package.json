@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
-    "start": "next start",
+    "start": "next start -H 127.0.0.1 --keepAliveTimeout 65000",
     "postinstall": "node scripts/patch-minimatch-brace-expansion.mjs",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "next typegen && tsc --noEmit",

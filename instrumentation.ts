@@ -27,6 +27,22 @@ function aviso(mensaje: string) {
   console.warn(`${AMARILLO}[configuracion] ${mensaje}${FIN}`)
 }
 
+/**
+ * El pool de conexiones de la base, acotado.
+ *
+ * Sin `connection_limit`, Prisma abre tantas conexiones como nucleos tenga la
+ * maquina (x2 + 1), y un pico de consultas caras podia dejar a la base —que
+ * en Supabase tiene un tope bajo— sin conexiones para el inicio de sesion y
+ * el llamado. Ver la seccion 3 de docs/despliegue.md.
+ */
+function revisarPoolDeLaBase(produccion: boolean) {
+  if (!produccion || /[?&]connection_limit=/.test(process.env.DATABASE_URL ?? '')) return
+  aviso(
+    'DATABASE_URL no fija connection_limit: un pico de consultas puede dejar a la base sin conexiones. ' +
+      'Agregar por ejemplo "?connection_limit=10&pool_timeout=10" (ver docs/despliegue.md).',
+  )
+}
+
 export async function register() {
   // Solo en el servidor de Node: el runtime edge no despliega nada.
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
@@ -91,4 +107,6 @@ export async function register() {
         'docs/despliegue.md.',
     )
   }
+
+  revisarPoolDeLaBase(produccion)
 }

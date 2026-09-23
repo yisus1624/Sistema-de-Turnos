@@ -2,12 +2,13 @@
 
 import { useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { signIn } from 'next-auth/react'
 import { useForm } from 'react-hook-form'
 import { Eye, EyeSlash, LockKey, User } from '@phosphor-icons/react'
 import { AuthShell, FieldIcon } from '@/components/auth/AuthBrandPanel'
 import { Isotipo, NOMBRE_INSTITUCION } from '@/components/brand/Marca'
 import { loginSchema, type LoginInput } from '@/lib/validators/auth'
+import { MENSAJES_DE_INGRESO, ingresarConCredenciales } from '@/lib/auth-ingreso'
+import { destinoTrasEntrar } from '@/lib/auth-routing'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -34,31 +35,21 @@ export default function LoginPage() {
     }
 
     setCargando(true)
-    const resultado = await signIn('credentials', {
-      usuario: parsed.data.usuario,
-      password: parsed.data.password,
-      redirect: false,
-    })
+    // No lanza nunca: una red caida, un 429 de nginx o una base caida vuelven
+    // como resultado, cada uno con su mensaje (ver `lib/auth-ingreso.ts`). Asi
+    // el boton no se queda cargando y la contrasena solo se culpa cuando es ella.
+    const resultado = await ingresarConCredenciales(parsed.data)
 
-    if (resultado?.error) {
-      // `code` lo pone `lib/auth.ts` cuando lo que fallo NO fueron las
-      // credenciales sino la fuente de usuarios. Decir "contrasena incorrecta"
-      // ante una base caida manda al funcionario a probar contrasenas que ya
-      // eran correctas.
-      setError(
-        resultado.code === 'fuente_no_disponible'
-          ? 'No se pudo verificar tu acceso: el sistema no esta conectado a la base de datos. Avisa a soporte; no es tu contrasena.'
-          : 'Usuario o contrasena incorrectos.',
-      )
+    if (resultado !== 'ingreso') {
+      setError(MENSAJES_DE_INGRESO[resultado])
       setCargando(false)
       return
     }
 
     // Se vuelve a la pantalla donde le caduco la sesion, si venia de una. Solo
-    // rutas internas: un `volverA` con una direccion completa dejaria que un
-    // enlace preparado mandara al funcionario a otro sitio despues de entrar.
-    const volverA = parametros.get('volverA')
-    const destino = volverA && volverA.startsWith('/') && !volverA.startsWith('//') ? volverA : '/auth/redirect'
+    // rutas del mismo sitio (ver `destinoTrasEntrar`): un enlace preparado no
+    // puede mandar al funcionario a otro sitio despues de entrar.
+    const destino = destinoTrasEntrar(parametros.get('volverA'), window.location.origin)
 
     router.replace(destino)
     router.refresh()

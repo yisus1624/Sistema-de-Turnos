@@ -10,7 +10,7 @@
  * (`/consultorio/[token]`, ver `app/admin/profesionales`).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowClockwise, CheckCircle, Megaphone, UserMinus } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -19,8 +19,11 @@ import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 // El cliente COMPARTIDO, no una copia local: la copia se quedaba fuera del
 // manejo de sesion caducada (ver `lib/api/cliente.ts`).
-import { horaCorta, pedir } from '@/lib/api/cliente'
-import { useRecargaEnVivo } from '@/lib/hooks'
+import { horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
+import type { ResultadoDeCarga } from '@/lib/api/reintento'
+import { useCargaConReintento, useRecargaEnVivo, useUltimaPeticion } from '@/lib/hooks'
+import { avisoDePacienteYaLlamado, llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
+import { recordarVentanilla, ventanillaInicial } from '@/lib/ventanilla-recordada'
 import { afectaALaFila } from '@/lib/realtime/canal'
 import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import type { Modulo, Servicio, Turno } from '@/lib/turnos/types'
@@ -62,33 +65,68 @@ export default function OperadorClient() {
       .finally(() => setCatalogosListos(true))
   }, [])
 
-  // Al cambiar de servicio, la ventanilla anterior deja de tener sentido: se
-  // preselecciona la primera disponible.
+  // Al cambiar de servicio, la ventanilla anterior deja de tener sentido. Se
+  // retoma la que ESTE equipo eligio la ultima vez; nunca "la primera", que
+  // dejaba a dos operadores en la misma ventanilla cerrandose los pacientes
+  // (ver `lib/ventanilla-recordada.ts`).
   useEffect(() => {
     if (!servicio) return
 
     const modulosServicio = modulos.filter((m) => !m.servicioId || m.servicioId === servicio.id)
-    setModuloId(modulosServicio[0]?.id ?? '')
+    setModuloId(ventanillaInicial(servicio.id, modulosServicio))
 
     setTurnoActual(null)
   }, [servicio, modulos])
 
-  const cargarPendientes = useCallback(async () => {
+  const elegirVentanilla = (id: string) => {
+    setModuloId(id)
+    if (servicioId && id) recordarVentanilla(servicioId, id)
+  }
+
+  // Contra repetir el mismo aviso de error en cada reconexion durante un corte.
+  const avisoDeFallaRef = useRef(false)
+
+  // Solo cuenta la ultima recarga: una respuesta vieja (de otra ventanilla, o
+  // de antes de una accion) no puede pintar un turno que no es el de ahora.
+  const recargas = useUltimaPeticion()
+
+  const cargarPendientes = useCallback(async (): Promise<ResultadoDeCarga> => {
     if (!servicioId) return
 
+    const recarga = recargas.iniciar()
     try {
-      const { pendientes: lista } = await pedir<{ pendientes: Turno[] }>(
-        `/api/turnos/pendientes?servicioId=${encodeURIComponent(servicioId)}`,
-      )
+      const consulta = new URLSearchParams({ servicioId })
+      if (moduloId) consulta.set('moduloId', moduloId)
+      const { pendientes: lista, turnoActual: abierto } = await pedir<{
+        pendientes: Turno[]
+        turnoActual?: Turno | null
+      }>(`/api/turnos/pendientes?${consulta}`, { signal: recarga.signal })
+      if (!recarga.esVigente()) return 'reemplazada'
       setPendientes(lista)
+      // El turno abierto de la ventanilla sale del SERVIDOR, no solo de la
+      // respuesta del llamado: si esa respuesta se perdio por la red, o se
+      // recargo la pagina, el operador lo recupera y puede repetirlo o
+      // cerrarlo, en vez de que el siguiente llamado lo cierre como atendido.
+      if (moduloId) setTurnoActual(abierto ?? null)
+      avisoDeFallaRef.current = false
     } catch (error) {
-      toast.error('No se pudieron cargar los pendientes', error instanceof Error ? error.message : undefined)
+      if (!recarga.esVigente()) return 'reemplazada'
+      if (!avisoDeFallaRef.current) {
+        avisoDeFallaRef.current = true
+        toast.error('No se pudieron cargar los pendientes', mensajeDeError(error))
+      }
+      // Se relanza para que `useCargaConReintento` lo reintente solo.
+      throw error
     }
-  }, [servicioId])
+  }, [servicioId, moduloId, recargas])
+
+  // Si la carga falla, se reintenta sola con espera creciente (ver
+  // `useCargaConReintento`), sin esperar a un evento de la fila.
+  const recargar = useCargaConReintento(cargarPendientes)
 
   useEffect(() => {
-    cargarPendientes()
-  }, [cargarPendientes])
+    void recargar()
+  }, [cargarPendientes, recargar])
 
   /**
    * La fila compartida la atienden VARIAS ventanillas a la vez.
@@ -99,12 +137,14 @@ export default function OperadorClient() {
    * otra ventanilla no aparecia hasta que pulsara algo. Entre dos ventanillas,
    * asi es como se pierde de vista a un paciente.
    */
-  const conexion = useRecargaEnVivo(cargarPendientes, {
+  const conexion = useRecargaEnVivo(recargar, {
     activo: Boolean(servicioId),
     interesa: (evento) => afectaALaFila(evento, { servicioId }),
   })
 
   async function ejecutar(accion: Accion, tarea: () => Promise<void>) {
+    // Una recarga que salio antes de la accion trae el estado de antes.
+    recargas.cancelar()
     setCargando(accion)
     try {
       await tarea()
@@ -112,6 +152,10 @@ export default function OperadorClient() {
       toast.error('No se pudo completar la accion', error instanceof Error ? error.message : undefined)
     } finally {
       setCargando(null)
+      // Siempre, salga bien o mal: si el servidor hizo el cambio pero la
+      // respuesta se perdio, la pantalla tiene que enterarse (ver
+      // `cargarPendientes`).
+      void recargar()
     }
   }
 
@@ -122,24 +166,33 @@ export default function OperadorClient() {
         body: JSON.stringify({ servicioId }),
       })
       toast.success('Turno generado', `Se genero el turno ${turno.codigo}.`)
-      await cargarPendientes()
     })
 
+  // Con el turno que el operador VE abierto: si el servidor ya habia llamado a
+  // otro (respuesta perdida, doble clic), no se llama a nadie mas.
   const llamarSiguiente = () =>
     ejecutar('llamar', async () => {
-      const { turno } = await pedir<{ turno: Turno }>('/api/turnos/llamar-siguiente', {
-        method: 'POST',
-        body: JSON.stringify({ servicioId, moduloId }),
-      })
+      const desenlace = await llamarSiguienteDesde(
+        '/api/turnos/llamar-siguiente',
+        { servicioId, moduloId },
+        { turnoVisto: turnoActual },
+      )
+      const { turno } = desenlace
       setTurnoActual(turno)
+      if (desenlace.tipo === 'ya_tenia_uno') {
+        toast.warning('Ya tenias un turno llamado', avisoDePacienteYaLlamado(turno))
+        return
+      }
       toast.success('Turno llamado', `${turno.codigo}${turno.nombrePaciente ? ` · ${turno.nombrePaciente}` : ''}`)
-      await cargarPendientes()
     })
 
   const repetirLlamado = () =>
     ejecutar('repetir', async () => {
       if (!turnoActual) return
-      const { turno } = await pedir<{ turno: Turno }>(`/api/turnos/${turnoActual.id}/repetir`, { method: 'POST' })
+      const { turno } = await pedir<{ turno: Turno }>(`/api/turnos/${turnoActual.id}/repetir`, {
+        method: 'POST',
+        body: JSON.stringify({ vecesLlamadoVisto: turnoActual.vecesLlamado }),
+      })
       setTurnoActual(turno)
       toast.info('Llamado repetido', `Se repitio el turno ${turno.codigo}.`)
     })
@@ -154,7 +207,6 @@ export default function OperadorClient() {
         toast.warning('Paciente ausente', `El turno ${turnoActual.codigo} no se presento.`)
       }
       setTurnoActual(null)
-      await cargarPendientes()
     })
 
   // Las ventanillas son genericas: sirven para cualquier fila compartida.
@@ -196,7 +248,10 @@ export default function OperadorClient() {
 
           <label className="block">
             <span className="mb-1.5 block text-sm font-bold text-slate-700">Ventanilla</span>
-            <select className={claseCampo} value={moduloId} onChange={(e) => setModuloId(e.target.value)}>
+            <select className={claseCampo} value={moduloId} onChange={(e) => elegirVentanilla(e.target.value)}>
+              <option value="" disabled>
+                Elige tu ventanilla
+              </option>
               {modulosDisponibles.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.nombre}

@@ -21,7 +21,18 @@
  * paciente o generarle dos turnos.
  */
 import 'server-only'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { Prisma, PrismaClient } from '@prisma/client'
+
+/**
+ * Marca "esto corre dentro de una transaccion interactiva".
+ *
+ * Dentro de una transaccion NO se reintenta nada, ni siquiera una lectura: si
+ * la conexion se corto (P1017), la transaccion entera ya se perdio con ella, y
+ * repetir la lectura solo alarga el fallo. La pone `enTransaccion` en el
+ * repositorio; el reintento de abajo la consulta.
+ */
+export const contextoDeTransaccion = new AsyncLocalStorage<true>()
 
 const CODIGOS_CONEXION = new Set([
   'P1001', // no se puede alcanzar el servidor
@@ -49,8 +60,9 @@ const SOLO_LECTURA = new Set([
   'aggregate',
   'count',
   'groupBy',
-  '$queryRaw',
-  '$queryRawUnsafe',
+  // `$queryRaw` NO: en este sistema se usa para candados (`FOR UPDATE`,
+  // `pg_advisory_xact_lock`) dentro de transacciones, y repetirlo tras un corte
+  // no tiene sentido: la transaccion ya se perdio con la conexion.
 ])
 
 /** Errores en los que la consulta con seguridad no llego a ejecutarse. */
@@ -92,7 +104,8 @@ function crearCliente() {
             ultimoError = error
 
             const reintentable =
-              fallaAntesDeEjecutar(error) || (SOLO_LECTURA.has(operation) && esCorteDeConexion(error))
+              !contextoDeTransaccion.getStore() &&
+              (fallaAntesDeEjecutar(error) || (SOLO_LECTURA.has(operation) && esCorteDeConexion(error)))
 
             if (!reintentable || intento === INTENTOS) throw error
 

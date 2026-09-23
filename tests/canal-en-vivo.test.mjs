@@ -17,6 +17,7 @@ const {
   MS_LATIDO,
   MS_SILENCIO_MAXIMO,
   afectaALaFila,
+  cambiaLosCatalogos,
   esCambioDeDatos,
   formatearMensajeSse,
   interpretarMensaje,
@@ -93,10 +94,81 @@ test('quien no dice en que consultorio esta sigue recibiendo todos los llamados'
   assert.equal(afectaALaFila(LLAMADO, {}), true)
 })
 
-test('un consultorio que queda libre le llega a todo el mundo', () => {
-  // La pantalla del televisor tiene que apagar esa casilla se mire desde donde
-  // se mire; no se filtra por fila.
+// El televisor NO pasa por este filtro: aplica cada evento a su casilla (ver
+// `app/pantalla/page.tsx`), asi que apaga la casilla liberada igual. El filtro
+// es para las pantallas que recargan su fila entera.
+// Cada "Atendido" de cualquier consultorio publica `modulo.liberado`, y ese
+// evento hacia recargar a TODOS los consultorios: doce recargas pesadas por
+// cada paciente que salia, cada una escribiendo en la base. A un consultorio
+// solo le interesa que se libere EL SUYO.
+test('que otro consultorio quede libre no obliga a recargar', () => {
   const liberado = { tipo: 'modulo.liberado', moduloId: 'mod-8' }
 
-  assert.equal(afectaALaFila(liberado, { moduloId: 'mod-1' }), true)
+  assert.equal(afectaALaFila(liberado, { profesionalId: 'pro-1', moduloId: 'mod-3' }), false)
+  assert.equal(afectaALaFila(liberado, { profesionalId: 'pro-1', moduloId: 'mod-8' }), true)
+  assert.equal(afectaALaFila(liberado, { profesionalId: 'pro-1', moduloId: null }), true, 'sin modulo, por si acaso')
+  assert.equal(afectaALaFila(liberado, { servicioId: 'srv-1' }), true, 'la ventanilla no declara modulo')
+})
+
+// El doctor llamo a T desde el consultorio A, cambio el selector a B y
+// admision cerro a T: el `modulo.liberado` de A se descartaba porque solo se
+// comparaba con B, y la pantalla del doctor seguia mostrando a T abierto.
+test('la liberacion del consultorio del turno abierto pasa aunque el selector este en otro', () => {
+  const liberado = { tipo: 'modulo.liberado', moduloId: 'mod-A' }
+  const fila = { profesionalId: 'pro-1', moduloId: 'mod-B', moduloDelTurnoAbierto: 'mod-A' }
+
+  assert.equal(afectaALaFila(liberado, fila), true)
+  assert.equal(afectaALaFila({ tipo: 'modulo.liberado', moduloId: 'mod-C' }, fila), false, 'un tercero sigue sin importar')
+  assert.equal(afectaALaFila(liberado, { ...fila, moduloDelTurnoAbierto: null }), false, 'sin turno abierto, solo el selector')
+})
+
+// Los eventos generales tienen que pasar el filtro de cualquier fila: sin
+// ellos, un cambio de catalogos o una purga dejaba las pantallas con datos
+// que ya no existen.
+test('los eventos generales y los cambios de fila sin profesional pasan el filtro', () => {
+  const sinProfesional = { tipo: 'fila.cambiada', servicioId: 'srv-1', profesionalId: null }
+  assert.deepEqual(interpretarMensaje(JSON.stringify(sinProfesional)), sinProfesional)
+  assert.equal(afectaALaFila(sinProfesional, { servicioId: 'srv-1' }), true)
+  for (const tipo of ['configuracion.cambiada', 'datos.reiniciados']) {
+    assert.deepEqual(interpretarMensaje(JSON.stringify({ tipo })), { tipo })
+    assert.equal(afectaALaFila({ tipo }, { profesionalId: 'pro-1', moduloId: 'mod-1' }), true, tipo)
+    assert.equal(afectaALaFila({ tipo }, { servicioId: 'srv-9' }), true, tipo)
+  }
+})
+
+// El monitor del administrador pedia los catalogos una sola vez al abrir:
+// un servicio creado o una purga no aparecian hasta recargar la pagina.
+test('solo la configuracion y el reinicio de datos cambian los catalogos', () => {
+  assert.equal(cambiaLosCatalogos({ tipo: 'configuracion.cambiada' }), true)
+  assert.equal(cambiaLosCatalogos({ tipo: 'datos.reiniciados' }), true)
+  assert.equal(cambiaLosCatalogos(LLAMADO), false)
+  assert.equal(cambiaLosCatalogos({ tipo: 'modulo.liberado', moduloId: 'mod-1' }), false)
+  assert.equal(cambiaLosCatalogos({ tipo: 'fila.cambiada', servicioId: 's', profesionalId: null }), false)
+})
+
+// El mensaje del canal se aceptaba tal cual (`as MensajeEnVivo`). Un evento
+// con otra forma —de una version distinta del servidor durante un despliegue,
+// o simplemente roto— llegaba a la pantalla y reventaba al leer
+// `casilla.moduloId`. Ahora se valida el tipo y los campos que se usan, y lo
+// desconocido se descarta.
+test('un mensaje con la forma correcta se acepta', () => {
+  const llamado = {
+    tipo: 'turno.llamado',
+    repetido: false,
+    casilla: { moduloId: 'm1', moduloNombre: 'CONS 1', servicioId: 's', servicioNombre: 'CE', codigo: 'C-001', horaLlamado: '2026-09-22T14:00:00.000Z', vecesLlamado: 1 },
+  }
+  assert.deepEqual(interpretarMensaje(JSON.stringify(llamado)), llamado)
+  assert.deepEqual(interpretarMensaje(JSON.stringify({ tipo: 'modulo.liberado', moduloId: 'm1' })), { tipo: 'modulo.liberado', moduloId: 'm1' })
+  assert.deepEqual(interpretarMensaje(JSON.stringify({ tipo: 'latido' })), { tipo: 'latido' })
+})
+
+test('un mensaje de tipo desconocido o con campos que faltan se descarta', () => {
+  assert.equal(interpretarMensaje(JSON.stringify({ tipo: 'algo.nuevo' })), null)
+  assert.equal(interpretarMensaje(JSON.stringify({ tipo: 'turno.llamado', repetido: false })), null)
+  assert.equal(interpretarMensaje(JSON.stringify({ tipo: 'turno.llamado', repetido: false, casilla: { moduloId: 7 } })), null)
+  assert.equal(interpretarMensaje(JSON.stringify({ tipo: 'modulo.liberado' })), null)
+  assert.equal(interpretarMensaje(JSON.stringify({ tipo: 'fila.cambiada', servicioId: 's' })), null)
+  assert.equal(interpretarMensaje('null'), null)
+  assert.equal(interpretarMensaje('[1,2]'), null)
+  assert.equal(interpretarMensaje('no es json'), null)
 })

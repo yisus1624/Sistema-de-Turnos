@@ -272,7 +272,14 @@ export function bloquesConPacientes(
   return bloques
 }
 
-/** Formato AAAA-MM-DD, que es como entran las fechas por la API. */
+/**
+ * Una fecha AAAA-MM-DD que EXISTE, que es como entran las fechas por la API.
+ *
+ * El formato solo no basta: "2026-02-30" lo cumple, y una consulta por un dia
+ * que no existe responde vacio, como si ese dia no hubiera pasado nada.
+ */
 export function esFechaValida(fecha: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(fecha)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return false
+  const instante = new Date(`${fecha}T00:00:00Z`)
+  return !Number.isNaN(instante.getTime()) && instante.toISOString().slice(0, 10) === fecha
 }

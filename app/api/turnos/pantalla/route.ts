@@ -22,5 +22,7 @@ export async function GET() {
   // de sesion. El porque completo esta en `lib/turnos/pantalla-cacheada.ts`.
   const { casillas, configuracion } = await estadoPantallaCacheado()
 
-  return NextResponse.json({ casillas, configuracion })
+  // La hora del servidor viaja con la foto: el televisor decide con ella que
+  // llamados son recientes, no con su propio reloj, que puede ir descuadrado.
+  return NextResponse.json({ casillas, configuracion, ahora: new Date().toISOString() })
 }

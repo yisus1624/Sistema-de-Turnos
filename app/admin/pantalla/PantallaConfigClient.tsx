@@ -109,8 +109,9 @@ export default function PantallaConfigClient() {
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm leading-6 text-slate-600">
-            Abre esta direccion en el televisor de la sala de espera y pulsa &quot;Activar pantalla&quot;. Ese
-            primer clic es obligatorio: los navegadores no dejan reproducir audio sin un gesto del usuario.
+            Abre esta direccion en el televisor de la sala de espera: los turnos se ven solos. Si aparece
+            &quot;Sonido desactivado: toca para activar&quot;, toca el aviso; con el modo kiosco del televisor no
+            hace falta.
           </p>
           <p className="rounded-xl bg-slate-100 px-4 py-3 font-mono text-sm text-slate-700">/pantalla</p>
           <Link href="/pantalla" target="_blank" rel="noopener">

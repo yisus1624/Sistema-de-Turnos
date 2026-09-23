@@ -121,7 +121,7 @@ async function pacienteEnEspera(profesionalId, hora = '08:00') {
     horaCita: new Date(`${HOY}T${hora}:00-05:00`).toISOString(),
     usuarioId: 'usuario-mostrador',
   })
-  return turnoRepository.registrarLlegada(cita.id)
+  return (await turnoRepository.registrarLlegada(cita.id)).turno
 }
 
 async function tokenDe(profesionalId) {
@@ -136,7 +136,7 @@ test('llamar al siguiente desde el consultorio deja quien, a quien y desde donde
   await pacienteEnEspera(doctor.id)
   const token = await tokenDe(doctor.id)
 
-  const respuesta = await consultorioLlamar.POST(peticionDeConsultorio({ moduloId: modulo.id }, token))
+  const respuesta = await consultorioLlamar.POST(peticionDeConsultorio({ moduloId: modulo.id, turnoAbiertoId: null }, token))
   const { turno } = await respuesta.json()
   assert.equal(respuesta.status, 200)
 
@@ -154,7 +154,7 @@ test('repetir el llamado queda como repeticion y dice cuantas van', async () => 
   await pacienteEnEspera(doctor.id)
   const token = await tokenDe(doctor.id)
 
-  const llamada = await consultorioLlamar.POST(peticionDeConsultorio({ moduloId: modulo.id }, token))
+  const llamada = await consultorioLlamar.POST(peticionDeConsultorio({ moduloId: modulo.id, turnoAbiertoId: null }, token))
   const { turno } = await llamada.json()
 
   const respuesta = await consultorioRepetir.POST(
@@ -176,17 +176,34 @@ test('con la fila vacia no se llama a nadie y no se inventa un apunte', async ()
   const llamados = () => apuntes.filter((evento) => evento.tipo === 'TURNO_LLAMADO').length
   const antes = llamados()
 
-  const respuesta = await consultorioLlamar.POST(peticionDeConsultorio({ moduloId: modulo.id }, token))
+  const respuesta = await consultorioLlamar.POST(peticionDeConsultorio({ moduloId: modulo.id, turnoAbiertoId: null }, token))
 
   assert.equal(respuesta.status, 404)
   assert.equal(llamados(), antes, 'sin turno llamado no hay nada que registrar')
 })
 
-test('el llamado del operador queda a nombre de su cuenta, no del doctor', async () => {
+test('el operador ya no puede llamar la fila de un doctor', async () => {
+  // Con `profesionalId` en el cuerpo, un operador se llevaba a los pacientes de
+  // un medico y, desde su consultorio, le cerraba al que tuviera adentro.
   const { doctor, modulo } = await doctorConConsultorio()
   await pacienteEnEspera(doctor.id)
 
   const respuesta = await operadorLlamar.POST(peticion({ profesionalId: doctor.id, moduloId: modulo.id }))
+  assert.equal(respuesta.status, 400)
+})
+
+test('el llamado del operador queda a nombre de su cuenta', async () => {
+  creados += 1
+  const servicio = await turnoRepository.crearServicio({
+    nombre: `Ventanilla rastro ${creados}`,
+    prefijo: `V${creados}`,
+    modoFila: 'COMPARTIDA',
+    activo: true,
+  })
+  const modulo = await turnoRepository.crearModulo({ nombre: `Caja rastro ${creados}`, servicioId: servicio.id, activo: true })
+  await turnoRepository.generarTurnoDeVentanilla(servicio.id)
+
+  const respuesta = await operadorLlamar.POST(peticion({ servicioId: servicio.id, moduloId: modulo.id, turnoAbiertoId: null }))
   const { turno } = await respuesta.json()
   assert.equal(respuesta.status, 200)
 

@@ -79,7 +79,7 @@ test('un servicio con cita no permite generar turnos de ventanilla', async () =>
 
 test('registrar la llegada convierte la cita en turno del profesional', async () => {
   const cita = await citaLibre('pro-perez')
-  const turno = await repo.registrarLlegada(cita.id)
+  const { turno } = await repo.registrarLlegada(cita.id)
 
   assert.equal(turno.estado, 'EN_ESPERA')
   assert.equal(turno.profesionalId, cita.profesionalId)
@@ -91,10 +91,15 @@ test('registrar la llegada convierte la cita en turno del profesional', async ()
   assert.equal(actualizada.estado, 'PRESENTADO')
 })
 
-test('no se puede registrar dos veces la llegada de la misma cita', async () => {
+test('registrar dos veces la llegada de la misma cita devuelve el mismo turno, sin crear otro', async () => {
+  // Antes se rechazaba. Con la red lenta, el reintento de admisiones tras una
+  // respuesta perdida se quedaba sin comprobante: ahora recibe el turno que ya
+  // se genero (ver `turnos-sin-perdidas.test.mjs`).
   const cita = await citaLibre('pro-perez')
-  await repo.registrarLlegada(cita.id)
-  await assert.rejects(() => repo.registrarLlegada(cita.id), /ya registro/i)
+  const primera = await repo.registrarLlegada(cita.id)
+  const segunda = await repo.registrarLlegada(cita.id)
+  assert.equal(segunda.yaRegistrada, true)
+  assert.equal(segunda.turno.id, primera.turno.id)
 })
 
 test('cada profesional solo ve sus propios pacientes', async () => {
@@ -177,7 +182,7 @@ test('el estado completo de la pantalla tampoco lleva datos de pacientes', async
 
 test('admisiones si recibe el turno, el consultorio y el doctor para dictarselos al paciente', async () => {
   const cita = await citaLibre('pro-mejia')
-  const turno = await repo.registrarLlegada(cita.id)
+  const { turno } = await repo.registrarLlegada(cita.id)
 
   const comprobante = await repo.comprobanteDeLlegada(turno.id)
 
@@ -201,7 +206,7 @@ test('repetir el llamado incrementa el contador (seccion 12)', async () => {
     funcionarioId: 'usuario-prueba',
   })
 
-  const repetido = await repo.repetirLlamado(llamado.id)
+  const { turno: repetido } = await repo.repetirLlamado(llamado.id)
   assert.equal(repetido.vecesLlamado, 2)
   assert.equal(repetido.estado, 'LLAMADO')
 })
@@ -247,7 +252,7 @@ test('marcar atendido cierra la cita y libera el consultorio', async () => {
 
   const eventos = []
   const desuscribir = realtimeHub.subscribe((evento) => eventos.push(evento))
-  const atendido = await repo.marcarAtendido(llamado.id)
+  const { turno: atendido } = await repo.marcarAtendido(llamado.id)
   desuscribir()
 
   assert.equal(atendido.estado, 'ATENDIDO')
@@ -270,7 +275,7 @@ test('marcar ausente deja el turno en estado AUSENTE', async () => {
   })
 
   assert.equal(llamado.id, turno.id)
-  const ausente = await repo.marcarAusente(llamado.id)
+  const { turno: ausente } = await repo.marcarAusente(llamado.id)
   assert.equal(ausente.estado, 'AUSENTE')
 })
 
@@ -455,11 +460,13 @@ test('un turno cerrado no se vuelve a cerrar ni le cambian la hora de atencion',
     moduloId: modulo.id,
     funcionarioId: 'usuario-prueba',
   })
-  const atendido = await repo.marcarAtendido(llamado.id)
+  const { turno: atendido } = await repo.marcarAtendido(llamado.id)
   const horaOriginal = atendido.horaAtencion
 
-  await assert.rejects(() => repo.marcarAtendido(llamado.id), /ya esta cerrado/i)
-  await assert.rejects(() => repo.marcarAusente(llamado.id), /ya esta cerrado/i)
+  // Repetir "Atendido" es el reintento de una respuesta perdida: exito sin
+  // rehacer nada. Marcarlo ausente despues es un conflicto real (409).
+  assert.equal((await repo.marcarAtendido(llamado.id)).yaAplicada, true)
+  await assert.rejects(() => repo.marcarAusente(llamado.id), /ya se cerro como atendido/i)
 
   const [enHistorico] = await repo.historico({ codigo: llamado.codigo })
   assert.equal(enHistorico.horaAtencion, horaOriginal, 'la hora de atencion no se puede reescribir')

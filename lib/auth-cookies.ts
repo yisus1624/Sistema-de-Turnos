@@ -7,8 +7,6 @@
  */
 export const useSecureAuthCookies = process.env.NODE_ENV === 'production'
 
-export const authSessionCookieName = `${useSecureAuthCookies ? '__Secure-' : ''}authjs.session-token`
-
 const sessionCookieBases = [
   'authjs.session-token',
   '__Secure-authjs.session-token',

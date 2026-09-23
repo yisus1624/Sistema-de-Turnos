@@ -16,9 +16,13 @@
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { CONFIGURACION_INICIAL } from './configuracion-inicial'
-import { MINUTOS_ACCESO_MAXIMO, MINUTOS_ACCESO_MINIMO } from './repository'
+import { MINUTOS_ACCESO_MAXIMO, MINUTOS_ACCESO_MINIMO, MS_ENTRE_APUNTES_DE_USO } from './repository'
 import type { TurnoRepository } from './repository'
 import type {
+  AccionSobreTurno,
+  FiltroTurnoAbierto,
+  LlegadaRegistrada,
+  PeticionDeLlamado,
   ActividadCatalogo,
   AccesoProfesional,
   BloqueHorario,
@@ -43,9 +47,19 @@ import type {
   Turno,
 } from './types'
 import { errorDeNegocio } from './errores'
+import { decidirCierre, decidirRepeticion, estaAbierto, type EstadoDeCierre } from './reglas-cierre'
+import {
+  alcanceDelLlamado,
+  exigirTurnoAbiertoEsperado,
+  exigirVentanillaCompatible,
+  masRecienteLlamado,
+  moduloOcupado,
+  perteneceAlAlcance,
+  type SolicitudDeLlamado,
+} from './reglas-llamado'
 import { ordenAtencion, resumir } from './estadisticas'
 import { reunirActividad } from './actividad'
-import { modulosVisiblesEnPantalla } from './casillas'
+import { modulosVisiblesEnPantalla, puestoDe } from './casillas'
 import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
 import { exigirConfiguracionAlDia, marcaSiguiente } from './configuracion-version'
 import {
@@ -524,59 +538,67 @@ function validarFranjaDeCita(params: {
 }
 
 /**
- * Un doctor solo puede llamar en un consultorio que sea suyo.
+ * Desde que modulo puede llamar quien llama.
  *
  * Sin esta comprobacion, el `moduloId` viajaba en el cuerpo de la peticion sin
  * que nadie lo contrastara con quien lo mandaba, y bastaba un id equivocado
  * para llamar en la puerta de otro. Eso no era solo un numero mal puesto en la
- * pantalla: al llamar, `cerrarAtencionAbierta` da por ATENDIDO al paciente que
- * ese consultorio tuviera adentro, asi que un doctor le cerraba la atencion a
- * otro sin enterarse ninguno de los dos. El caso llegaba solo por la interfaz:
- * un doctor sin consultorio asignado caia en el primero de su servicio.
+ * pantalla: al llamar se da por ATENDIDO al paciente anterior, asi que se le
+ * cerraba la atencion a otro sin enterarse ninguno de los dos.
  *
- * Las tres reglas:
- *   1. El consultorio tiene que estar activo.
- *   2. Tiene que ser de su servicio (o no estar asignado a ninguno).
- *   3. No puede haber OTRO profesional atendiendo ahi en este momento.
+ * Las reglas:
+ *   1. El modulo tiene que estar activo.
+ *   2. Un doctor, solo en un consultorio de su servicio (o sin asignar); una
+ *      ventanilla, solo filas compartidas y un modulo compatible.
+ *   3. No puede haber OTRA persona atendiendo ahi en este momento (409).
  */
-function validarModuloParaLlamar(modulo: Modulo, profesionalId?: string) {
+function validarModuloParaLlamar(modulo: Modulo, quien: SolicitudDeLlamado) {
   if (!modulo.activo) {
     errorDeNegocio(`${modulo.nombre} esta desactivado; no se puede llamar desde ahi.`)
   }
 
-  if (!profesionalId) return
-
-  const profesional = buscarProfesional(profesionalId)
-
-  if (modulo.servicioId && modulo.servicioId !== profesional.servicioId) {
-    errorDeNegocio(
-      `${modulo.nombre} no pertenece a ${buscarServicio(profesional.servicioId).nombre}. Pide que te asignen tu consultorio.`,
-    )
+  // Un consultorio puede ser un salon con varios doctores de cualquier
+  // servicio a la vez: al doctor no se le pide consultorio libre ni de su
+  // servicio (ver la version de Postgres). Las ventanillas siguen siendo de uno.
+  if (quien.profesionalId) {
+    buscarProfesional(quien.profesionalId)
+    return
   }
+  exigirVentanillaCompatible(buscarServicio(quien.servicioId ?? ''), modulo)
 
-  // Solo cuenta lo que esta pasando HOY.
-  //
-  // Un turno se queda en LLAMADO hasta que alguien lo cierra, y al final de la
-  // jornada es normal que el ultimo quede abierto: el doctor termina y se va.
-  // Sin acotarlo al dia, ese turno colgado de ayer dejaba el consultorio
-  // bloqueado para cualquier otro doctor de manera permanente. Es el mismo
-  // criterio que usa `estadoPantalla` para no arrastrar turnos viejos.
+  const ocupante = ocupanteAjeno(modulo.id, alcanceDelLlamado(quien))
+  if (ocupante) throw moduloOcupado(modulo.nombre, nombreDelProfesional(ocupante.profesionalId), ocupante.codigo)
+}
+
+function nombreDelProfesional(profesionalId: string | null | undefined): string | null {
+  return estado.profesionales.find((p) => p.id === profesionalId)?.nombre ?? null
+}
+
+/**
+ * Un turno abierto HOY en ese modulo que no es de quien llama.
+ *
+ * Solo cuenta lo que esta pasando hoy (por la hora del llamado): un turno se
+ * queda en LLAMADO hasta que alguien lo cierra, y al final de la jornada es
+ * normal que el ultimo quede abierto. Sin acotarlo al dia, ese turno colgado
+ * de ayer dejaria el modulo bloqueado para siempre.
+ */
+function ocupanteAjeno(moduloId: string, alcance: FiltroTurnoAbierto): Turno | undefined {
   const hoy = diaColombia(ahoraISO())
-  const ocupadoPorOtro = estado.turnos.find(
+  return estado.turnos.find(
     (t) =>
-      t.moduloId === modulo.id &&
-      (t.estado === 'LLAMADO' || t.estado === 'EN_ATENCION') &&
-      t.horaLlamado &&
-      diaColombia(t.horaLlamado) === hoy &&
-      t.profesionalId &&
-      t.profesionalId !== profesionalId,
+      t.moduloId === moduloId &&
+      estaAbierto(t) &&
+      Boolean(t.horaLlamado) &&
+      diaColombia(t.horaLlamado ?? '') === hoy &&
+      !perteneceAlAlcance(t, alcance),
   )
-  if (ocupadoPorOtro) {
-    const otro = estado.profesionales.find((p) => p.id === ocupadoPorOtro.profesionalId)
-    errorDeNegocio(
-      `${modulo.nombre} lo esta usando ${otro?.nombre ?? 'otro profesional'} en este momento (turno ${ocupadoPorOtro.codigo}).`,
-    )
-  }
+}
+
+/** Turnos abiertos de ese dia que cumplen el filtro. */
+function abiertosDelDia(filtro: FiltroTurnoAbierto, fecha: string): Turno[] {
+  return estado.turnos.filter(
+    (t) => estaAbierto(t) && diaColombia(t.fechaGeneracion) === fecha && perteneceAlAlcance(t, filtro),
+  )
 }
 
 /**
@@ -624,25 +646,6 @@ function pendientesOrdenados(filtro: { servicioId?: string; profesionalId?: stri
     .sort(ordenAtencion)
 }
 
-/**
- * Un turno solo se cierra si esta siendo atendido.
- *
- * Antes se cerraba cualquier turno, en cualquier estado. Eso permitia dos
- * cosas malas y silenciosas: dar por atendido a alguien que todavia estaba en
- * la fila sin haberlo llamado (desaparece de la cola y nadie se entera), y
- * volver a cerrar uno ya cerrado, que le reescribia la hora de atencion y
- * ensuciaba los tiempos promedio del informe. En una historia de atenciones
- * eso no puede pasar.
- */
-function exigirTurnoEnAtencion(turno: Turno, accion: 'atendido' | 'ausente') {
-  if (turno.estado === 'LLAMADO' || turno.estado === 'EN_ATENCION') return
-
-  if (turno.estado === 'EN_ESPERA') {
-    errorDeNegocio(`El turno ${turno.codigo} todavia no ha sido llamado.`)
-  }
-  errorDeNegocio(`El turno ${turno.codigo} ya esta cerrado; no se puede marcar como ${accion}.`)
-}
-
 /** Arma la casilla que ve la pantalla publica, con el nombre ya enmascarado. */
 /**
  * El turno que ese profesional llamara despues, o null si no queda nadie.
@@ -683,6 +686,7 @@ function casillaDeTurno(turno: Turno): CasillaPantalla {
 
   return {
     moduloId: modulo.id,
+    puesto: puestoDe(modulo.id, turno.profesionalId),
     moduloNombre: modulo.nombre,
     servicioId: servicio.id,
     servicioNombre: servicio.nombre,
@@ -1096,6 +1100,34 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     estado.contadores = {}
   }
 
+  async traerCitasDelUltimoDia(hoy: string, excluirProfesionales: string[] = []): Promise<{ desde: string | null; movidas: number }> {
+    const anteriores = estado.citas.filter(
+      (c) => c.estado !== 'CANCELADA' && diaColombia(c.horaCita) < hoy && !excluirProfesionales.includes(c.profesionalId),
+    )
+    const desde = anteriores.reduce<string | null>((ultimo, c) => {
+      const dia = diaColombia(c.horaCita)
+      return ultimo === null || dia > ultimo ? dia : ultimo
+    }, null)
+    if (!desde) return { desde: null, movidas: 0 }
+
+    const ms = Date.parse(`${hoy}T00:00:00Z`) - Date.parse(`${desde}T00:00:00Z`)
+    const delDia = anteriores.filter((c) => diaColombia(c.horaCita) === desde)
+    for (const cita of delDia) {
+      cita.horaCita = new Date(Date.parse(cita.horaCita) + ms).toISOString()
+      cita.estado = 'PROGRAMADA'
+    }
+    return { desde, movidas: delDia.length }
+  }
+
+  async eliminarConsultoriosDeSimulacion(prefijo: string): Promise<number> {
+    const quedan = estado.modulos.filter((m) => !m.nombre.startsWith(prefijo))
+    const borrados = estado.modulos.length - quedan.length
+    const ids = new Set(estado.modulos.filter((m) => m.nombre.startsWith(prefijo)).map((m) => m.id))
+    for (const turno of estado.turnos) if (turno.moduloId && ids.has(turno.moduloId)) turno.moduloId = null
+    estado.modulos.splice(0, estado.modulos.length, ...quedan)
+    return borrados
+  }
+
   // --- Admisiones ---
 
   /**
@@ -1122,6 +1154,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
           diaColombia(c.horaCita) === dia,
       )
       .sort((a, b) => new Date(a.horaCita).getTime() - new Date(b.horaCita).getTime())
+      .map((c) => ({ ...c, codigoTurno: turnoDeLaCita(c.id)?.codigo ?? null }))
   }
 
   /**
@@ -1151,10 +1184,15 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       .sort((a, b) => new Date(a.horaCita).getTime() - new Date(b.horaCita).getTime())
   }
 
-  async registrarLlegada(citaId: string): Promise<Turno> {
+  async registrarLlegada(citaId: string): Promise<LlegadaRegistrada> {
     const cita = estado.citas.find((c) => c.id === citaId)
     if (!cita) errorDeNegocio('La cita indicada no existe.')
     if (cita.estado === 'CANCELADA') errorDeNegocio('La cita fue cancelada.')
+
+    // El reintento de una llegada cuya respuesta se perdio: se devuelve el
+    // turno que ya genero, para que admisiones pueda dictar el comprobante.
+    const yaGenerado = cita.estado === 'PRESENTADO' ? turnoDeLaCita(cita.id) : undefined
+    if (yaGenerado) return { turno: yaGenerado, yaRegistrada: true }
     if (cita.estado !== 'PROGRAMADA') errorDeNegocio('Esta cita ya registro la llegada del paciente.')
 
     // Ultima defensa: aunque la busqueda ya solo ofrezca las citas de hoy, el
@@ -1206,7 +1244,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     }
 
     estado.turnos.push(turno)
-    return turno
+    return { turno, yaRegistrada: false }
   }
 
   async comprobanteDeLlegada(turnoId: string): Promise<ComprobanteLlegada> {
@@ -1229,6 +1267,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       moduloNombre: modulo?.nombre ?? null,
       horaCita: turno.horaCita ?? null,
       nombrePaciente: turno.nombrePaciente ?? null,
+      estadoTurno: turno.estado,
     }
   }
 
@@ -1298,85 +1337,63 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     return Boolean(turno && turno.profesionalId === profesionalId)
   }
 
-  /**
-   * El paciente que el profesional tiene AHORA al frente, o null.
-   *
-   * No vive como tal en el repositorio: es el ultimo turno LLAMADO o
-   * EN_ATENCION suyo del dia. Se resuelve en UNA pasada, sin construir ni
-   * ordenar el historico entero: la pantalla del doctor se refresca sola cada
-   * pocos segundos y con varios consultorios abiertos esa consulta es de las
-   * mas repetidas del sistema.
-   */
-  async turnoEnAtencion(profesionalId: string, fecha: string): Promise<Turno | null> {
-    let actual: Turno | null = null
-
-    for (const turno of estado.turnos) {
-      if (turno.profesionalId !== profesionalId) continue
-      if (turno.estado !== 'LLAMADO' && turno.estado !== 'EN_ATENCION') continue
-      if (diaColombia(turno.fechaGeneracion) !== fecha) continue
-
-      // Si hubiera mas de uno abierto, manda el ultimo que se llamo.
-      if (!actual || new Date(turno.horaLlamado ?? 0) > new Date(actual.horaLlamado ?? 0)) {
-        actual = turno
-      }
-    }
-
-    return actual
+  async turnoEsDeLaVentanilla(turnoId: string, funcionarioId: string): Promise<boolean> {
+    const turno = estado.turnos.find((t) => t.id === turnoId)
+    if (!turno || turno.funcionarioId !== funcionarioId) return false
+    return estado.servicios.find((s) => s.id === turno.servicioId)?.modoFila === 'COMPARTIDA'
   }
 
-  async llamarSiguiente(params: {
-    servicioId?: string
-    profesionalId?: string
-    moduloId: string
-    funcionarioId: string
-  }): Promise<Turno | null> {
+  /**
+   * El turno abierto que cumple el filtro, o null (ver el contrato).
+   *
+   * Se resuelve en UNA pasada, sin construir ni ordenar el historico entero:
+   * las pantallas del doctor y del operador lo piden con cada evento del
+   * hospital. Si hubiera mas de uno abierto, manda el ultimo que se llamo.
+   */
+  async turnoAbierto(filtro: FiltroTurnoAbierto, fecha: string): Promise<Turno | null> {
+    return masRecienteLlamado(abiertosDelDia(filtro, fecha))
+  }
+
+  async llamarSiguiente(params: PeticionDeLlamado): Promise<Turno | null> {
     if (!params.servicioId && !params.profesionalId) {
       errorDeNegocio('Debes indicar el servicio o el profesional.')
     }
 
     const modulo = buscarModulo(params.moduloId)
-    validarModuloParaLlamar(modulo, params.profesionalId)
+    validarModuloParaLlamar(modulo, params)
 
-    // La fila se lee y se marca SIN ceder el control en medio (nada de
-    // `await` aqui). Con un `await` entre leer la fila y marcar el turno, dos
-    // peticiones que llegan casi juntas leen la misma fila y las dos se
-    // llevan al mismo paciente: dos consultorios llamando a la misma persona.
-    // Pasa de verdad cuando varios doctores pulsan "siguiente" a la vez.
+    // Todo lo que sigue va SIN ceder el control (nada de `await`): comprobar el
+    // turno abierto, leer la fila y marcar el llamado tiene que ser atomico, o
+    // dos clics casi juntos se llevarian a dos pacientes.
+    const alcance = alcanceDelLlamado(params)
+    const abierto = masRecienteLlamado(abiertosDelDia(alcance, diaColombia(ahoraISO())))
+    exigirTurnoAbiertoEsperado(abierto, params.turnoAbiertoEsperado)
+
     const siguiente = pendientesOrdenados({
       servicioId: params.servicioId,
       profesionalId: params.profesionalId,
     })[0]
     if (!siguiente) return null
 
-    // Un consultorio atiende a un paciente a la vez: al llamar el siguiente, el
-    // anterior de ese mismo modulo se da por atendido.
-    cerrarAtencionAbierta(modulo.id, siguiente.id, params.profesionalId)
-
-    const instante = ahoraISO()
-
-    siguiente.estado = 'LLAMADO'
-    siguiente.moduloId = modulo.id
-    siguiente.funcionarioId = params.funcionarioId
-    siguiente.horaLlamado = instante
-    // El primero se graba una sola vez y ya no se toca: es contra el que se
-    // mide la espera del paciente (ver `horaPrimerLlamado` en `types.ts`).
-    siguiente.horaPrimerLlamado ??= instante
-    siguiente.vecesLlamado += 1
+    // Quien llama atiende a un paciente a la vez: SU anterior —el validado
+    // contra lo que ve la pantalla— se da por atendido. Si estaba en otro
+    // consultorio, esa casilla del televisor queda libre.
+    if (abierto) cerrarAutomaticamente(abierto, modulo.id)
+    marcarLlamado(siguiente, modulo.id, params.funcionarioId)
 
     realtimeHub.publish({ tipo: 'turno.llamado', casilla: casillaDeTurno(siguiente), repetido: false })
-
     return siguiente
   }
 
-  async repetirLlamado(turnoId: string): Promise<Turno> {
+  async repetirLlamado(turnoId: string, opciones: { vecesLlamadoVisto?: number } = {}): Promise<AccionSobreTurno> {
     const turno = buscarTurno(turnoId)
     if (!turno.moduloId) errorDeNegocio('El turno no ha sido llamado todavia.')
 
-    // Solo se repite el turno que se esta atendiendo AHORA. Repetir uno ya
-    // cerrado volvia a publicarlo en la pantalla: el consultorio mostraria a
-    // un paciente que ya se fue, tapando al que de verdad esta adentro.
-    if (turno.estado !== 'LLAMADO' && turno.estado !== 'EN_ATENCION') {
-      errorDeNegocio('Ese turno ya se cerro; no se puede volver a llamar.')
+    // Solo se repite el turno que se esta atendiendo AHORA (ver
+    // `decidirRepeticion`): repetir uno cerrado volvia a publicarlo en la
+    // pantalla, tapando al paciente que de verdad esta adentro.
+    if (decidirRepeticion(turno, opciones.vecesLlamadoVisto) === 'ya_aplicada') {
+      return { turno, yaAplicada: true }
     }
 
     turno.vecesLlamado += 1
@@ -1387,45 +1404,15 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     turno.horaPrimerLlamado ??= turno.horaLlamado
 
     realtimeHub.publish({ tipo: 'turno.llamado', casilla: casillaDeTurno(turno), repetido: true })
-
-    return turno
+    return { turno, yaAplicada: false }
   }
 
-  async marcarAtendido(turnoId: string, cerradoPor?: string): Promise<Turno> {
-    const turno = buscarTurno(turnoId)
-    exigirTurnoEnAtencion(turno, 'atendido')
-
-    const instante = ahoraISO()
-    turno.estado = 'ATENDIDO'
-    turno.horaAtencion = instante
-    turno.cerradoEn = instante
-    turno.cerradoPor = cerradoPor ?? null
-    turno.cierreAutomatico = false
-
-    if (turno.citaId) {
-      const cita = estado.citas.find((c) => c.id === turno.citaId)
-      if (cita) cita.estado = 'ATENDIDA'
-    }
-
-    if (turno.moduloId) realtimeHub.publish({ tipo: 'modulo.liberado', moduloId: turno.moduloId })
-    return turno
+  async marcarAtendido(turnoId: string, cerradoPor?: string): Promise<AccionSobreTurno> {
+    return cerrarTurno(turnoId, 'ATENDIDO', cerradoPor)
   }
 
-  async marcarAusente(turnoId: string, cerradoPor?: string): Promise<Turno> {
-    const turno = buscarTurno(turnoId)
-    exigirTurnoEnAtencion(turno, 'ausente')
-
-    turno.estado = 'AUSENTE'
-    // El ausente tambien deja hora. Antes solo cambiaba el estado, asi que no
-    // se sabia cuando se le habia dado por ausente ni cuanto se le espero, y
-    // ante un reclamo del paciente no habia nada que mirar. `horaAtencion` se
-    // deja en null a proposito: a este paciente no se le atendio.
-    turno.cerradoEn = ahoraISO()
-    turno.cerradoPor = cerradoPor ?? null
-    turno.cierreAutomatico = false
-
-    if (turno.moduloId) realtimeHub.publish({ tipo: 'modulo.liberado', moduloId: turno.moduloId })
-    return turno
+  async marcarAusente(turnoId: string, cerradoPor?: string): Promise<AccionSobreTurno> {
+    return cerrarTurno(turnoId, 'AUSENTE', cerradoPor)
   }
 
   // --- Pantalla de la sala de espera ---
@@ -1452,9 +1439,11 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       if (turno.estado !== 'LLAMADO' && turno.estado !== 'EN_ATENCION') continue
       if (diaColombia(turno.horaLlamado) !== hoy) continue
 
-      const actual = ultimoPorModulo.get(turno.moduloId)
+      // Por PUESTO (consultorio + doctor): varios doctores pueden compartir consultorio.
+      const puesto = puestoDe(turno.moduloId, turno.profesionalId)
+      const actual = ultimoPorModulo.get(puesto)
       if (!actual || new Date(turno.horaLlamado) > new Date(actual.horaLlamado!)) {
-        ultimoPorModulo.set(turno.moduloId, turno)
+        ultimoPorModulo.set(puesto, turno)
       }
     }
 
@@ -1530,12 +1519,16 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       return proximoPorProfesional.get(doctor.id)?.codigo ?? null
     }
 
+    const enCursoPorModulo = new Map<string, Turno[]>()
+    for (const turno of [...ultimoPorModulo.values()].sort((a, b) => a.horaLlamado!.localeCompare(b.horaLlamado!))) {
+      enCursoPorModulo.set(turno.moduloId!, [...(enCursoPorModulo.get(turno.moduloId!) ?? []), turno])
+    }
+
     const casillas = modulosActivos
       .filter((m) => visibles.has(m.id))
-      .map((modulo) => {
-        const turno = ultimoPorModulo.get(modulo.id)
-
-        if (turno) return { ...casillaDeTurno(turno), siguienteCodigo: proximoDeLaCasilla(modulo.id) }
+      .flatMap((modulo): CasillaPantalla[] => {
+        const enCurso = enCursoPorModulo.get(modulo.id) ?? []
+        if (enCurso.length > 0) return enCurso.map((turno) => casillaDeTurno(turno))
 
         const servicio = modulo.servicioId ? buscarServicio(modulo.servicioId) : null
         // Solo profesionales ACTIVOS: si un doctor se dio de baja y su ficha
@@ -1554,7 +1547,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
           citasRegistradasHoy > 0 ? profesionalesConCita : undefined,
         )
 
-        return {
+        return [{
           moduloId: modulo.id,
           moduloNombre: modulo.nombre,
           servicioId: servicio?.id ?? '',
@@ -1564,7 +1557,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
           horaLlamado: null,
           vecesLlamado: 0,
           siguienteCodigo: proximoDeLaCasilla(modulo.id),
-        }
+        }]
       })
 
     return { casillas, configuracion: { ...estado.configuracion } }
@@ -1587,6 +1580,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
         return true
       })
       .sort((a, b) => new Date(b.fechaGeneracion).getTime() - new Date(a.fechaGeneracion).getTime())
+      .slice(0, filtro.limite)
   }
 
   async estadisticas(fecha: string): Promise<EstadisticasDia> {
@@ -2003,7 +1997,9 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     const profesional = estado.profesionales.find((p) => p.id === acceso.profesionalId && p.activo)
     if (!profesional) return null
 
-    acceso.ultimoUsoEn = ahoraISO()
+    // Espaciado: ver `MS_ENTRE_APUNTES_DE_USO`.
+    const ultimo = acceso.ultimoUsoEn ? new Date(acceso.ultimoUsoEn).getTime() : 0
+    if (Date.now() - ultimo >= MS_ENTRE_APUNTES_DE_USO) acceso.ultimoUsoEn = ahoraISO()
     return profesional
   }
 
@@ -2112,36 +2108,69 @@ function validarPrefijoLibre(prefijo: string) {
   }
 }
 
+/** El turno que genero la cita (el ultimo, si hubiera mas de uno). */
+function turnoDeLaCita(citaId: string): Turno | undefined {
+  return estado.turnos.findLast((t) => t.citaId === citaId)
+}
+
+function marcarLlamado(turno: Turno, moduloId: string, funcionarioId: string) {
+  const instante = ahoraISO()
+  turno.estado = 'LLAMADO'
+  turno.moduloId = moduloId
+  turno.funcionarioId = funcionarioId
+  turno.horaLlamado = instante
+  // El primero se graba una sola vez y ya no se toca: es contra el que se
+  // mide la espera del paciente (ver `horaPrimerLlamado` en `types.ts`).
+  turno.horaPrimerLlamado ??= instante
+  turno.vecesLlamado += 1
+}
+
 /**
- * Cierra la atencion que siguiera abierta en un modulo.
- *
- * Cuando el profesional pulsa "siguiente" esta diciendo, implicitamente, que
- * termino con el anterior (seccion 22, pasos 9 y 10).
+ * El estado de un cierre. El ausente tambien deja hora: sin ella no se sabe
+ * cuando se le dio por ausente. `horaAtencion` solo la lleva el atendido: al
+ * ausente no se le atendio.
  */
-function cerrarAtencionAbierta(moduloId: string, exceptoTurnoId: string, profesionalId?: string) {
-  for (const turno of estado.turnos) {
-    if (turno.moduloId !== moduloId) continue
-    if (turno.id === exceptoTurnoId) continue
-    if (turno.estado !== 'LLAMADO' && turno.estado !== 'EN_ATENCION') continue
-    // Nunca se cierra el paciente de otro profesional. `validarModuloParaLlamar`
-    // ya lo impide antes de llegar aqui; se repite porque este cierre es
-    // silencioso y automatico, y equivocarse aqui deja a un paciente marcado
-    // como atendido sin que nadie lo haya atendido.
-    if (profesionalId && turno.profesionalId && turno.profesionalId !== profesionalId) continue
+function aplicarCierre(turno: Turno, nuevo: EstadoDeCierre, cerradoPor: string | null, automatico: boolean) {
+  const instante = ahoraISO()
+  turno.estado = nuevo
+  turno.cerradoEn = instante
+  turno.cerradoPor = cerradoPor
+  turno.cierreAutomatico = automatico
+  if (nuevo === 'ATENDIDO') {
+    turno.horaAtencion = instante
+    marcarCitaAtendida(turno.citaId)
+  }
+}
 
-    turno.estado = 'ATENDIDO'
-    turno.horaAtencion = ahoraISO()
-    turno.cerradoEn = turno.horaAtencion
-    // NADIE lo cerro: se cerro solo al pasar al siguiente paciente. Queda
-    // marcado para que en el historico no se confunda con una atencion que el
-    // doctor dio por terminada, y para poder contar cuantos se cierran asi.
-    turno.cerradoPor = null
-    turno.cierreAutomatico = true
+function marcarCitaAtendida(citaId: string | null | undefined) {
+  const cita = estado.citas.find((c) => c.id === citaId)
+  if (cita) cita.estado = 'ATENDIDA'
+}
 
-    if (turno.citaId) {
-      const cita = estado.citas.find((c) => c.id === turno.citaId)
-      if (cita) cita.estado = 'ATENDIDA'
-    }
+/** Cierre manual, condicionado e idempotente (ver `decidirCierre`). */
+function cerrarTurno(turnoId: string, nuevo: EstadoDeCierre, cerradoPor?: string): AccionSobreTurno {
+  const turno = buscarTurno(turnoId)
+  if (decidirCierre(turno, nuevo) === 'ya_aplicada') return { turno, yaAplicada: true }
+
+  aplicarCierre(turno, nuevo, cerradoPor ?? null, false)
+  if (turno.moduloId) {
+    realtimeHub.publish({ tipo: 'modulo.liberado', moduloId: turno.moduloId, puesto: puestoDe(turno.moduloId, turno.profesionalId) })
+  }
+  return { turno, yaAplicada: false }
+}
+
+/**
+ * Cierra como ATENDIDO automatico el turno que quien llama tenia abierto.
+ *
+ * Solo ese turno, el validado contra lo que ve la pantalla: nunca el paciente
+ * de otra persona. NADIE lo cerro: queda marcado como cierre automatico para
+ * que en el historico no se confunda con una atencion que se dio por
+ * terminada.
+ */
+function cerrarAutomaticamente(turno: Turno, moduloDelLlamado: string) {
+  aplicarCierre(turno, 'ATENDIDO', null, true)
+  if (turno.moduloId && turno.moduloId !== moduloDelLlamado) {
+    realtimeHub.publish({ tipo: 'modulo.liberado', moduloId: turno.moduloId, puesto: puestoDe(turno.moduloId, turno.profesionalId) })
   }
 }
 

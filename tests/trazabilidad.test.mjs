@@ -55,7 +55,7 @@ async function citaDe(profesionalId, hora, dia = HOY) {
 
 async function enEspera(profesionalId, hora) {
   const cita = await citaDe(profesionalId, hora)
-  const turno = await repo.registrarLlegada(cita.id)
+  const { turno } = await repo.registrarLlegada(cita.id)
   return { cita, turno }
 }
 
@@ -75,7 +75,7 @@ test('repetir el llamado NO reescribe la hora del primer llamado', async () => {
   assert.equal(llamado.horaLlamado, primerLlamado)
 
   await dormir(30)
-  const repetido = await repo.repetirLlamado(turno.id)
+  const { turno: repetido } = await repo.repetirLlamado(turno.id)
 
   assert.equal(repetido.horaPrimerLlamado, primerLlamado, 'el primero no se toca nunca')
   assert.notEqual(repetido.horaLlamado, primerLlamado, 'el ultimo si avanza: la pantalla ordena por el')
@@ -113,7 +113,7 @@ test('cerrar un turno deja quien lo cerro y cuando', async () => {
   const { turno } = await enEspera(doctor.id, '08:30')
 
   await repo.llamarSiguiente({ profesionalId: doctor.id, moduloId: modulo.id, funcionarioId: 'quien-llamo' })
-  const cerrado = await repo.marcarAtendido(turno.id, 'quien-cerro')
+  const { turno: cerrado } = await repo.marcarAtendido(turno.id, 'quien-cerro')
 
   assert.equal(cerrado.funcionarioId, 'quien-llamo')
   assert.equal(cerrado.cerradoPor, 'quien-cerro', 'quien llama y quien cierra pueden no ser el mismo')
@@ -126,7 +126,7 @@ test('marcar ausente deja hora de cierre y responsable, y NO hora de atencion', 
   const { turno } = await enEspera(doctor.id, '08:45')
 
   await repo.llamarSiguiente({ profesionalId: doctor.id, moduloId: modulo.id, funcionarioId: doctor.id })
-  const ausente = await repo.marcarAusente(turno.id, doctor.id)
+  const { turno: ausente } = await repo.marcarAusente(turno.id, doctor.id)
 
   assert.equal(ausente.estado, 'AUSENTE')
   assert.ok(ausente.cerradoEn, 'antes no quedaba ninguna marca de tiempo')

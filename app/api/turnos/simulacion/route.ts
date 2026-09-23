@@ -14,11 +14,24 @@
  * una pantalla del menu de administracion no puede vaciar la sala de espera.
  */
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { MOTIVO_SIMULACION_APAGADA, simulacionHabilitada } from '@/lib/turnos/simulacion'
+import { avisarDatosReiniciados } from '@/lib/realtime/avisos'
+import {
+  limpiarSimulacionDeCarga,
+  MAXIMO_CONSULTORIOS_SIMULADOS,
+  prepararSimulacionDeCarga,
+} from '@/lib/turnos/simulacion-carga'
+
+/** Cuantos consultorios llaman a la vez y cuantos pacientes esperan en cada uno. */
+const peticionSchema = z.object({
+  pacientesPorConsultorio: z.coerce.number().int().min(1).max(20).default(3),
+  consultorios: z.coerce.number().int().min(1).max(MAXIMO_CONSULTORIOS_SIMULADOS).default(10),
+})
 
 /*
  * El interruptor vive en `lib/turnos/simulacion.ts` porque lo lee tambien la
@@ -26,7 +39,7 @@ import { MOTIVO_SIMULACION_APAGADA, simulacionHabilitada } from '@/lib/turnos/si
  * administrador confirme un reinicio que este servidor no va a hacer.
  */
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const session = await requireSeccion('/admin/pruebas')
 
@@ -43,8 +56,40 @@ export async function POST() {
       identificador: session.user.usuario,
     })
 
-    await turnoRepository.reiniciarDatosDeHoy()
-    return NextResponse.json({ ok: true })
+    const cuerpo = await request.json().catch(() => ({}))
+    const peticion = peticionSchema.safeParse(cuerpo ?? {})
+    if (!peticion.success) {
+      return NextResponse.json(
+        { error: `Consultorios: entre 1 y ${MAXIMO_CONSULTORIOS_SIMULADOS}. Pacientes por consultorio: entre 1 y 20.` },
+        { status: 400 },
+      )
+    }
+
+    // Reinicia el dia y deja la sala lista, en una sola peticion (ver
+    // `prepararSimulacionDeCarga`): no crea citas, usa las que ya existen.
+    const preparada = await prepararSimulacionDeCarga(turnoRepository, peticion.data)
+    // Que las pantallas se enteren ya, no en la resincronizacion del minuto.
+    avisarDatosReiniciados()
+    return NextResponse.json(preparada)
+  } catch (error) {
+    return apiError(error)
+  }
+}
+
+/**
+ * Detiene la simulacion: deja el dia en blanco y borra los consultorios
+ * temporales que creo, para que la pantalla vuelva a mostrar solo los reales.
+ */
+export async function DELETE() {
+  try {
+    await requireSeccion('/admin/pruebas')
+    if (!simulacionHabilitada()) {
+      return NextResponse.json({ error: MOTIVO_SIMULACION_APAGADA }, { status: 403 })
+    }
+
+    const consultoriosBorrados = await limpiarSimulacionDeCarga(turnoRepository)
+    avisarDatosReiniciados()
+    return NextResponse.json({ consultoriosBorrados })
   } catch (error) {
     return apiError(error)
   }

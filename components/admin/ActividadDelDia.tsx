@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/Button'
 import { CalendarBlank } from '@phosphor-icons/react/dist/ssr'
 import { Campo, Entrada } from '@/components/admin/Campos'
 import { hoyEnColombia, pedir } from '@/lib/api/cliente'
+import { useFechaQueSigueAHoy, useUltimaPeticion } from '@/lib/hooks'
 import type { ActividadCatalogo, ActividadDelDia } from '@/lib/turnos/types'
 
 /**
@@ -34,27 +35,37 @@ import type { ActividadCatalogo, ActividadDelDia } from '@/lib/turnos/types'
  */
 export function useActividadDelDia(cual: 'porServicio' | 'porModulo') {
   const [fecha, setFecha] = useState(hoyEnColombia)
+  // Si se estaba mirando hoy, pasa solo al dia siguiente a medianoche: la
+  // pantalla de catalogos se deja abierta y "hoy" no puede quedarse en ayer.
+  useFechaQueSigueAHoy(setFecha)
   const [actividad, setActividad] = useState<Record<string, ActividadDelDia>>({})
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState(false)
+  // La respuesta lenta del dia anterior no puede pintarse bajo el dia nuevo.
+  const consultas = useUltimaPeticion()
 
   const cargar = useCallback(
     async (dia: string) => {
+      const consulta = consultas.iniciar()
       setCargando(true)
       try {
-        const datos = await pedir<ActividadCatalogo>(`/api/turnos/catalogo/actividad?fecha=${dia}`)
+        const datos = await pedir<ActividadCatalogo>(`/api/turnos/catalogo/actividad?fecha=${dia}`, {
+          signal: consulta.signal,
+        })
+        if (!consulta.esVigente()) return
         setActividad(datos[cual])
         setError(false)
       } catch {
+        if (!consulta.esVigente()) return
         // Se marca el error en vez de dejar el mapa vacio: vacio significa
         // "nadie atendio", y eso seria afirmar algo que no se sabe.
         setActividad({})
         setError(true)
       } finally {
-        setCargando(false)
+        if (consulta.esVigente()) setCargando(false)
       }
     },
-    [cual],
+    [cual, consultas],
   )
 
   useEffect(() => {

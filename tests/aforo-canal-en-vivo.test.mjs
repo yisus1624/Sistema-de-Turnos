@@ -113,3 +113,84 @@ test('el rechazo se anota con freno: la avalancha no se convierte en escrituras'
   // vienen detras en la misma rafaga no vuelven a escribir en la base.
   assert.deepEqual(anotados, [true, false, false])
 })
+
+// ---------------------------------------------------------------------------
+// Todo el hospital detras de UNA IP cualquiera, sin configurar nada.
+//
+// El servidor esta en internet y los equipos del hospital salen por el mismo
+// NAT, con una IP que el proveedor cambia cuando quiere. No se le puede pedir
+// esa IP a nadie: los topes por defecto tienen que admitir ~30 pantallas y la
+// reconexion masiva tras un corte (las conexiones viejas siguen contando hasta
+// que el reciclado de 4-6 minutos las suelta), y aun asi frenar a una IP que
+// abre cientos de conexiones.
+// ---------------------------------------------------------------------------
+
+/** Ocupa `cuantas` plazas desde `origen` y devuelve lo que paso con cada una. */
+function conectar(origen, cuantas) {
+  return Array.from({ length: cuantas }, () => ocuparPlaza(origen))
+}
+
+function plazasDe(resultados) {
+  return resultados.filter((r) => r.admitida).map((r) => r.plaza)
+}
+
+function conTopesPorDefecto(prueba) {
+  delete process.env.TURNOS_MAX_CANAL_EN_VIVO
+  delete process.env.TURNOS_MAX_CANAL_EN_VIVO_POR_ORIGEN
+  prueba()
+}
+
+const UNA_IP_CUALQUIERA = '181.52.13.77'
+
+test('30 pantallas detras de una misma IP entran sin configurar nada', () => {
+  conTopesPorDefecto(() => {
+    const resultados = conectar(UNA_IP_CUALQUIERA, 30)
+
+    assert.equal(resultados.every((r) => r.admitida), true)
+    soltarTodas(plazasDe(resultados))
+    assert.equal(conexionesActivas(), 0)
+  })
+})
+
+test('tras un corte, las 30 reconectan aunque las 30 viejas sigan colgadas', () => {
+  conTopesPorDefecto(() => {
+    const colgadas = conectar(UNA_IP_CUALQUIERA, 30)
+    const reconexiones = conectar(UNA_IP_CUALQUIERA, 30)
+
+    assert.equal(reconexiones.every((r) => r.admitida), true, 'ninguna pantalla se queda fuera')
+    soltarTodas([...plazasDe(colgadas), ...plazasDe(reconexiones)])
+  })
+})
+
+test('una IP que abre cientos de conexiones queda topada', () => {
+  conTopesPorDefecto(() => {
+    const resultados = conectar('203.0.113.66', 300)
+    const rechazadas = resultados.filter((r) => !r.admitida)
+
+    assert.equal(plazasDe(resultados).length, 100, 'tope por IP por defecto')
+    assert.equal(rechazadas[0].motivo, 'aforo_por_origen')
+    soltarTodas(plazasDe(resultados))
+  })
+})
+
+test('tres IPs atacantes con su tope lleno no dejan a la sala sin pantalla', () => {
+  conTopesPorDefecto(() => {
+    const atacantes = [1, 2, 3].flatMap((n) => conectar(`203.0.113.${n}`, 100))
+    const sala = conectar(UNA_IP_CUALQUIERA, 30)
+
+    assert.equal(sala.every((r) => r.admitida), true)
+    soltarTodas([...plazasDe(atacantes), ...plazasDe(sala)])
+  })
+})
+
+test('el tope global protege la memoria aunque cada IP este dentro de su tope', () => {
+  conTopesPorDefecto(() => {
+    const resultados = Array.from({ length: 25 }, (_, n) => n).flatMap((n) => conectar(`198.51.100.${n}`, 90))
+    const rechazadas = resultados.filter((r) => !r.admitida)
+
+    assert.equal(plazasDe(resultados).length, 2000, 'tope global por defecto')
+    assert.equal(rechazadas[0].motivo, 'aforo_global')
+    soltarTodas(plazasDe(resultados))
+    assert.equal(conexionesActivas(), 0)
+  })
+})

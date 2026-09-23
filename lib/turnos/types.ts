@@ -25,14 +25,16 @@
  * lleva `modoFila`.
  */
 
-/** Estados del turno (requerimiento seccion 8). */
-export type EstadoTurno =
-  | 'EN_ESPERA'
-  | 'LLAMADO'
-  | 'EN_ATENCION'
-  | 'ATENDIDO'
-  | 'AUSENTE'
-  | 'CANCELADO'
+/**
+ * Estados del turno (requerimiento seccion 8).
+ *
+ * La lista es un valor, no solo un tipo, para que la validacion de las rutas
+ * (`z.enum`) salga de aqui: un estado nuevo entra en todos lados a la vez en
+ * vez de rechazarse con un 400 donde nadie se acordo de añadirlo.
+ */
+export const ESTADOS_TURNO = ['EN_ESPERA', 'LLAMADO', 'EN_ATENCION', 'ATENDIDO', 'AUSENTE', 'CANCELADO'] as const
+
+export type EstadoTurno = (typeof ESTADOS_TURNO)[number]
 
 /** Prioridad de atencion (requerimiento seccion 14). Reglas a definir luego. */
 export type PrioridadTurno = 'NORMAL' | 'PRIORITARIO'
@@ -247,6 +249,13 @@ export interface Cita {
   canceladaEn?: string | null
   canceladaPor?: string | null
   motivoCancelacion?: string | null
+
+  /**
+   * Codigo del turno que genero la llegada, si ya la registro. Solo lo trae la
+   * busqueda de admisiones: sin el, una cita PRESENTADO no le decia al
+   * funcionario que turno dictarle al paciente que pregunta otra vez.
+   */
+  codigoTurno?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -495,6 +504,8 @@ export interface FiltroHistorico {
   funcionarioId?: string
   profesionalId?: string
   moduloId?: string
+  /** Cuantas filas como maximo (las mas recientes). Ver `MAXIMO_FILAS_HISTORICO`. */
+  limite?: number
 }
 
 /**
@@ -514,6 +525,13 @@ export interface FiltroHistorico {
  */
 export interface CasillaPantalla {
   moduloId: string
+  /**
+   * El PUESTO que ocupa la casilla en el televisor: el consultorio y, si hay
+   * doctor, el doctor (ver `puestoDe`). Un consultorio puede ser un salon con
+   * varios doctores atendiendo a la vez; cada uno tiene su fila. Si falta, el
+   * puesto es el consultorio.
+   */
+  puesto?: string
   moduloNombre: string
   servicioId: string
   servicioNombre: string
@@ -572,6 +590,48 @@ export function esDisenoPantalla(valor: unknown): valor is DisenoPantalla {
  * doctor; puede cambiar si ese dia se mueve de consultorio, y por eso en la
  * pantalla manda siempre lo que diga la casilla.
  */
+/**
+ * Que turnos abiertos se buscan: los de un doctor, o los que llamo UN
+ * funcionario en UNA ventanilla. Nunca una mezcla ni un filtro vacio, que
+ * devolveria turnos de cualquiera: el tipo no deja escribirlos.
+ */
+export type FiltroTurnoAbierto =
+  | { profesionalId: string; moduloId?: never; funcionarioId?: never }
+  | { moduloId: string; funcionarioId: string; profesionalId?: never }
+
+/**
+ * Quien pide llamar al siguiente: un doctor (su fila) o una ventanilla (la
+ * fila compartida de un servicio). Nunca las dos cosas a la vez.
+ */
+export type SolicitudDeLlamado =
+  | { profesionalId: string; servicioId?: never; moduloId: string; funcionarioId: string }
+  | { servicioId: string; profesionalId?: never; moduloId: string; funcionarioId: string }
+
+/**
+ * La solicitud, con el turno que la pantalla cree tener abierto (null si
+ * ninguno). OBLIGATORIO: sin el, un doble clic o un reintento tras una
+ * respuesta perdida cerraria a un paciente por detras.
+ */
+export type PeticionDeLlamado = SolicitudDeLlamado & { turnoAbiertoEsperado: string | null }
+
+/**
+ * Resultado de una accion sobre un turno (repetir, atendido, ausente).
+ *
+ * `yaAplicada` dice que la accion ya estaba hecha: es el reintento de un clic
+ * cuya respuesta se perdio. Se responde exito igual, pero quien llama no debe
+ * volver a auditarla ni a anunciarla.
+ */
+export interface AccionSobreTurno {
+  turno: Turno
+  yaAplicada: boolean
+}
+
+/** Resultado de registrar una llegada. `yaRegistrada`: ver `AccionSobreTurno`. */
+export interface LlegadaRegistrada {
+  turno: Turno
+  yaRegistrada: boolean
+}
+
 export interface ComprobanteLlegada {
   turnoId: string
   codigo: string
@@ -582,6 +642,13 @@ export interface ComprobanteLlegada {
   horaCita: string | null
   /** Solo para la pantalla de admisiones, que si tiene sesion. */
   nombrePaciente: string | null
+  /**
+   * En que va ese turno. Al volver a pedir el comprobante de un paciente que
+   * ya llego, el turno puede estar cerrado: admisiones tiene que poder decirle
+   * "ya fue atendido" o "se le marco ausente" en vez de dictarle un turno
+   * que ya no lo van a llamar.
+   */
+  estadoTurno: EstadoTurno
 }
 
 /**

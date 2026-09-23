@@ -17,6 +17,7 @@ import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { apiError, requireRol } from '@/lib/permissions/session'
 import { esFechaValida } from '@/lib/turnos/tiempo'
+import { conFrenoDeConsultaPesada } from '@/lib/seguridad/freno-consultas'
 
 /** Tipo del apunte en el registro de actividad. */
 const EVENTO = EVENTOS.CITAS_DATOS_PURGADOS
@@ -35,14 +36,18 @@ const cuerpo = z.object({
 
 export async function GET(request: Request) {
   try {
-    await requireRol(['ADMINISTRADOR'])
+    const session = await requireRol(['ADMINISTRADOR'])
 
     const pedido = new URL(request.url).searchParams.get('limite')
     if (pedido && !esFechaValida(pedido)) {
       return NextResponse.json({ error: 'La fecha limite no es valida.' }, { status: 400 })
     }
 
-    return NextResponse.json(await previsualizarPurga(pedido ?? limiteDeRetencion()))
+    const { ip } = await contextoPeticion()
+    const vista = await conFrenoDeConsultaPesada('purga_vista', { usuarioId: session.user.id, ip }, () =>
+      previsualizarPurga(pedido ?? limiteDeRetencion()),
+    )
+    return NextResponse.json(vista)
   } catch (error) {
     return apiError(error)
   }
@@ -63,11 +68,13 @@ export async function POST(request: Request) {
       )
     }
 
-    const resumen = await purgarDatosDePacientes(parsed.data.limite)
+    const { ip } = await contextoPeticion()
+    const resumen = await conFrenoDeConsultaPesada('purga', { usuarioId: session.user.id, ip }, () =>
+      purgarDatosDePacientes(parsed.data.limite),
+    )
 
     // Lo que se anonimizo no se puede volver a mirar para saber que se
     // anonimizo: este apunte es lo unico que queda de la operacion.
-    const { ip } = await contextoPeticion()
     const detalle = {
       anterioresA: resumen.limite,
       dias: resumen.dias,

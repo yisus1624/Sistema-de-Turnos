@@ -12,8 +12,15 @@ import NextAuth, { CredentialsSignin } from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { usuarioRepository } from '@/lib/usuarios/repositorio'
 import type { RolUsuario } from '@/lib/usuarios/types'
-import { contextoPeticion, limitarIntentos, limpiarIntentos, registrarEvento } from '@/lib/seguridad/registro'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
+import {
+  apuntarFalloDeIngreso,
+  frenoDeIngreso,
+  olvidarFallosDeIngreso,
+  type FrenoDeIngreso,
+} from '@/lib/seguridad/limite-ingreso'
+import { loginSchema } from '@/lib/validators/auth'
 import { useSecureAuthCookies } from './auth-cookies'
 
 /**
@@ -29,6 +36,23 @@ import { useSecureAuthCookies } from './auth-cookies'
 class FuenteUsuariosNoDisponible extends CredentialsSignin {
   code = 'fuente_no_disponible'
 }
+
+/**
+ * La cuenta (o el origen) esta en espera por demasiados intentos fallidos.
+ *
+ * Aparte de "credenciales invalidas" por lo mismo que la fuente caida: durante
+ * la espera se rechaza incluso la contrasena buena, y decirle al funcionario
+ * "contrasena incorrecta" lo mandaba a probar otras, alargando la espera.
+ */
+class IngresoEnEspera extends CredentialsSignin {
+  constructor(freno: Exclude<FrenoDeIngreso, 'permitido'>) {
+    super()
+    this.code = freno
+  }
+}
+
+/** Cuanto del usuario escrito se anota en el registro de un intento rechazado. */
+const LARGO_USUARIO_ANOTADO = 40
 
 /** Jornada larga en ventanilla: la sesion dura un dia habil completo. */
 const duracionSesionSegundos = 12 * 60 * 60
@@ -66,37 +90,36 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         password: { label: 'Contrasena', type: 'password' },
       },
       async authorize(credentials) {
-        const usuario = String(credentials?.usuario ?? '').trim()
-        const password = String(credentials?.password ?? '')
         const { ip } = await contextoPeticion()
+        // Lo que se anota del usuario, SIEMPRE acotado: es texto que escribe
+        // quien hace la peticion, y sin tope un usuario de un mega iba entero
+        // al limitador, a la consola y al registro de actividad.
+        const anotado = String(credentials?.usuario ?? '').trim().slice(0, LARGO_USUARIO_ANOTADO)
 
         async function rechazar(motivo: string) {
           await registrarEvento({
             tipo: EVENTOS.INICIO_SESION,
             exito: false,
-            identificador: usuario || null,
+            identificador: anotado || null,
             ip,
             detalle: { motivo },
           })
           return null
         }
 
-        if (!usuario || !password) return await rechazar('credenciales_incompletas')
+        // La misma validacion que el formulario (usuario de 3 a 40 caracteres),
+        // ANTES de tocar el limitador o la base.
+        const leido = loginSchema.safeParse({ usuario: credentials?.usuario, password: credentials?.password })
+        if (!leido.success) return await rechazar('credenciales_invalidas_formato')
+        const { usuario, password } = leido.data
 
-        // El limite por IP solo se aplica si la IP es de fiar, es decir si hay
-        // un proxy declarado delante (ver `contextoPeticion`). Sin proxy, la IP
-        // la escribe el propio cliente en una cabecera y basta con cambiarla en
-        // cada intento para saltarse el limite: aplicarlo daria una sensacion
-        // de proteccion que no existe, y ademas bloquearia a quien mandara la
-        // IP de otro. El limite POR USUARIO, que es el que de verdad frena la
-        // fuerza bruta, se aplica siempre.
-        if (ip) {
-          const porIp = limitarIntentos('login_ip', ip, 20, 15 * 60 * 1000)
-          if (!porIp.permitido) return await rechazar('demasiados_intentos_ip')
+        // Primero el freno: por cuenta siempre, y por IP (umbral amplio) solo
+        // si la IP es de fiar. Ver `lib/seguridad/limite-ingreso.ts`.
+        const freno = frenoDeIngreso(usuario, ip)
+        if (freno !== 'permitido') {
+          await rechazar(freno === 'cuenta_en_espera' ? 'demasiados_intentos_usuario' : 'demasiados_intentos_ip')
+          throw new IngresoEnEspera(freno)
         }
-
-        const porUsuario = limitarIntentos('login_usuario', usuario, 8, 15 * 60 * 1000)
-        if (!porUsuario.permitido) return await rechazar('demasiados_intentos_usuario')
 
         let encontrado
         try {
@@ -118,12 +141,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           throw new FuenteUsuariosNoDisponible()
         }
 
-        if (!encontrado) return await rechazar('credenciales_invalidas')
+        if (!encontrado) {
+          // Solo cuenta lo que de verdad fallo (ver `limite-ingreso`).
+          apuntarFalloDeIngreso(usuario, ip)
+          return await rechazar('credenciales_invalidas')
+        }
 
         // Entro bien: se le borra la cuenta de intentos. El limite tiene que
         // contar FALLOS, no usos, o un mostrador compartido se bloquea solo.
-        limpiarIntentos('login_usuario', usuario)
-        if (ip) limpiarIntentos('login_ip', ip)
+        olvidarFallosDeIngreso(usuario, ip)
 
         await registrarEvento({
           tipo: EVENTOS.INICIO_SESION,

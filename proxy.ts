@@ -45,17 +45,41 @@ const COOKIE_CONSULTORIO = 'turnos_consultorio'
  */
 const MAX_EDAD_COOKIE = 72 * 60 * 60
 
+/**
+ * El token del enlace, o null si no se puede leer.
+ *
+ * Un "%" mal escrito (el enlace copiado a medias de un chat) hacia fallar
+ * `decodeURIComponent` con un 500: el doctor veia un error del servidor en vez
+ * del aviso de enlace no valido.
+ */
+function tokenDelEnlace(ruta: string): string | null {
+  try {
+    return decodeURIComponent(ruta.slice('/consultorio/'.length))
+  } catch {
+    return null
+  }
+}
+
 export default function proxy(request: NextRequest) {
-  const token = request.nextUrl.pathname.slice('/consultorio/'.length)
+  const enRuta = request.nextUrl.pathname.slice('/consultorio/'.length)
 
   // Sin token no hay nada que canjear. Se deja pasar: si ya tiene cookie, la
   // pantalla funciona; si no, la API respondera 401 con su mensaje.
-  if (!token) return NextResponse.next()
+  if (!enRuta) return NextResponse.next()
 
   const destino = new URL('/consultorio', request.url)
   const respuesta = NextResponse.redirect(destino)
 
-  respuesta.cookies.set(COOKIE_CONSULTORIO, decodeURIComponent(token), {
+  // Ilegible: se saca de la barra de direcciones igual y se BORRA la cookie
+  // que hubiera, para que la pantalla diga que el enlace no es valido en vez
+  // de seguir entrando con el enlace de antes (quiza de otro doctor).
+  const token = tokenDelEnlace(request.nextUrl.pathname)
+  if (!token) {
+    respuesta.cookies.set(COOKIE_CONSULTORIO, '', { path: '/api/consultorio', maxAge: 0 })
+    return respuesta
+  }
+
+  respuesta.cookies.set(COOKIE_CONSULTORIO, token, {
     httpOnly: true,
     // En desarrollo se entra por http, donde una cookie `Secure` no se guarda
     // y el doctor no podria entrar nunca.

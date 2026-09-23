@@ -18,6 +18,7 @@ import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento, contextoPeticion } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { detalleDeImportacion } from '@/lib/citas/rastro-importacion'
+import { ejecutarConsultaPesada, frenarConsultaPesada } from '@/lib/seguridad/freno-consultas'
 
 /**
  * Tope del archivo.
@@ -32,6 +33,11 @@ const MAXIMO_BYTES = 10 * 1024 * 1024
 export async function POST(request: Request) {
   try {
     const session = await requireSeccion('/admin/citas', '/operador/agenda')
+
+    // El freno ANTES de leer el formulario: leer 10 MB ya es trabajo, y quien
+    // dispara importaciones en bucle no tiene por que conseguirlo.
+    const { ip } = await contextoPeticion()
+    frenarConsultaPesada('importar', { usuarioId: session.user.id, ip })
 
     const formulario = await request.formData()
     const archivo = formulario.get('archivo')
@@ -49,17 +55,16 @@ export async function POST(request: Request) {
       )
     }
 
+    // Leer un Excel de cientos de filas y escribir la agenda es de lo mas caro
+    // del sistema: corre dentro del techo global de consultas caras.
     const datos = new Uint8Array(await archivo.arrayBuffer())
-    const resumen = await importarReporteDeCitas({
-      archivo: archivo.name,
-      datos,
-      usuarioId: session.user.id,
-    })
+    const resumen = await ejecutarConsultaPesada(() =>
+      importarReporteDeCitas({ archivo: archivo.name, datos, usuarioId: session.user.id }),
+    )
 
     // Queda en el registro de actividad: cargar la agenda del dia cambia lo que
     // ve todo el hospital, y es de las pocas acciones donde hay que poder
     // responder despues quien la hizo y a que hora.
-    const { ip } = await contextoPeticion()
     await registrarEvento({
       tipo: EVENTOS.CITAS_IMPORTADAS,
       exito: true,

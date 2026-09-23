@@ -67,8 +67,14 @@ export async function generarReportePdf(params: {
   filas: FilaReporte[]
   fechaDesde: string
   fechaHasta: string
+  /**
+   * Si el servidor recorto el resultado (ver `MAXIMO_FILAS_HISTORICO`). Un
+   * reporte que dice un rango y le faltan turnos tiene que decirlo en el
+   * propio papel: el PDF circula sin la pantalla que lo advertia.
+   */
+  parcial?: boolean
 }) {
-  const { filas, fechaDesde, fechaHasta } = params
+  const { filas, fechaDesde, fechaHasta, parcial = false } = params
   const logo = await cargarLogo()
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
@@ -86,7 +92,7 @@ export async function generarReportePdf(params: {
   doc.setFontSize(11)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(71, 85, 105)
-  doc.text('Reporte de turnos', margen + 54, 58)
+  doc.text(parcial ? 'Reporte de turnos — PARCIAL: faltan turnos del rango' : 'Reporte de turnos', margen + 54, 58)
 
   const rango =
     fechaDesde === fechaHasta

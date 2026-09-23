@@ -31,8 +31,11 @@ import type { Usuario } from '@/lib/usuarios/types'
  * camino que se use para cambiarle la clave.
  */
 const cambioSchema = z.object({
-  actual: z.string().min(1, 'Escribe tu contrasena actual.'),
-  nueva: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.'),
+  // Con el mismo tope que el inicio de sesion (ver `loginSchema`): bcrypt en el
+  // servidor, y una contrasena de megas es trabajo gratis para quien quiera
+  // cansarlo.
+  actual: z.string().min(1, 'Escribe tu contrasena actual.').max(200, 'La contrasena es demasiado larga.'),
+  nueva: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.').max(200, 'La contrasena es demasiado larga.'),
 })
 
 /** Cuantas veces se puede fallar la contrasena actual, y en cuanto tiempo. */

@@ -29,9 +29,13 @@ export const LEMA_INSTITUCION = 'Tu salud, nuestra prioridad'
 const RUTA_LOGO = '/img/logo-hospital.png'
 
 type IsotipoProps = {
-  size?: number
+  /** En pixeles, o una medida CSS ("4rem") para que escale con la pantalla del televisor. */
+  size?: number | string
   className?: string
 }
+
+/** Resolucion con la que se pide el logo cuando el tamaño viene en unidades CSS. */
+const LOGO_INTRINSECO = 192
 
 export function Isotipo({ size = 40, className }: IsotipoProps) {
   return (
@@ -42,8 +46,8 @@ export function Isotipo({ size = 40, className }: IsotipoProps) {
       <Image
         src={RUTA_LOGO}
         alt={NOMBRE_INSTITUCION}
-        width={size}
-        height={size}
+        width={typeof size === 'number' ? size : LOGO_INTRINSECO}
+        height={typeof size === 'number' ? size : LOGO_INTRINSECO}
         className="h-full w-full object-contain"
         priority
       />

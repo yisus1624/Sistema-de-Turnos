@@ -20,6 +20,7 @@
  * regla que habia que sostener a mano; con la campana es imposible por
  * construccion.
  */
+import { programadorReal, type Programador } from '@/lib/programador'
 
 /**
  * Cuanto dura la campanita, en milisegundos.
@@ -66,6 +67,13 @@ export const MAX_EN_COLA = 5
  */
 let contextoCompartido: AudioContext | null = null
 
+/**
+ * Si el audio llego a estar en marcha en esta pagina. Es la unica pista que
+ * deja Chromium (sin `getAutoplayPolicy`) de que el navegador ya permitio
+ * sonar: si sono una vez, al volver de segundo plano se puede reanudar solo.
+ */
+let llegoAEstarEnMarcha = false
+
 function obtenerContexto(): AudioContext | null {
   if (typeof window === 'undefined') return null
 
@@ -74,15 +82,91 @@ function obtenerContexto(): AudioContext | null {
   if (!Contexto) return null
 
   contextoCompartido ??= new Contexto()
+  if (contextoCompartido.state === 'running') llegoAEstarEnMarcha = true
 
   // El navegador suspende el audio hasta que el usuario interactua con la
-  // pagina (por eso la pantalla arranca con el boton "Activar pantalla"), y
-  // tambien puede suspenderlo si la pestaña queda mucho rato en segundo plano.
+  // pagina (salvo en el kiosco con --autoplay-policy=...), y tambien puede
+  // suspenderlo si la pestaña queda mucho rato en segundo plano.
   if (contextoCompartido.state === 'suspended') {
     void contextoCompartido.resume().catch(() => {})
   }
 
   return contextoCompartido
+}
+
+/** Si el navegador deja sonar la campana ahora mismo. */
+export type EstadoDelAudio = 'permitido' | 'bloqueado' | 'sin_audio'
+
+/**
+ * Lo que dice el navegador sobre el audio, tal cual.
+ *
+ * `politica` es `navigator.getAutoplayPolicy('audiocontext')` donde existe
+ * (Firefox y Chrome recientes); `estadoContexto`, el `state` de un
+ * AudioContext recien creado, que arranca en 'running' solo si el navegador
+ * ya permite sonar sin gesto (el kiosco con --autoplay-policy=...).
+ */
+export interface SenalesDeAudio {
+  politica?: string
+  estadoContexto?: string
+}
+
+/**
+ * Decide si el televisor puede sonar sin que nadie toque nada.
+ *
+ * La politica declarada manda: es la respuesta explicita del navegador. Sin
+ * ella, el estado del contexto es la mejor pista. Pura, para poder probarla.
+ */
+export function decidirEstadoDelAudio(senales: SenalesDeAudio): EstadoDelAudio {
+  if (senales.politica) return senales.politica === 'allowed' ? 'permitido' : 'bloqueado'
+  if (!senales.estadoContexto) return 'sin_audio'
+  return senales.estadoContexto === 'running' ? 'permitido' : 'bloqueado'
+}
+
+type NavegadorConPolitica = Navigator & { getAutoplayPolicy?: (tipo: 'audiocontext') => string }
+
+function politicaDeAutoplay(): string | undefined {
+  try {
+    return (navigator as NavegadorConPolitica).getAutoplayPolicy?.('audiocontext')
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Si el audio suspendido se puede reanudar sin que nadie toque la pantalla.
+ * La politica declarada manda; sin ella (Chromium), vale haber sonado antes.
+ */
+export function puedeReanudarseSolo(senales: { politica?: string; llegoAEstarEnMarcha: boolean }): boolean {
+  if (senales.politica) return senales.politica === 'allowed'
+  return senales.llegoAEstarEnMarcha
+}
+
+/** El estado del audio en este navegador, ahora. */
+export function estadoDelAudioDelNavegador(): EstadoDelAudio {
+  if (typeof window === 'undefined') return 'sin_audio'
+  return decidirEstadoDelAudio({ politica: politicaDeAutoplay(), estadoContexto: obtenerContexto()?.state })
+}
+
+/**
+ * Avisa cada vez que el navegador suelta o vuelve a bloquear el audio (por
+ * ejemplo, al primer toque en cualquier parte de la pantalla). Devuelve como
+ * dejar de escuchar.
+ */
+export function alCambiarElAudio(avisar: (estado: EstadoDelAudio) => void): () => void {
+  const contexto = obtenerContexto()
+  if (!contexto) return () => {}
+  const escuchar = () => avisar(estadoDelAudioDelNavegador())
+  contexto.addEventListener('statechange', escuchar)
+  return () => contexto.removeEventListener('statechange', escuchar)
+}
+
+/**
+ * Intenta soltar el audio. Solo funciona dentro de un gesto de una persona
+ * (un toque, una tecla), salvo que el navegador ya lo permita.
+ */
+export async function desbloquearAudio(): Promise<EstadoDelAudio> {
+  await obtenerContexto()?.resume().catch(() => {})
+  return estadoDelAudioDelNavegador()
 }
 
 /**
@@ -92,9 +176,31 @@ function obtenerContexto(): AudioContext | null {
 export function sonarCampana(volumen: number) {
   if (volumen <= 0) return
 
+  // Solo con el audio EN MARCHA. Suspendido, el reloj del contexto esta parado:
+  // cada llamado dejaba sus osciladores programados para el mismo instante, y
+  // al primer toque sonaban todos a la vez —saturando— tras acumularse en
+  // memoria durante dias. Sin audio, la pantalla ya muestra el aviso.
   const contexto = obtenerContexto()
   if (!contexto) return
+  if (contexto.state === 'running') {
+    programarTonos(contexto, volumen)
+    return
+  }
 
+  // Suspendido estando PERMITIDO: la pestaña paso por segundo plano y el
+  // navegador la durmio. Se reanuda y suena en cuanto termine; si no, la
+  // primera campanada al volver se perdia.
+  if (!puedeReanudarseSolo({ politica: politicaDeAutoplay(), llegoAEstarEnMarcha })) return
+  void contexto
+    .resume()
+    .then(() => {
+      if (contexto.state === 'running') programarTonos(contexto, volumen)
+    })
+    .catch(() => {})
+}
+
+/** Los dos tonos de la campana sobre un contexto en marcha. */
+function programarTonos(contexto: AudioContext, volumen: number) {
   const ahora = contexto.currentTime
 
   for (const [indice, frecuencia] of [880, 1174.66].entries()) {
@@ -116,18 +222,7 @@ export function sonarCampana(volumen: number) {
 /** Lo que la campana necesita para sonar. Se inyecta para poder probarla. */
 export type Reproductor = (volumen: number) => void
 
-/**
- * Programa una accion para dentro de `ms` y devuelve como cancelarla.
- *
- * Se inyecta para que las pruebas puedan mover el tiempo a mano en vez de
- * esperar segundos de verdad.
- */
-export type Programador = (accion: () => void, ms: number) => () => void
-
-const programadorReal: Programador = (accion, ms) => {
-  const id = setTimeout(accion, ms)
-  return () => clearTimeout(id)
-}
+export type { Programador }
 
 /** Que paso con un llamado que se le entrego a la campana. */
 export type ResultadoAnuncio =

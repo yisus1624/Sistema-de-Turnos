@@ -35,9 +35,16 @@ export function claveDelChoque(error: unknown): string | null {
   return null
 }
 
-/** Verdadero para cualquier rechazo por repetido, sin mirar de que columna. */
-export function esChoqueDeUnico(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === CHOQUE_DE_UNICO
+/**
+ * Errores de transaccion que se arreglan repitiendo: P2028 (la transaccion no
+ * consiguio conexion o se paso de tiempo), P2034 (conflicto de escritura o
+ * bloqueo mutuo) y el 40P01 de PostgreSQL (deadlock) cuando llega por una
+ * consulta en crudo.
+ */
+export function esConflictoPasajero(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false
+  if (error.code === 'P2028' || error.code === 'P2034') return true
+  return error.code === 'P2010' && /40P01|deadlock/i.test(`${JSON.stringify(error.meta ?? {})} ${error.message}`)
 }
 
 /**

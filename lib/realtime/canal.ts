@@ -45,10 +45,61 @@ export function formatearMensajeSse(mensaje: MensajeEnVivo): string {
   return `data: ${JSON.stringify(mensaje)}\n\n`
 }
 
-/** Lee un mensaje del canal. Devuelve `null` si no es uno de los nuestros. */
+type Objeto = Record<string, unknown>
+
+function esObjeto(valor: unknown): valor is Objeto {
+  return typeof valor === 'object' && valor !== null && !Array.isArray(valor)
+}
+
+const esTexto = (valor: unknown) => typeof valor === 'string'
+const esTextoONulo = (valor: unknown) => valor === null || typeof valor === 'string'
+const opcionalTextoONulo = (valor: unknown) => valor === undefined || esTextoONulo(valor)
+
+/** Los campos de la casilla que las pantallas leen. */
+function esCasilla(valor: unknown): boolean {
+  if (!esObjeto(valor)) return false
+  return (
+    [valor.moduloId, valor.moduloNombre, valor.servicioId, valor.servicioNombre].every(esTexto) &&
+    esTextoONulo(valor.codigo) &&
+    esTextoONulo(valor.horaLlamado) &&
+    typeof valor.vecesLlamado === 'number' &&
+    opcionalTextoONulo(valor.profesionalNombre) &&
+    opcionalTextoONulo(valor.siguienteCodigo)
+  )
+}
+
+/**
+ * Que tiene que traer cada tipo de mensaje. Una linea por tipo nuevo; lo que
+ * no esta aqui se descarta.
+ */
+const FORMA_POR_TIPO: Record<MensajeEnVivo['tipo'], (mensaje: Objeto) => boolean> = {
+  latido: () => true,
+  'turno.llamado': (m) => typeof m.repetido === 'boolean' && esCasilla(m.casilla),
+  'modulo.liberado': (m) => esTexto(m.moduloId),
+  'fila.cambiada': (m) => esTexto(m.servicioId) && esTextoONulo(m.profesionalId),
+  'configuracion.cambiada': () => true,
+  'datos.reiniciados': () => true,
+}
+
+function esTipoConocido(tipo: unknown): tipo is MensajeEnVivo['tipo'] {
+  return typeof tipo === 'string' && Object.hasOwn(FORMA_POR_TIPO, tipo)
+}
+
+function esMensajeEnVivo(valor: unknown): valor is MensajeEnVivo {
+  return esObjeto(valor) && esTipoConocido(valor.tipo) && FORMA_POR_TIPO[valor.tipo](valor)
+}
+
+/**
+ * Lee un mensaje del canal. Devuelve `null` si no es uno de los nuestros.
+ *
+ * Se valida la forma y no se da por buena: un evento con otra forma (de otra
+ * version del servidor durante un despliegue, o roto) llegaba a la pantalla y
+ * la tumbaba al leer `casilla.moduloId`. Lo desconocido se ignora.
+ */
 export function interpretarMensaje(datos: string): MensajeEnVivo | null {
   try {
-    return JSON.parse(datos) as MensajeEnVivo
+    const leido: unknown = JSON.parse(datos)
+    return esMensajeEnVivo(leido) ? leido : null
   } catch {
     return null
   }
@@ -57,6 +108,15 @@ export function interpretarMensaje(datos: string): MensajeEnVivo | null {
 /** El latido mantiene viva la conexion, pero no trae ninguna novedad. */
 export function esCambioDeDatos(mensaje: MensajeEnVivo): mensaje is EventoTurno {
   return mensaje.tipo !== LATIDO.tipo
+}
+
+/**
+ * Si el evento cambia servicios, consultorios o profesionales: la
+ * configuracion la edito el administrador, o se purgaron los datos. Las
+ * pantallas que guardan los catalogos los vuelven a pedir solo entonces.
+ */
+export function cambiaLosCatalogos(evento: EventoTurno): boolean {
+  return evento.tipo === 'configuracion.cambiada' || evento.tipo === 'datos.reiniciados'
 }
 
 type Fila = {
@@ -68,6 +128,19 @@ type Fila = {
    * quita gente a las demas.
    */
   moduloId?: string | null
+  /**
+   * El consultorio desde el que se llamo al paciente que el doctor tiene
+   * abierto. Puede no ser el del selector: si lo llamo desde A y despues
+   * cambio a B, que admision cierre ese turno libera A, y ese evento tiene que
+   * llegarle o la pantalla sigue mostrando al paciente ya cerrado.
+   */
+  moduloDelTurnoAbierto?: string | null
+}
+
+/** Si el consultorio liberado es alguno de los que le importan a esta fila. */
+function esConsultorioDeLaFila(moduloId: string, fila: Fila): boolean {
+  if (!fila.moduloId) return true
+  return moduloId === fila.moduloId || moduloId === fila.moduloDelTurnoAbierto
 }
 
 /**
@@ -88,6 +161,10 @@ export function afectaALaFila(evento: EventoTurno, fila: Fila): boolean {
     if (!fila.moduloId || !evento.casilla.moduloId) return true
     return evento.casilla.moduloId === fila.moduloId
   }
+
+  // Que un consultorio quede libre solo le importa a ESE consultorio. Antes
+  // pasaba a todos: cada "Atendido" provocaba una recarga pesada en los doce.
+  if (evento.tipo === 'modulo.liberado') return esConsultorioDeLaFila(evento.moduloId, fila)
 
   if (evento.tipo !== 'fila.cambiada') return true
 

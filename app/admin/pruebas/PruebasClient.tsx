@@ -10,7 +10,6 @@
 
 import { useCallback, useRef, useState } from 'react'
 import {
-  ArrowClockwise,
   Broadcast,
   FastForward,
   Megaphone,
@@ -24,94 +23,9 @@ import { Badge } from '@/components/ui/Badge'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import { Campo, Entrada } from '@/components/admin/Campos'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
-import type { HorarioDia, ItemAgendaProfesional, Modulo, Profesional, Turno } from '@/lib/turnos/types'
-
-/**
- * Cuantos consultorios se simulan como maximo.
- *
- * Es un tope de la PANTALLA, no del sistema: con veinte tarjetas el panel deja
- * de caber y la oleada tarda tanto que no se ve lo que se queria ver. Los
- * doctores salen de la agenda real del dia (ver `doctoresSimulablesDeHoy`).
- */
-const MAXIMO_CONSULTORIOS_SIMULADOS = 10
-
-/** Pacientes ficticios para rellenar la agenda cuando ya se gastaron las citas sembradas. */
-const NOMBRES_SIMULACION = [
-  'Ana Maria Ortega Ruiz',
-  'Luis Fernando Pardo Melo',
-  'Claudia Patricia Nieto Sanz',
-  'Andres Felipe Guzman Rey',
-  'Marcela Andrea Pineda Cruz',
-  'Oscar Ivan Zapata Uribe',
-  'Laura Sofia Bernal Mesa',
-  'Hernan Dario Cuesta Polo',
-  'Yuranis Paola Meza Ariza',
-  'Kevin Steven Aguilar Cano',
-]
-
-function pacienteSimulado(indice: number) {
-  return {
-    nombrePaciente: NOMBRES_SIMULACION[indice % NOMBRES_SIMULACION.length],
-    documentoPaciente: String(90000000 + Math.floor(Math.random() * 9999999)),
-  }
-}
-
-/**
- * Los doctores que HOY se pueden simular, con las horas que tienen libres.
- *
- * LOS DOCTORES SALEN DE LA AGENDA REAL, NO DE UNA LISTA ESCRITA A MANO. Antes
- * habia aqui diez identificadores fijos —'pro-perez', 'pro-gomez'...— que son
- * los del catalogo de ejemplo con el que se desarrolla. En el hospital de
- * verdad los doctores entran con la carga del reporte y llevan otros
- * identificadores, asi que NINGUNO de esos diez existia: la simulacion fallaba
- * en el primer paso, doctor por doctor, con "el profesional indicado no
- * existe", y el panel quedaba vacio sin explicar por que.
- *
- * Salen del horario del dia por dos razones. La primera es que asi son
- * siempre los del hospital que este montado, sin nada que actualizar a mano.
- * La segunda es que el horario es EXACTAMENTE lo que el servidor va a aceptar
- * despues: si un doctor tiene columna ahi, se le puede agendar; si no la
- * tiene, no. Pedir los doctores por un lado y las horas por otro era abrir la
- * puerta a que las dos listas no coincidieran.
- *
- * Se quedan fuera los que no tienen ni un cupo libre: no se les podria sembrar
- * un paciente y su tarjeta apareceria en cero.
- */
-async function doctoresSimulablesDeHoy(fecha: string): Promise<{
-  doctores: { profesionalId: string; nombre: string }[]
-  libres: Map<string, string[]>
-}> {
-  const { horario } = await pedir<{ horario: HorarioDia }>(`/api/turnos/agenda/horario?fecha=${fecha}`)
-  const libres = new Map<string, string[]>()
-  const nombres = new Map<string, string>()
-
-  for (const bloque of horario.bloques) {
-    for (const columna of bloque.columnas) {
-      nombres.set(columna.profesionalId, columna.profesionalNombre)
-      // Solo franjas de la configuracion: en las horas sueltas que trae la
-      // agenda del hospital (7:09) el servidor no deja agendar.
-      const horas = bloque.filas
-        .filter((fila) => fila.agendable && !bloque.citas[`${columna.profesionalId}|${fila.hora}`])
-        .map((fila) => fila.hora)
-      libres.set(columna.profesionalId, [...(libres.get(columna.profesionalId) ?? []), ...horas])
-    }
-  }
-
-  const doctores = [...nombres.entries()]
-    .filter(([id]) => (libres.get(id)?.length ?? 0) > 0)
-    .slice(0, MAXIMO_CONSULTORIOS_SIMULADOS)
-    .map(([profesionalId, nombre]) => ({ profesionalId, nombre }))
-
-  return { doctores, libres }
-}
-
-/**
- * Instante ISO de una franja de hoy EN COLOMBIA. El desfase va a mano porque
- * el equipo puede estar en otra zona y la cita caeria en el dia equivocado.
- */
-function instanteDeFranja(fecha: string, hora: string) {
-  return new Date(`${fecha}T${hora}:00-05:00`).toISOString()
-}
+import { llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
+import type { HorarioDia, Turno } from '@/lib/turnos/types'
+import { MAXIMO_CONSULTORIOS_SIMULADOS, type SimulacionPreparada } from '@/lib/turnos/simulacion-carga'
 
 type DoctorSimulado = {
   profesionalId: string
@@ -136,6 +50,7 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
   const [doctores, setDoctores] = useState<DoctorSimulado[]>([])
   const [preparando, setPreparando] = useState(false)
   const [enOleada, setEnOleada] = useState(false)
+  const [consultoriosASimular, setConsultoriosASimular] = useState(10)
   const [pacientesPorConsultorio, setPacientesPorConsultorio] = useState(3)
   const [tamanoOleada, setTamanoOleada] = useState(2)
   const [pausaSegundos, setPausaSegundos] = useState(4)
@@ -189,154 +104,41 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
     setPreparando(true)
     setDoctores([])
     setLog([])
-    agregarLog('Reiniciando los datos del dia...')
-
-    // Se arranca de cero: los turnos de hoy se borran y las citas de ejemplo
-    // vuelven a quedar PROGRAMADA. Sin esto, la segunda corrida encuentra
-    // todas las citas ya usadas y los consultorios quedan en 0 pacientes.
-    try {
-      await pedir('/api/turnos/simulacion', { method: 'POST' })
-      agregarLog('Datos del dia reiniciados.')
-    } catch (error) {
-      agregarLog(`No se pudieron reiniciar los datos del dia: ${mensajeDeError(error) ?? 'error desconocido'}`)
-      setPreparando(false)
-      return
-    }
-
-    const hoy = hoyEnColombia()
-
-    // Quienes se pueden simular hoy y con que horas, sacado de la agenda real.
-    let doctoresDelDia: { profesionalId: string; nombre: string }[]
-    let libresPorDoctor: Map<string, string[]>
-    try {
-      const encontrados = await doctoresSimulablesDeHoy(hoy)
-      doctoresDelDia = encontrados.doctores
-      libresPorDoctor = encontrados.libres
-    } catch (error) {
-      agregarLog(`No se pudo leer el horario del dia: ${mensajeDeError(error) ?? 'error desconocido'}`)
-      setPreparando(false)
-      return
-    }
+    agregarLog(`Preparando ${consultoriosASimular} consultorios con ${pacientesPorConsultorio} paciente(s) cada uno...`)
 
     /*
-      SIN DOCTORES NO HAY SIMULACION, Y HAY QUE DECIR POR QUE.
+      TODO EN EL SERVIDOR, EN UNA SOLA PETICION.
 
-      Pasa cuando el hospital no tiene doctores activos en servicios que
-      atiendan por cita, o cuando la configuracion de jornadas no deja ni una
-      franja libre. Antes esto se veia como un panel vacio sin una sola linea
-      en el registro, que es la peor forma de fallar: parece que la pantalla
-      esta rota.
+      Antes este panel hacia, por cada doctor, diez o quince peticiones
+      seguidas (enlace, estado, citas de relleno, llegadas...). Con la base
+      remota se quedaba en "Preparando..." y no dejaba pulsar "Siguiente para
+      todos". Ahora el servidor reinicia el dia, usa las citas que YA existen
+      (las de hoy o, si no hay, las del ultimo dia con citas), registra las
+      llegadas, reparte un consultorio distinto a cada doctor y devuelve todo.
     */
-    if (doctoresDelDia.length === 0) {
-      agregarLog(
-        'No hay ningun doctor al que se le pueda sembrar un paciente hoy. Revisa que existan ' +
-          'profesionales activos en un servicio que atienda POR CITA, y que su jornada tenga ' +
-          'franjas libres (Pantalla y audio define las horas de cada jornada).',
-      )
-      setPreparando(false)
-      return
-    }
+    try {
+      const preparada = await pedir<SimulacionPreparada>('/api/turnos/simulacion', {
+        method: 'POST',
+        body: JSON.stringify({ pacientesPorConsultorio, consultorios: consultoriosASimular }),
+        // Quince consultorios con varios pacientes, uno por uno contra la base
+        // remota, pueden tardar mas de un minuto.
+        msLimite: 240_000,
+      })
+      for (const aviso of preparada.avisos) agregarLog(aviso)
+      if (detenerRef.current) return
 
-    agregarLog(
-      `Preparando ${doctoresDelDia.length} consultorio(s) con ${pacientesPorConsultorio} paciente(s) cada uno...`,
-    )
-
-    for (const [indiceDoctor, { profesionalId }] of doctoresDelDia.entries()) {
-      if (detenerRef.current) break
-      try {
-        const { url } = await pedir<{ url: string; expiraEn: string }>(`/api/profesionales/${profesionalId}/acceso`, {
-          method: 'POST',
-          body: JSON.stringify({ horas: 2, minutos: 0 }),
-        })
-        const token = url.split('/consultorio/')[1]
-
-        const leerEstado = () =>
-          pedir<{
-            profesional: Profesional
-            modulos: Modulo[]
-            agenda: ItemAgendaProfesional[]
-            pendientes: Turno[]
-            turnoActual: Turno | null
-          }>(`/api/consultorio?fecha=${hoy}`, { headers: { 'x-consultorio-token': token } })
-
-        let estado = await leerEstado()
-        let porLlegar = estado.agenda.filter((item) => item.estado === 'PROGRAMADA')
-
-        // Las citas sembradas son solo 2 o 3 por profesional: se agregan las
-        // que falten para llegar al numero de pacientes pedido.
-        const faltantes = pacientesPorConsultorio - porLlegar.length
-        if (faltantes > 0) {
-          const libres = libresPorDoctor.get(profesionalId) ?? []
-          let agregadas = 0
-          for (let i = 0; i < faltantes; i += 1) {
-            if (detenerRef.current) break
-
-            // Cada franja se usa una sola vez: se saca de la lista al pedirla.
-            const hora = libres.shift()
-            if (!hora) {
-              agregarLog(`${profesionalId} ya no tiene cupos libres en su jornada de hoy.`)
-              break
-            }
-
-            try {
-              await pedir('/api/turnos/agenda', {
-                method: 'POST',
-                body: JSON.stringify({
-                  ...pacienteSimulado(indiceDoctor * pacientesPorConsultorio + i),
-                  profesionalId,
-                  horaCita: instanteDeFranja(hoy, hora),
-                }),
-              })
-              agregadas += 1
-            } catch (error) {
-              agregarLog(`No se pudieron agregar mas citas: ${mensajeDeError(error) ?? 'error desconocido'}`)
-              break
-            }
-          }
-          if (agregadas > 0) {
-            estado = await leerEstado()
-            porLlegar = estado.agenda.filter((item) => item.estado === 'PROGRAMADA')
-          }
-        }
-
-        // Registrar la llegada es lo que convierte la cita en un turno EN_ESPERA.
-        for (const item of porLlegar.slice(0, pacientesPorConsultorio)) {
-          if (detenerRef.current) break
-          try {
-            await pedir('/api/turnos/citas/llegada', { method: 'POST', body: JSON.stringify({ citaId: item.citaId }) })
-          } catch (error) {
-            agregarLog(`No se pudo registrar la llegada de ${item.nombrePaciente}: ${mensajeDeError(error) ?? 'error desconocido'}`)
-          }
-        }
-
-        // La fila real la manda el servidor, no la cuenta local.
-        estado = await leerEstado()
-
-        const moduloId = estado.profesional.moduloId ?? estado.modulos[0]?.id ?? ''
-        const moduloNombre = estado.modulos.find((m) => m.id === moduloId)?.nombre ?? '—'
-        const enEspera = estado.pendientes.length
-
-        const doctor: DoctorSimulado = {
-          profesionalId,
-          nombre: estado.profesional.nombre,
-          moduloId,
-          moduloNombre,
-          token,
-          pacientesEnEspera: enEspera,
-          turnoActual: estado.turnoActual,
-          llamando: false,
-        }
-        setDoctores((prev) => [...prev, doctor])
-        agregarLog(`${doctor.nombre} listo en ${moduloNombre} — ${enEspera} paciente(s) en espera.`)
-      } catch (error) {
-        agregarLog(`No se pudo preparar ${profesionalId}: ${mensajeDeError(error) ?? 'error desconocido'}`)
+      setDoctores(preparada.doctores.map((doctor) => ({ ...doctor, turnoActual: null, llamando: false })))
+      for (const doctor of preparada.doctores) {
+        agregarLog(`${doctor.nombre} listo en ${doctor.moduloNombre} — ${doctor.pacientesEnEspera} paciente(s) en espera.`)
       }
+      if (preparada.doctores.length > 0) {
+        agregarLog('Listo. Ya puedes llamar pacientes, uno por uno o en oleadas para todos.')
+      }
+    } catch (error) {
+      agregarLog(`No se pudo preparar la simulacion: ${mensajeDeError(error) ?? 'error desconocido'}`)
+    } finally {
+      setPreparando(false)
     }
-
-    if (!detenerRef.current) {
-      agregarLog('Listo. Ya puedes llamar pacientes, uno por uno o en oleadas para todos.')
-    }
-    setPreparando(false)
   }
 
   const llamarUno = useCallback(
@@ -352,11 +154,22 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
           que importan: no aparece en el registro de peticiones del servidor
           —que era el problema— y deja que cada llamada diga de que doctor es.
         */
-        const { turno } = await pedir<{ turno: Turno }>('/api/consultorio/llamar-siguiente', {
-          method: 'POST',
-          headers: { 'x-consultorio-token': doctor.token },
-          body: JSON.stringify({ moduloId: doctor.moduloId }),
-        })
+        // El mismo camino que la pantalla del doctor (`llamarSiguienteDesde`):
+        // manda el turno que este doctor simulado tiene abierto y, si el
+        // servidor ya tenia otro (409), lo adopta en vez de fallar.
+        const desenlace = await llamarSiguienteDesde(
+          '/api/consultorio/llamar-siguiente',
+          { moduloId: doctor.moduloId },
+          { headers: { 'x-consultorio-token': doctor.token }, turnoVisto: doctor.turnoActual ?? null },
+        )
+        const { turno } = desenlace
+        if (desenlace.tipo === 'ya_tenia_uno') {
+          agregarLog(`${doctor.nombre}: ya tenia llamado el ${turno.codigo}; se toma ese.`)
+          setDoctores((prev) =>
+            prev.map((d) => (d.profesionalId === doctor.profesionalId ? { ...d, llamando: false, turnoActual: turno } : d)),
+          )
+          return
+        }
         agregarLog(`${doctor.nombre} llamo a ${turno.codigo}${turno.nombrePaciente ? ` — ${turno.nombrePaciente}` : ''}.`)
         setDoctores((prev) =>
           prev.map((d) =>
@@ -393,12 +206,23 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
     setEnOleada(false)
   }
 
-  function detenerSimulacion() {
+  async function detenerSimulacion() {
     detenerRef.current = true
     setEnOleada(false)
     setPreparando(false)
     setDoctores([])
-    agregarLog('Simulacion detenida.')
+    agregarLog('Deteniendo: se limpian los turnos de hoy...')
+    // Deja el dia en blanco (y borra consultorios temporales de versiones
+    // anteriores de la simulacion, si quedo alguno).
+    try {
+      const { consultoriosBorrados } = await pedir<{ consultoriosBorrados: number }>('/api/turnos/simulacion', {
+        method: 'DELETE',
+        msLimite: 60_000,
+      })
+      agregarLog(consultoriosBorrados > 0 ? `Simulacion detenida. Se borraron ${consultoriosBorrados} consultorios temporales viejos.` : 'Simulacion detenida.')
+    } catch (error) {
+      agregarLog(`No se pudo limpiar la simulacion: ${mensajeDeError(error) ?? 'error desconocido'}`)
+    }
   }
 
   return (
@@ -430,11 +254,12 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm leading-6 text-slate-600">
-              Primero prepara la simulacion: toma los doctores que hoy pueden atender (hasta{' '}
-              {MAXIMO_CONSULTORIOS_SIMULADOS}), le genera a cada uno un acceso temporal y registra la llegada
-              de las citas de hoy, creando las que falten para llegar al numero de pacientes que elijas. Luego
-              llama pacientes uno por uno desde cada tarjeta, o dale a &quot;Siguiente para todos&quot; para que
-              vayan pasando en oleadas.
+              Elige cuantos consultorios quieres ver en la pantalla (hasta {MAXIMO_CONSULTORIOS_SIMULADOS}) y
+              prepara la simulacion: usa las citas que ya existen (las de hoy y, si no alcanzan, las del ultimo
+              dia con citas) y registra la llegada de sus pacientes, sin crear pacientes ni citas. Cada doctor
+              llama desde su consultorio real: varios pueden compartir el mismo y cada uno sale en su fila de
+              la pantalla. Luego llama pacientes uno por uno desde cada tarjeta, o dale a
+              &quot;Siguiente para todos&quot; para que vayan pasando en oleadas.
             </p>
             <div className="flex flex-wrap items-center gap-3">
               <Button
@@ -470,6 +295,20 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
               </a>
             </div>
             <div className="flex flex-wrap gap-4 border-t border-slate-100 pt-4">
+              <Campo etiqueta="Consultorios a simular" className="max-w-[12rem]">
+                <Entrada
+                  type="number"
+                  min={1}
+                  max={MAXIMO_CONSULTORIOS_SIMULADOS}
+                  value={consultoriosASimular}
+                  onChange={(e) =>
+                    setConsultoriosASimular(
+                      Math.min(MAXIMO_CONSULTORIOS_SIMULADOS, Math.max(1, Number(e.target.value) || 1)),
+                    )
+                  }
+                  disabled={preparando}
+                />
+              </Campo>
               <Campo etiqueta="Pacientes por consultorio" className="max-w-[12rem]">
                 <Entrada
                   type="number"
@@ -571,8 +410,8 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
         </CardHeader>
         <CardContent padded={false}>
           <p className="px-5 pt-4 text-xs leading-5 text-slate-500">
-            La primera vez, dale clic a &quot;Activar pantalla&quot; adentro (el navegador exige un clic para poder
-            sonar el audio).
+            Si adentro aparece &quot;Sonido desactivado: toca para activar&quot;, toca el aviso para oir los
+            llamados (el navegador exige un toque para sonar).
           </p>
           <div className="p-5">
             <iframe

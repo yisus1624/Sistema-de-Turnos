@@ -18,22 +18,33 @@
  * de una ventana de tiempo; esto cuenta conexiones ABIERTAS AHORA MISMO, y
  * baja cuando se cierran. Son dos cosas distintas y por eso no se reutiliza.
  */
-
-/** Cuantas conexiones simultaneas se atienden en total. */
-const MAXIMO_POR_DEFECTO = 200
+/**
+ * Cuantas conexiones simultaneas se atienden en total.
+ *
+ * Es el tope que protege la memoria del servidor, venga de donde venga la
+ * avalancha. ALTO A PROPOSITO: con 300, tres IPs atacantes con su tope por IP
+ * lleno (100 cada una) dejaban la sala de espera sin pantalla. Cada conexion
+ * cuesta poco (un oyente y un temporizador), asi que 2000 es viable en la VPS
+ * y deja al hospital sitio de sobra aunque varias IPs abusen a la vez. El hub
+ * ajusta su aviso de oyentes a este mismo numero.
+ */
+const MAXIMO_POR_DEFECTO = 2000
 
 /**
- * Cuantas conexiones simultaneas se le permiten a un mismo origen.
+ * Cuantas conexiones simultaneas se le permiten a un mismo origen (IP).
  *
  * Solo se aplica cuando hay un proxy declarado (`confiarEnProxy`), porque sin
  * el la IP la escribe el propio cliente: limitar por un dato que el atacante
- * elige no frena nada y si puede dejar fuera al hospital entero.
+ * elige no frena nada.
  *
- * Veinte es holgado a proposito: un mismo equipo puede tener la pantalla, el
- * monitor del administrador y alguna pestaña olvidada, y las conexiones que
- * quedan colgando tardan un rato en soltarse.
+ * ALTO A PROPOSITO. Todo el hospital sale por UNA IP (el NAT), y esa IP cambia
+ * sin aviso: no se puede eximir ni configurar. Cien alcanza para ~30 pantallas
+ * mas la reconexion masiva tras un corte, cuando las conexiones viejas siguen
+ * contando hasta que el reciclado de 4-6 minutos las suelta. Con el tope
+ * anterior (20), tras un corte de un minuto solo volvian 2 pantallas de 18. Y
+ * sigue frenando a una IP que abre cientos de conexiones.
  */
-const MAXIMO_POR_ORIGEN_POR_DEFECTO = 20
+const MAXIMO_POR_ORIGEN_POR_DEFECTO = 100
 
 /** Lee un tope del entorno. Un valor invalido no apaga la proteccion. */
 function topeDelEntorno(variable: string, porDefecto: number): number {
@@ -160,23 +171,25 @@ function crearPlaza(origen: string | null): PlazaDelCanal {
   }
 }
 
+/** Si el origen ya agoto su cupo. Sin IP de fiar no hay cupo por origen. */
+function origenLleno(origen: string | null): boolean {
+  if (!origen) return false
+  const tope = topeDelEntorno('TURNOS_MAX_CANAL_EN_VIVO_POR_ORIGEN', MAXIMO_POR_ORIGEN_POR_DEFECTO)
+  return ocupacionDelOrigen(origen) >= tope
+}
+
 /**
  * Reserva una plaza en el canal.
  *
- * `origen` viene en null cuando no hay proxy declarado; entonces solo cuenta el
- * tope global (ver la nota de `MAXIMO_POR_ORIGEN_POR_DEFECTO`).
+ * `origen` viene en null cuando no hay proxy declarado, y entonces solo cuenta
+ * el tope global (ver la nota de `MAXIMO_POR_ORIGEN_POR_DEFECTO`).
  */
 export function ocuparPlaza(origen: string | null): ResultadoDeAforo {
   if (aforo.total >= topeDeConexionesEnVivo()) {
     return { admitida: false, motivo: 'aforo_global' }
   }
 
-  const topePorOrigen = topeDelEntorno(
-    'TURNOS_MAX_CANAL_EN_VIVO_POR_ORIGEN',
-    MAXIMO_POR_ORIGEN_POR_DEFECTO,
-  )
-
-  if (origen && ocupacionDelOrigen(origen) >= topePorOrigen) {
+  if (origenLleno(origen)) {
     return { admitida: false, motivo: 'aforo_por_origen' }
   }
 

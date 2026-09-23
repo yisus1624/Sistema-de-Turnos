@@ -27,15 +27,25 @@
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { Prisma } from '@prisma/client'
-import { prisma } from '@/lib/prisma'
+import { contextoDeTransaccion, prisma } from '@/lib/prisma'
 import { cifrarSiSePuede, descifrar } from '@/lib/seguridad/cifrado'
 import { realtimeHub } from '@/lib/realtime/hub'
-import { errorDeNegocio } from './errores'
+import { ErrorPasajero, errorDeNegocio } from './errores'
+import { decidirCierre, decidirRepeticion, ESTADOS_ABIERTOS, type EstadoDeCierre } from './reglas-cierre'
+import {
+  alcanceDelLlamado,
+  candadoDelAlcance,
+  exigirTurnoAbiertoEsperado,
+  exigirVentanillaCompatible,
+  moduloOcupado,
+  perteneceAlAlcance,
+  type SolicitudDeLlamado,
+} from './reglas-llamado'
 import { ordenAtencion, resumir, type PuestoEnLaFila } from './estadisticas'
 import { reunirActividad } from './actividad'
-import { modulosVisiblesEnPantalla } from './casillas'
+import { modulosVisiblesEnPantalla, puestoDe } from './casillas'
 import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
-import { esChoqueDeUnico, mensajeDeChoque } from './choques-unicos'
+import { esConflictoPasajero, mensajeDeChoque } from './choques-unicos'
 import { CONFIGURACION_INICIAL } from './configuracion-inicial'
 import { esDisenoPantalla } from './types'
 import { CONFIGURACION_YA_CAMBIADA, exigirConfiguracionAlDia } from './configuracion-version'
@@ -55,6 +65,7 @@ import {
 } from './tiempo'
 import type { TurnoRepository } from './repository'
 import type {
+  AccionSobreTurno,
   ActividadCatalogo,
   AccesoProfesional,
   BloqueHorario,
@@ -70,17 +81,20 @@ import type {
   EstadoAgendaItem,
   EstadoCita,
   FiltroHistorico,
+  FiltroTurnoAbierto,
   HorarioDia,
+  PeticionDeLlamado,
   ItemAgendaProfesional,
   JornadaDelDia,
   Jornada,
+  LlegadaRegistrada,
   Modulo,
   Profesional,
   Servicio,
   Turno,
 } from './types'
 
-import { MINUTOS_ACCESO_MAXIMO, MINUTOS_ACCESO_MINIMO } from './repository'
+import { MINUTOS_ACCESO_MAXIMO, MINUTOS_ACCESO_MINIMO, MS_ENTRE_APUNTES_DE_USO } from './repository'
 
 /** Lo que sirve tanto para el cliente normal como dentro de una transaccion. */
 type Ctx = Prisma.TransactionClient | typeof prisma
@@ -465,62 +479,106 @@ async function validarFranjaDeCita(
   }
 }
 
+/** Los estados abiertos, en el formato que pide un `where` de Prisma. */
+const ABIERTOS = { in: [...ESTADOS_ABIERTOS] }
+
 /**
- * Un doctor solo puede llamar en un consultorio que sea suyo.
+ * Desde que modulo puede llamar quien llama.
  *
  * Sin esto el `moduloId` viaja en el cuerpo de la peticion sin que nadie lo
  * contraste con quien la manda, y basta un id equivocado para llamar en la
- * puerta de otro. No es solo un numero mal puesto en la pantalla: al llamar,
- * `cerrarAtencionAbierta` da por ATENDIDO al paciente que ese consultorio
- * tuviera adentro, asi que un doctor le cerraria la atencion a otro sin
- * enterarse ninguno de los dos.
+ * puerta de otro. No es solo un numero mal puesto en la pantalla: al llamar se
+ * da por ATENDIDO al paciente anterior, asi que se le cerraria la atencion a
+ * otro sin enterarse ninguno de los dos.
+ *
+ *   1. El modulo tiene que estar activo.
+ *   2. Un doctor, solo en un consultorio de su servicio (o sin asignar); una
+ *      ventanilla, solo filas compartidas y un modulo compatible.
+ *   3. No puede haber OTRA persona atendiendo ahi en este momento (409).
  */
-async function validarModuloParaLlamar(modulo: FilaModulo, profesionalId?: string, ctx: Ctx = prisma) {
+async function validarModuloParaLlamar(modulo: FilaModulo, quien: SolicitudDeLlamado, ctx: Ctx) {
   if (!modulo.activo) {
     errorDeNegocio(`${modulo.nombre} esta desactivado; no se puede llamar desde ahi.`)
   }
-  if (!profesionalId) return
 
-  const profesional = await exigirProfesional(profesionalId, ctx)
-
-  if (modulo.servicioId && modulo.servicioId !== profesional.servicioId) {
-    const servicio = await exigirServicio(profesional.servicioId, ctx)
-    errorDeNegocio(`${modulo.nombre} no pertenece a ${servicio.nombre}. Pide que te asignen tu consultorio.`)
+  // UN CONSULTORIO PUEDE SER UN SALON CON VARIOS DOCTORES. Cualquiera puede
+  // tener dentro a doctores de cualquier servicio atendiendo a la vez, cada uno
+  // en su espacio: al doctor no se le pide consultorio libre ni de su servicio.
+  // Cada uno sale en su propia fila del televisor (ver `puestoDe`). Las
+  // VENTANILLAS si siguen siendo de una persona: dos operadores en la misma se
+  // cerraban los pacientes.
+  if (quien.profesionalId) {
+    await exigirProfesional(quien.profesionalId, ctx)
+    return
   }
+  exigirVentanillaCompatible(aServicio(await exigirServicio(quien.servicioId ?? '', ctx)), modulo)
 
-  // Solo cuenta lo que esta pasando HOY. Un turno se queda en LLAMADO hasta
-  // que alguien lo cierra, y al final de la jornada es normal que el ultimo
-  // quede abierto: el doctor termina y se va. Sin acotarlo al dia, ese turno
-  // colgado de ayer dejaria el consultorio bloqueado para siempre.
-  const ocupadoPorOtro = await ctx.turno.findFirst({
-    where: {
-      moduloId: modulo.id,
-      fecha: diaColombia(ahoraISO()),
-      estado: { in: ['LLAMADO', 'EN_ATENCION'] },
-      horaLlamado: { not: null },
-      profesionalId: { not: null, notIn: [profesionalId] },
-    },
+  const ocupante = await ocupanteAjeno(modulo.id, alcanceDelLlamado(quien), ctx)
+  if (ocupante) throw moduloOcupado(modulo.nombre, ocupante.profesional?.nombre ?? null, ocupante.codigo)
+}
+
+/**
+ * Un turno abierto HOY en ese modulo que no es de quien llama.
+ *
+ * Solo cuenta lo de hoy: al final de la jornada es normal que el ultimo turno
+ * quede abierto, y sin acotarlo al dia ese turno colgado de ayer dejaria el
+ * modulo bloqueado para siempre. El alcance se compara en memoria y no en el
+ * `where`: un `NOT` sobre una columna nula no se cumple en SQL, y el turno de
+ * una ventanilla (sin profesional) no contaria como ocupante.
+ */
+async function ocupanteAjeno(moduloId: string, alcance: FiltroTurnoAbierto, ctx: Ctx) {
+  const abiertos = await ctx.turno.findMany({
+    where: { moduloId, fecha: diaColombia(ahoraISO()), estado: ABIERTOS, horaLlamado: { not: null } },
     include: { profesional: { select: { nombre: true } } },
   })
-  if (ocupadoPorOtro) {
-    errorDeNegocio(
-      `${modulo.nombre} lo esta usando ${ocupadoPorOtro.profesional?.nombre ?? 'otro profesional'} en este momento (turno ${ocupadoPorOtro.codigo}).`,
-    )
+  return abiertos.find((turno) => !perteneceAlAlcance(turno, alcance))
+}
+
+/**
+ * Tiempos de las transacciones, puestos a proposito.
+ *
+ * Los de Prisma por defecto (2 s para conseguir conexion, 5 s de vida) no
+ * alcanzan con una base remota: el llamado hace una docena de idas y vueltas,
+ * y con la red lenta la transaccion se cortaba con un P2028 que llegaba al
+ * funcionario como un 500. Con estos margenes cabe una base lenta; mas alla,
+ * es mejor fallar y que el funcionario reintente que tener conexiones
+ * retenidas.
+ */
+const OPCIONES_TRANSACCION = { maxWait: 5_000, timeout: 15_000 }
+
+/**
+ * Una transaccion interactiva con los tiempos de arriba, que traduce los
+ * choques pasajeros (P2028, P2034, deadlock) a un 503 "vuelve a intentarlo".
+ */
+async function enTransaccion<T>(trabajo: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  try {
+    // Marcada para que el cliente no reintente nada dentro (ver `contextoDeTransaccion`).
+    return await contextoDeTransaccion.run(true, () => prisma.$transaction(trabajo, OPCIONES_TRANSACCION))
+  } catch (error) {
+    if (esConflictoPasajero(error)) throw new ErrorPasajero()
+    throw error
   }
 }
 
 /**
- * Un turno solo se cierra si esta siendo atendido.
- *
- * Sin esta comprobacion se podia dar por atendido a alguien que seguia en la
- * fila sin haber sido llamado (desaparece de la cola y nadie se entera), y
- * volver a cerrar uno ya cerrado, que le reescribia la hora de atencion y
- * ensuciaba los promedios del informe.
+ * Candado de PostgreSQL que dura lo que dura la transaccion
+ * (`pg_advisory_xact_lock`). No toca ninguna tabla ni hace falta migrar nada:
+ * dos transacciones con la misma clave se esperan una a la otra.
  */
-function exigirTurnoEnAtencion(turno: FilaTurno, accion: 'atendido' | 'ausente') {
-  if (turno.estado === 'LLAMADO' || turno.estado === 'EN_ATENCION') return
-  if (turno.estado === 'EN_ESPERA') errorDeNegocio(`El turno ${turno.codigo} todavia no ha sido llamado.`)
-  errorDeNegocio(`El turno ${turno.codigo} ya esta cerrado; no se puede marcar como ${accion}.`)
+async function candadoDeTransaccion(clave: string, tx: Prisma.TransactionClient) {
+  await tx.$queryRaw`SELECT 1 AS ok FROM pg_advisory_xact_lock(hashtext(${clave}))`
+}
+
+/**
+ * Serializa los llamados de un mismo modulo hasta el final de la transaccion.
+ *
+ * Dos clics casi juntos (el doble clic, o el reintento que llega mientras la
+ * primera peticion sigue viva) leerian el mismo "turno abierto", pasarian los
+ * dos la comprobacion y se llevarian a dos pacientes. Con la fila del modulo
+ * bloqueada, el segundo espera al primero y ya ve su llamado: recibe el 409.
+ */
+async function bloquearModulo(moduloId: string, tx: Prisma.TransactionClient) {
+  await tx.$queryRaw`SELECT "id" FROM "modulos" WHERE "id" = ${moduloId} FOR UPDATE`
 }
 
 /**
@@ -529,90 +587,292 @@ function exigirTurnoEnAtencion(turno: FilaTurno, accion: 'atendido' | 'ausente')
  * El numero sale de contar los turnos que ese prefijo ya lleva hoy, en vez de
  * un contador guardado: asi no hay dos sitios que puedan discrepar, y el
  * reinicio diario es automatico. En una sala de espera el turno tiene que ser
- * un numero corto y del dia; con un contador que no se reinicia, al tercer dia
- * se estaria llamando el C-247, que no le dice nada a nadie.
+ * un numero corto y del dia.
  *
- * La carrera entre dos llegadas simultaneas la corta el indice unico
- * (fecha, codigo): si dos sacan el mismo numero, una falla y `crearTurno`
- * vuelve a intentarlo con el siguiente.
+ * LA CARRERA SE CORTA CON UN CANDADO, NO CON REINTENTOS. Antes, si dos
+ * llegadas simultaneas sacaban el mismo numero, el indice unico rechazaba una
+ * y se volvia a contar dentro de la misma transaccion. En PostgreSQL eso no
+ * funciona: el error aborta la transaccion entera y todo lo que sigue falla,
+ * asi que la segunda llegada terminaba en un 500. Ahora cada (dia, prefijo)
+ * toma un candado de transaccion (`pg_advisory_xact_lock`) antes de contar: la
+ * segunda espera a que la primera confirme, y al contar ya ve su turno. El
+ * candado se suelta solo al terminar la transaccion y no toca ninguna tabla.
  */
-async function siguienteCodigo(prefijo: string, fecha: string, ctx: Ctx) {
-  const usados = await ctx.turno.count({ where: { fecha, codigo: { startsWith: `${prefijo}-` } } })
+async function siguienteCodigo(prefijo: string, fecha: string, tx: Prisma.TransactionClient) {
+  await candadoDeTransaccion(`turnos:${fecha}:${prefijo}`, tx)
+  const usados = await tx.turno.count({ where: { fecha, codigo: { startsWith: `${prefijo}-` } } })
   return `${prefijo}-${String(usados + 1).padStart(3, '0')}`
 }
 
-/**
- * Crea el turno resolviendo el choque de codigos.
- *
- * Dos pacientes registrados en el mismo instante pueden calcular el mismo
- * numero. En vez de bloquear la tabla —que frenaria admisiones entera por un
- * caso que pasa poco—, se intenta insertar y, si el indice unico lo rechaza, se
- * vuelve a contar. Con pocos intentos basta: cada vuelta ya ve el turno del
- * otro.
- */
+/** Crea el turno con su codigo del dia. Tiene que correr dentro de una transaccion. */
 async function crearTurno(
   datos: Omit<Prisma.TurnoUncheckedCreateInput, 'codigo'>,
   prefijo: string,
-  ctx: Ctx,
+  tx: Prisma.TransactionClient,
 ): Promise<FilaTurno> {
-  for (let intento = 0; intento < 5; intento += 1) {
-    const codigo = await siguienteCodigo(prefijo, datos.fecha, ctx)
-    try {
-      return await ctx.turno.create({ data: { ...datos, codigo } })
-    } catch (error) {
-      if (!esChoqueDeUnico(error) || intento === 4) throw error
-    }
+  const codigo = await siguienteCodigo(prefijo, datos.fecha, tx)
+  return tx.turno.create({ data: { ...datos, codigo } })
+}
+
+/** Los datos de un cierre. `horaAtencion` solo la lleva el atendido. */
+function datosDeCierre(nuevo: EstadoDeCierre, cerradoPor: string | null, automatico: boolean) {
+  const instante = new Date()
+  return {
+    estado: nuevo,
+    cerradoEn: instante,
+    cerradoPor,
+    cierreAutomatico: automatico,
+    ...(nuevo === 'ATENDIDO' ? { horaAtencion: instante } : {}),
   }
-  // Inalcanzable: el bucle o devuelve o lanza.
-  throw new Error('No se pudo asignar un codigo de turno.')
 }
 
 /**
- * Cierra la atencion que siguiera abierta en un modulo.
+ * Cierra como ATENDIDO automatico el turno que quien llama tenia abierto, en la
+ * misma transaccion que el llamado. Devuelve su modulo si lo cerro, o null.
  *
- * Cuando el profesional pulsa "siguiente" esta diciendo, implicitamente, que
- * termino con el anterior (seccion 22, pasos 9 y 10). Queda marcado como
- * cierre AUTOMATICO: un paciente que se levanto y se fue no puede verse en el
- * historico igual que una atencion que el doctor dio por terminada.
+ * Cuando se pulsa "siguiente" se esta diciendo, implicitamente, que se termino
+ * con el anterior (seccion 22, pasos 9 y 10). Queda marcado como cierre
+ * AUTOMATICO: un paciente que se fue no puede verse en el historico igual que
+ * una atencion que el doctor dio por terminada.
+ *
+ * SOLO EL TURNO VALIDADO, Y BLOQUEADO ANTES DE TOCARLO. Antes se leian los
+ * abiertos, se actualizaban con una condicion y despues se marcaban como
+ * atendidas las citas de la lista LEIDA, no de lo que de verdad cambio. Si en
+ * medio otro equipo marcaba ese paciente como AUSENTE, el update no cambiaba
+ * nada pero la cita quedaba ATENDIDA igual. Con `FOR UPDATE` se espera a esa
+ * otra transaccion y, si el turno ya no esta abierto, no se toca ni el turno ni
+ * su cita.
  */
-async function cerrarAtencionAbierta(
-  moduloId: string,
-  exceptoTurnoId: string,
-  profesionalId: string | undefined,
-  ctx: Ctx,
-) {
-  const instante = new Date()
+async function cerrarAutomaticamente(turnoId: string, tx: Prisma.TransactionClient): Promise<string | null> {
+  const bloqueados = await tx.$queryRaw<Array<{ citaId: string | null; moduloId: string | null }>>`
+    SELECT "citaId", "moduloId" FROM "turnos"
+    WHERE "id" = ${turnoId} AND "estado" IN ('LLAMADO', 'EN_ATENCION')
+    FOR UPDATE`
+  const fila = bloqueados[0]
+  if (!fila) return null
 
-  const abiertos = await ctx.turno.findMany({
-    where: {
-      moduloId,
-      id: { not: exceptoTurnoId },
-      estado: { in: ['LLAMADO', 'EN_ATENCION'] },
-      // Nunca se cierra el paciente de otro profesional. `validarModuloParaLlamar`
-      // ya lo impide antes de llegar aqui; se repite porque este cierre es
-      // silencioso, y equivocarse deja a alguien marcado como atendido sin que
-      // nadie lo haya atendido.
-      ...(profesionalId ? { OR: [{ profesionalId: null }, { profesionalId }] } : {}),
-    },
-    select: { id: true, citaId: true },
-  })
-  if (abiertos.length === 0) return
+  await tx.turno.update({ where: { id: turnoId }, data: datosDeCierre('ATENDIDO', null, true) })
+  await marcarCitasAtendidas([fila.citaId], tx)
+  return fila.moduloId
+}
 
-  await ctx.turno.updateMany({
-    where: { id: { in: abiertos.map((t) => t.id) } },
-    data: {
-      estado: 'ATENDIDO',
-      horaAtencion: instante,
-      cerradoEn: instante,
-      cerradoPor: null,
-      cierreAutomatico: true,
-    },
-  })
+async function marcarCitasAtendidas(citaIds: Array<string | null>, tx: Prisma.TransactionClient) {
+  const citas = citaIds.filter((id): id is string => Boolean(id))
+  if (citas.length > 0) await tx.cita.updateMany({ where: { id: { in: citas } }, data: { estado: 'ATENDIDA' } })
+}
 
-  const citas = abiertos.map((t) => t.citaId).filter((id): id is string => Boolean(id))
-  if (citas.length > 0) {
-    await ctx.cita.updateMany({ where: { id: { in: citas } }, data: { estado: 'ATENDIDA' } })
+/**
+ * Reclama el primero de la fila que siga en espera.
+ *
+ * RECLAMAR, no "leer y escribir": el update solo prospera si el turno SIGUE en
+ * espera. Si otro modulo se lo llevo entre la consulta y el update, afecta cero
+ * filas y se pasa al siguiente de la cola.
+ */
+async function reclamarSiguiente(
+  fila: { servicioId?: string; profesionalId?: string },
+  llamado: { moduloId: string; funcionarioId: string },
+  tx: Prisma.TransactionClient,
+): Promise<string | null> {
+  for (const candidato of await pendientesDeHoy(fila, tx)) {
+    const instante = new Date()
+    const reclamado = await tx.turno.updateMany({
+      where: { id: candidato.id, estado: 'EN_ESPERA' },
+      data: { ...llamado, estado: 'LLAMADO', horaLlamado: instante, vecesLlamado: { increment: 1 } },
+    })
+    if (reclamado.count === 0) continue
+
+    // El PRIMER llamado se graba una sola vez: es contra el que se mide la
+    // espera del paciente. Va aparte porque `updateMany` no sabe hacer "solo si
+    // esta vacio".
+    await tx.turno.updateMany({ where: { id: candidato.id, horaPrimerLlamado: null }, data: { horaPrimerLlamado: instante } })
+    return candidato.id
   }
+  return null
+}
+
+/** Turnos en espera de hoy, en el orden en que hay que atenderlos. */
+async function pendientesDeHoy(filtro: { servicioId?: string; profesionalId?: string }, ctx: Ctx): Promise<Turno[]> {
+  const filas = await ctx.turno.findMany({
+    where: {
+      estado: 'EN_ESPERA',
+      fecha: diaColombia(ahoraISO()),
+      ...(filtro.servicioId ? { servicioId: filtro.servicioId } : {}),
+      ...(filtro.profesionalId ? { profesionalId: filtro.profesionalId } : {}),
+    },
+    orderBy: [{ prioridad: 'desc' }, { fechaGeneracion: 'asc' }],
+  })
+  // `prioridad: 'desc'` ya pone PRIORITARIO antes que NORMAL por el orden del
+  // enum, pero se reordena con la misma funcion que usa el resto del sistema
+  // para que la regla viva en un solo sitio.
+  return filas.map(aTurno).sort(ordenAtencion)
+}
+
+/**
+ * Avisa a las pantallas DESPUES de confirmar el cambio, y sin tumbarlo.
+ *
+ * Antes el aviso iba en medio del llamado: si fallaba armar la casilla, el
+ * paciente quedaba LLAMADO en la base, sin campana en la sala y con el doctor
+ * viendo un error; al repetir, ese paciente se cerraba en silencio. El cambio
+ * ya esta hecho y es lo que importa: si el aviso falla, se grita en el
+ * registro del servidor y las pantallas se ponen al dia con su propia
+ * resincronizacion.
+ */
+async function avisarSinTumbar(avisar: () => Promise<void> | void) {
+  try {
+    await avisar()
+  } catch (error) {
+    console.error('[turnos] el cambio quedo guardado, pero no se pudo avisar a las pantallas', error)
+  }
+}
+
+function avisarLlamado(turno: FilaTurno, repetido: boolean) {
+  return avisarSinTumbar(async () => {
+    realtimeHub.publish({ tipo: 'turno.llamado', casilla: await casillaDeTurno(turno), repetido })
+  })
+}
+
+function avisarModuloLiberado(moduloId: string | null, profesionalId?: string | null) {
+  if (!moduloId) return Promise.resolve()
+  return avisarSinTumbar(() =>
+    realtimeHub.publish({ tipo: 'modulo.liberado', moduloId, puesto: puestoDe(moduloId, profesionalId) }),
+  )
+}
+
+/**
+ * Cierra un turno a mano, condicionado al estado e idempotente.
+ *
+ * La pregunta de `decidirCierre` se hace antes de escribir y otra vez si el
+ * update condicionado no afecto a ninguna fila: eso es que otro camino (el
+ * cierre automatico de un llamado, otra pestaña) lo cerro en medio. Sin la
+ * condicion, un "ausente" que coincidia con el cierre automatico dejaba el
+ * turno AUSENTE con la cita ATENDIDA.
+ */
+async function cerrarTurno(turnoId: string, nuevo: EstadoDeCierre, cerradoPor?: string): Promise<AccionSobreTurno> {
+  const resultado = await enTransaccion(async (tx) => {
+    const antes = await exigirTurno(turnoId, tx)
+    if (decidirCierre(aTurno(antes), nuevo) === 'ya_aplicada') return { turno: antes, yaAplicada: true }
+
+    const hecho = await tx.turno.updateMany({
+      where: { id: turnoId, estado: ABIERTOS },
+      data: datosDeCierre(nuevo, cerradoPor ?? null, false),
+    })
+    if (hecho.count === 0) return { turno: await releerYDecidir(turnoId, nuevo, tx), yaAplicada: true }
+    if (nuevo === 'ATENDIDO') await marcarCitasAtendidas([antes.citaId], tx)
+    return { turno: await tx.turno.findUniqueOrThrow({ where: { id: turnoId } }), yaAplicada: false }
+  })
+
+  if (!resultado.yaAplicada) await avisarModuloLiberado(resultado.turno.moduloId, resultado.turno.profesionalId)
+  return { turno: aTurno(resultado.turno), yaAplicada: resultado.yaAplicada }
+}
+
+/**
+ * Suma una repeticion solo si el turno sigue abierto y, si la pantalla dijo que
+ * conteo veia, solo si sigue siendo ese: dos reintentos simultaneos del mismo
+ * clic suman una sola. Devuelve cuantas filas cambio (0 o 1).
+ */
+async function repetirCondicionado(turno: FilaTurno, vecesLlamadoVisto?: number): Promise<number> {
+  const instante = new Date()
+  const hecho = await prisma.turno.updateMany({
+    where: {
+      id: turno.id,
+      estado: ABIERTOS,
+      ...(vecesLlamadoVisto === undefined ? {} : { vecesLlamado: vecesLlamadoVisto }),
+    },
+    // Se actualiza el ULTIMO llamado (la pantalla ordena por el), nunca el
+    // primero: repetir no puede reescribir cuanto espero el paciente.
+    data: { vecesLlamado: { increment: 1 }, horaLlamado: instante, horaPrimerLlamado: turno.horaPrimerLlamado ?? instante },
+  })
+  return hecho.count
+}
+
+/** Otro camino cerro el turno en medio: o ya esta como se pedia, o es un 409. */
+async function releerYDecidir(turnoId: string, nuevo: EstadoDeCierre, tx: Prisma.TransactionClient) {
+  const ahora = await exigirTurno(turnoId, tx)
+  decidirCierre(aTurno(ahora), nuevo)
+  return ahora
+}
+
+/** El turno que genero la cita (el ultimo, si hubiera mas de uno). */
+async function turnoDeLaCita(citaId: string, ctx: Ctx = prisma) {
+  return ctx.turno.findFirst({ where: { citaId }, orderBy: { fechaGeneracion: 'desc' } })
+}
+
+/** Otra peticion registro la llegada en medio: se devuelve su turno. */
+async function llegadaYaRegistrada(citaId: string, tx: Prisma.TransactionClient): Promise<LlegadaRegistrada> {
+  const turno = await turnoDeLaCita(citaId, tx)
+  if (!turno) errorDeNegocio('Esta cita ya registro la llegada del paciente.')
+  return { turno: aTurno(turno), yaRegistrada: true }
+}
+
+/**
+ * Las ultimas defensas antes de generar el turno.
+ *
+ * El dia: aunque la busqueda solo ofrezca las citas de hoy, el id llega en el
+ * cuerpo de la peticion, y una llegada contra una cita de otro dia mete al
+ * paciente en la fila equivocada.
+ *
+ * El doctor activo: si lo dieron de baja, su enlace ya no sirve y nadie
+ * llamaria a este paciente. Mejor que admisiones se entere ahora, con el
+ * paciente delante, y le resuelva la cita.
+ */
+async function validarCitaParaLlegada(cita: FilaCita) {
+  const hoy = diaColombia(ahoraISO())
+  if (cita.fecha !== hoy) {
+    errorDeNegocio(
+      `Esta cita no es de hoy, es del ${cita.fecha}. Solo se puede registrar la llegada el mismo dia de la cita.`,
+    )
+  }
+
+  const profesional = await prisma.profesional.findUnique({ where: { id: cita.profesionalId } })
+  if (!profesional?.activo) {
+    errorDeNegocio(
+      'El profesional de esta cita ya no esta activo, asi que no podria llamar al paciente. Reasignale la cita a otro profesional.',
+    )
+  }
+}
+
+/** Lo que deja un llamado: el turno llamado y, si lo hubo, el modulo que quedo libre. */
+interface Llamado {
+  turno: FilaTurno
+  moduloLiberado: string | null
+}
+
+/**
+ * El cuerpo de `llamarSiguiente` dentro de la transaccion, con el modulo y el
+ * alcance ya bloqueados y validados. Devuelve null si no hay nadie en espera.
+ */
+async function llamarDentroDeTransaccion(params: PeticionDeLlamado, tx: Prisma.TransactionClient): Promise<Llamado | null> {
+  const alcance = alcanceDelLlamado(params)
+  const abierto = await tx.turno.findFirst({
+    where: { ...alcance, fecha: diaColombia(ahoraISO()), estado: ABIERTOS },
+    orderBy: { horaLlamado: 'desc' },
+  })
+  exigirTurnoAbiertoEsperado(abierto ? aTurno(abierto) : null, params.turnoAbiertoEsperado)
+
+  const fila = { servicioId: params.servicioId, profesionalId: params.profesionalId }
+  const reclamado = await reclamarSiguiente(fila, { moduloId: params.moduloId, funcionarioId: params.funcionarioId }, tx)
+  if (!reclamado) return null
+
+  // Quien llama atiende a un paciente a la vez: SU anterior —el que acaba de
+  // validarse contra lo que ve la pantalla— se da por atendido.
+  const moduloDelAnterior = abierto ? await cerrarAutomaticamente(abierto.id, tx) : null
+  return {
+    turno: await tx.turno.findUniqueOrThrow({ where: { id: reclamado } }),
+    moduloLiberado: moduloDelAnterior && moduloDelAnterior !== params.moduloId ? moduloDelAnterior : null,
+  }
+}
+
+/**
+ * Los candados del llamado, siempre en el mismo orden (modulo, luego alcance)
+ * para que dos llamados no se esperen el uno al otro para siempre.
+ */
+async function bloquearParaLlamar(params: PeticionDeLlamado, tx: Prisma.TransactionClient): Promise<FilaModulo> {
+  await bloquearModulo(params.moduloId, tx)
+  const candado = candadoDelAlcance(alcanceDelLlamado(params))
+  if (candado) await candadoDeTransaccion(candado, tx)
+  // El modulo se lee DESPUES del candado: si lo desactivaron mientras tanto,
+  // se ve.
+  return exigirModulo(params.moduloId, tx)
 }
 
 /** Traduce el estado del TURNO al estado que ve el doctor en su agenda. */
@@ -639,6 +899,11 @@ function hashToken(token: string) {
 }
 
 // ---------------------------------------------------------------------------
+
+/** Dias enteros de `desde` a `hasta`, los dos AAAA-MM-DD. */
+function diasEntre(desde: string, hasta: string): number {
+  return Math.round((Date.parse(`${hasta}T00:00:00Z`) - Date.parse(`${desde}T00:00:00Z`)) / 86_400_000)
+}
 
 export class PrismaTurnoRepository implements TurnoRepository {
   // --- Catalogos ---
@@ -1032,6 +1297,32 @@ export class PrismaTurnoRepository implements TurnoRepository {
     ])
   }
 
+  async traerCitasDelUltimoDia(hoy: string, excluirProfesionales: string[] = []): Promise<{ desde: string | null; movidas: number }> {
+    const ultima = await prisma.cita.findFirst({
+      where: { fecha: { lt: hoy }, estado: { not: 'CANCELADA' }, profesionalId: { notIn: excluirProfesionales } },
+      orderBy: { fecha: 'desc' },
+      select: { fecha: true },
+    })
+    if (!ultima) return { desde: null, movidas: 0 }
+
+    // Se corre la hora por dias enteros: la cita de las 7:00 de ayer queda a
+    // las 7:00 de hoy, y `fecha` sigue diciendo el dia de Colombia.
+    const dias = diasEntre(ultima.fecha, hoy)
+    const movidas = await prisma.$executeRaw`
+      UPDATE "citas"
+      SET "fecha" = ${hoy},
+          "horaCita" = "horaCita" + make_interval(days => ${dias}::int),
+          "estado" = 'PROGRAMADA'
+      WHERE "fecha" = ${ultima.fecha} AND "estado" <> 'CANCELADA'
+        AND "profesionalId" <> ALL(${excluirProfesionales}::text[])`
+    return { desde: ultima.fecha, movidas }
+  }
+
+  async eliminarConsultoriosDeSimulacion(prefijo: string): Promise<number> {
+    const { count } = await prisma.modulo.deleteMany({ where: { nombre: { startsWith: prefijo } } })
+    return count
+  }
+
   // --- Admisiones ---
 
   /**
@@ -1054,8 +1345,9 @@ export class PrismaTurnoRepository implements TurnoRepository {
         fecha: fecha ?? diaColombia(ahoraISO()),
       },
       orderBy: { horaCita: 'asc' },
+      include: { turnos: { select: { codigo: true }, orderBy: { fechaGeneracion: 'desc' }, take: 1 } },
     })
-    return filas.map(aCita)
+    return filas.map((fila) => ({ ...aCita(fila), codigoTurno: fila.turnos[0]?.codigo ?? null }))
   }
 
   /**
@@ -1083,55 +1375,41 @@ export class PrismaTurnoRepository implements TurnoRepository {
     return filas.map(aCita)
   }
 
-  async registrarLlegada(citaId: string): Promise<Turno> {
-    const cita = await prisma.cita.findUnique({ where: { id: citaId } })
-    if (!cita) errorDeNegocio('La cita indicada no existe.')
+  async registrarLlegada(citaId: string): Promise<LlegadaRegistrada> {
+    const cita = await exigirCita(citaId)
     if (cita.estado === 'CANCELADA') errorDeNegocio('La cita fue cancelada.')
+
+    // El reintento de una llegada cuya respuesta se perdio: se devuelve el
+    // turno que ya genero, para que admisiones pueda dictar el comprobante.
+    const yaGenerado = cita.estado === 'PRESENTADO' ? await turnoDeLaCita(cita.id) : null
+    if (yaGenerado) return { turno: aTurno(yaGenerado), yaRegistrada: true }
     if (cita.estado !== 'PROGRAMADA') errorDeNegocio('Esta cita ya registro la llegada del paciente.')
 
-    // Ultima defensa: aunque la busqueda solo ofrezca las citas de hoy, el id
-    // llega en el cuerpo de la peticion. Una llegada registrada contra una cita
-    // de otro dia mete al paciente en la fila equivocada y deja el turno
-    // contado en el dia que no es.
-    const hoy = diaColombia(ahoraISO())
-    if (cita.fecha !== hoy) {
-      errorDeNegocio(
-        `Esta cita no es de hoy, es del ${cita.fecha}. Solo se puede registrar la llegada el mismo dia de la cita.`,
-      )
-    }
+    await validarCitaParaLlegada(cita)
+    return this.generarTurnoDeLaCita(cita)
+  }
 
-    // Ultima defensa, igual que la del dia: el doctor de la cita tiene que
-    // seguir activo. Si lo dieron de baja, su enlace de consultorio ya no sirve
-    // y no puede llamar a nadie: meter a este paciente en su fila seria dejarlo
-    // esperando un llamado que no va a llegar nunca, sin que ninguna pantalla
-    // lo advierta. Mejor que admisiones se entere ahora, con el paciente
-    // delante, y le resuelva la cita.
-    const profesional = await prisma.profesional.findUnique({ where: { id: cita.profesionalId } })
-    if (!profesional?.activo) {
-      errorDeNegocio(
-        'El profesional de esta cita ya no esta activo, asi que no podria llamar al paciente. Reasignale la cita a otro profesional.',
-      )
-    }
-
+  /**
+   * El paso a PRESENTADO y la creacion del turno, juntos o nada.
+   *
+   * El paso va condicionado al estado, no a "leerlo y luego escribirlo": si dos
+   * ventanillas registran al mismo paciente a la vez, solo una avanza. La otra
+   * espera a que la primera confirme, encuentra la cita ya PRESENTADO y
+   * devuelve el mismo turno en vez de generarle un segundo.
+   */
+  private async generarTurnoDeLaCita(cita: FilaCita): Promise<LlegadaRegistrada> {
     const servicio = await exigirServicio(cita.servicioId)
 
-    const turno = await prisma.$transaction(async (tx) => {
-      // El paso a PRESENTADO va condicionado al estado, no a "leerlo y luego
-      // escribirlo": si dos ventanillas registran al mismo paciente a la vez,
-      // solo una de las dos avanza y la otra recibe un aviso claro en vez de
-      // generarle un segundo turno.
-      const marcada = await tx.cita.updateMany({
-        where: { id: cita.id, estado: 'PROGRAMADA' },
-        data: { estado: 'PRESENTADO' },
-      })
-      if (marcada.count === 0) errorDeNegocio('Esta cita ya registro la llegada del paciente.')
+    return enTransaccion(async (tx) => {
+      const marcada = await tx.cita.updateMany({ where: { id: cita.id, estado: 'PROGRAMADA' }, data: { estado: 'PRESENTADO' } })
+      if (marcada.count === 0) return llegadaYaRegistrada(cita.id, tx)
 
-      return crearTurno(
+      const turno = await crearTurno(
         {
           servicioId: servicio.id,
           estado: 'EN_ESPERA',
           prioridad: 'NORMAL',
-          fecha: hoy,
+          fecha: cita.fecha,
           vecesLlamado: 0,
           citaId: cita.id,
           profesionalId: cita.profesionalId,
@@ -1141,9 +1419,8 @@ export class PrismaTurnoRepository implements TurnoRepository {
         servicio.prefijo,
         tx,
       )
+      return { turno: aTurno(turno), yaRegistrada: false }
     })
-
-    return aTurno(turno)
   }
 
   async comprobanteDeLlegada(turnoId: string): Promise<ComprobanteLlegada> {
@@ -1171,6 +1448,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
       moduloNombre,
       horaCita: iso(turno.horaCita),
       nombrePaciente: turno.nombrePaciente,
+      estadoTurno: turno.estado,
     }
   }
 
@@ -1180,16 +1458,14 @@ export class PrismaTurnoRepository implements TurnoRepository {
       errorDeNegocio('Este servicio atiende por cita: el turno se genera al registrar la llegada del paciente.')
     }
 
-    const turno = await crearTurno(
-      {
-        servicioId: servicio.id,
-        estado: 'EN_ESPERA',
-        prioridad: 'NORMAL',
-        fecha: diaColombia(ahoraISO()),
-        vecesLlamado: 0,
-      },
-      servicio.prefijo,
-      prisma,
+    // En transaccion: el candado del codigo (ver `siguienteCodigo`) dura lo
+    // que dura ella.
+    const turno = await enTransaccion((tx) =>
+      crearTurno(
+        { servicioId: servicio.id, estado: 'EN_ESPERA', prioridad: 'NORMAL', fecha: diaColombia(ahoraISO()), vecesLlamado: 0 },
+        servicio.prefijo,
+        tx,
+      ),
     )
     return aTurno(turno)
   }
@@ -1240,19 +1516,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
    * se borran: siguen en el historico con su estado real.
    */
   async listarPendientes(filtro: { servicioId?: string; profesionalId?: string }): Promise<Turno[]> {
-    const filas = await prisma.turno.findMany({
-      where: {
-        estado: 'EN_ESPERA',
-        fecha: diaColombia(ahoraISO()),
-        ...(filtro.servicioId ? { servicioId: filtro.servicioId } : {}),
-        ...(filtro.profesionalId ? { profesionalId: filtro.profesionalId } : {}),
-      },
-      orderBy: [{ prioridad: 'desc' }, { fechaGeneracion: 'asc' }],
-    })
-    // `prioridad: 'desc'` ya pone PRIORITARIO antes que NORMAL por el orden del
-    // enum, pero se reordena con la misma funcion que usa el resto del sistema
-    // para que la regla viva en un solo sitio.
-    return filas.map(aTurno).sort(ordenAtencion)
+    return pendientesDeHoy(filtro, prisma)
   }
 
   /**
@@ -1267,160 +1531,75 @@ export class PrismaTurnoRepository implements TurnoRepository {
     return Boolean(turno)
   }
 
-  /** El paciente que el profesional tiene AHORA al frente: su ultimo turno del dia LLAMADO o EN_ATENCION. */
-  async turnoEnAtencion(profesionalId: string, fecha: string): Promise<Turno | null> {
+  async turnoEsDeLaVentanilla(turnoId: string, funcionarioId: string): Promise<boolean> {
+    const turno = await prisma.turno.findFirst({
+      where: { id: turnoId, funcionarioId, servicio: { modoFila: 'COMPARTIDA' } },
+      select: { id: true },
+    })
+    return Boolean(turno)
+  }
+
+  /** El turno abierto que cumple el filtro, o null (ver el contrato). */
+  async turnoAbierto(filtro: FiltroTurnoAbierto, fecha: string): Promise<Turno | null> {
     const fila = await prisma.turno.findFirst({
-      where: { profesionalId, fecha, estado: { in: ['LLAMADO', 'EN_ATENCION'] } },
+      where: { ...filtro, fecha, estado: ABIERTOS },
       orderBy: { horaLlamado: 'desc' },
     })
     return fila ? aTurno(fila) : null
   }
 
-  async llamarSiguiente(params: {
-    servicioId?: string
-    profesionalId?: string
-    moduloId: string
-    funcionarioId: string
-  }): Promise<Turno | null> {
+  /**
+   * Llamar al siguiente, en una sola transaccion.
+   *
+   * Comprobar el turno abierto, reclamar al siguiente y cerrar el anterior van
+   * juntos o no van: antes eran pasos sueltos, y un fallo a mitad dejaba al
+   * paciente LLAMADO con el anterior todavia abierto. El aviso a la pantalla va
+   * DESPUES de confirmar (ver `avisarSinTumbar`).
+   */
+  async llamarSiguiente(params: PeticionDeLlamado): Promise<Turno | null> {
     if (!params.servicioId && !params.profesionalId) {
       errorDeNegocio('Debes indicar el servicio o el profesional.')
     }
 
-    const modulo = await exigirModulo(params.moduloId)
-    await validarModuloParaLlamar(modulo, params.profesionalId)
-
-    const candidatos = await this.listarPendientes({
-      servicioId: params.servicioId,
-      profesionalId: params.profesionalId,
+    const llamado = await enTransaccion(async (tx) => {
+      await validarModuloParaLlamar(await bloquearParaLlamar(params, tx), params, tx)
+      return llamarDentroDeTransaccion(params, tx)
     })
+    if (!llamado) return null
 
-    for (const candidato of candidatos) {
-      const instante = new Date()
-
-      // RECLAMAR, no "leer y escribir". El update solo prospera si el turno
-      // SIGUE en espera: si otro consultorio se lo llevo entre la consulta y
-      // esta linea, afecta cero filas y se pasa al siguiente de la cola. Sin
-      // esto, dos doctores pulsando "siguiente" a la vez llaman al mismo
-      // paciente, que es un error que en la sala de espera se ve y se oye.
-      const reclamado = await prisma.turno.updateMany({
-        where: { id: candidato.id, estado: 'EN_ESPERA' },
-        data: {
-          estado: 'LLAMADO',
-          moduloId: modulo.id,
-          funcionarioId: params.funcionarioId,
-          horaLlamado: instante,
-          vecesLlamado: { increment: 1 },
-        },
-      })
-      if (reclamado.count === 0) continue
-
-      // El PRIMER llamado se graba una sola vez y ya no se toca: es contra el
-      // que se mide la espera del paciente (ver `horaPrimerLlamado` en
-      // `types.ts`). Va aparte porque `updateMany` no sabe hacer "solo si esta
-      // vacio".
-      await prisma.turno.updateMany({
-        where: { id: candidato.id, horaPrimerLlamado: null },
-        data: { horaPrimerLlamado: instante },
-      })
-
-      // Un consultorio atiende a un paciente a la vez: al llamar al siguiente,
-      // el anterior de ese mismo modulo se da por atendido.
-      await cerrarAtencionAbierta(modulo.id, candidato.id, params.profesionalId, prisma)
-
-      const turno = await prisma.turno.findUniqueOrThrow({ where: { id: candidato.id } })
-      realtimeHub.publish({
-        tipo: 'turno.llamado',
-        casilla: await casillaDeTurno(turno),
-        repetido: false,
-      })
-      return aTurno(turno)
-    }
-
-    return null
+    // Si el anterior estaba en otro consultorio (el doctor se cambio de
+    // puerta), esa casilla del televisor queda libre.
+    await avisarModuloLiberado(llamado.moduloLiberado, llamado.turno.profesionalId)
+    await avisarLlamado(llamado.turno, false)
+    return aTurno(llamado.turno)
   }
 
-  async repetirLlamado(turnoId: string): Promise<Turno> {
+  async repetirLlamado(turnoId: string, opciones: { vecesLlamadoVisto?: number } = {}): Promise<AccionSobreTurno> {
     const turno = await exigirTurno(turnoId)
     if (!turno.moduloId) errorDeNegocio('El turno no ha sido llamado todavia.')
-
-    // Solo se repite el turno que se esta atendiendo AHORA. Repetir uno ya
-    // cerrado lo volvia a publicar en la pantalla: el consultorio mostraria a
-    // un paciente que ya se fue, tapando al que de verdad esta adentro.
-    if (turno.estado !== 'LLAMADO' && turno.estado !== 'EN_ATENCION') {
-      errorDeNegocio('Ese turno ya se cerro; no se puede volver a llamar.')
+    if (decidirRepeticion(aTurno(turno), opciones.vecesLlamadoVisto) === 'ya_aplicada') {
+      return { turno: aTurno(turno), yaAplicada: true }
     }
 
-    const instante = new Date()
-    const actualizado = await prisma.turno.update({
-      where: { id: turnoId },
-      data: {
-        vecesLlamado: { increment: 1 },
-        // Se actualiza el ULTIMO llamado (la pantalla ordena por el), nunca el
-        // primero: repetir el llamado no puede reescribir cuanto espero el
-        // paciente.
-        horaLlamado: instante,
-        horaPrimerLlamado: turno.horaPrimerLlamado ?? instante,
-      },
-    })
+    const hecho = await repetirCondicionado(turno, opciones.vecesLlamadoVisto)
+    const actualizado = await exigirTurno(turnoId)
+    if (hecho === 0) {
+      // Otro camino se adelanto: lo cerraron (409) o ya se repitio con este
+      // mismo conteo (el reintento simultaneo), y entonces no se vuelve a sonar.
+      decidirRepeticion(aTurno(actualizado), opciones.vecesLlamadoVisto)
+      return { turno: aTurno(actualizado), yaAplicada: true }
+    }
 
-    realtimeHub.publish({
-      tipo: 'turno.llamado',
-      casilla: await casillaDeTurno(actualizado),
-      repetido: true,
-    })
-    return aTurno(actualizado)
+    await avisarLlamado(actualizado, true)
+    return { turno: aTurno(actualizado), yaAplicada: false }
   }
 
-  async marcarAtendido(turnoId: string, cerradoPor?: string): Promise<Turno> {
-    const turno = await exigirTurno(turnoId)
-    exigirTurnoEnAtencion(turno, 'atendido')
-
-    const instante = new Date()
-    const actualizado = await prisma.$transaction(async (tx) => {
-      const fila = await tx.turno.update({
-        where: { id: turnoId },
-        data: {
-          estado: 'ATENDIDO',
-          horaAtencion: instante,
-          cerradoEn: instante,
-          cerradoPor: cerradoPor ?? null,
-          cierreAutomatico: false,
-        },
-      })
-      if (fila.citaId) {
-        await tx.cita.update({ where: { id: fila.citaId }, data: { estado: 'ATENDIDA' } })
-      }
-      return fila
-    })
-
-    if (actualizado.moduloId) {
-      realtimeHub.publish({ tipo: 'modulo.liberado', moduloId: actualizado.moduloId })
-    }
-    return aTurno(actualizado)
+  async marcarAtendido(turnoId: string, cerradoPor?: string): Promise<AccionSobreTurno> {
+    return cerrarTurno(turnoId, 'ATENDIDO', cerradoPor)
   }
 
-  async marcarAusente(turnoId: string, cerradoPor?: string): Promise<Turno> {
-    const turno = await exigirTurno(turnoId)
-    exigirTurnoEnAtencion(turno, 'ausente')
-
-    const actualizado = await prisma.turno.update({
-      where: { id: turnoId },
-      data: {
-        estado: 'AUSENTE',
-        // El ausente tambien deja hora: sin ella no se sabe cuando se le dio
-        // por ausente ni cuanto se le espero, y ante un reclamo no hay nada que
-        // mirar. `horaAtencion` se deja en null a proposito: a este paciente no
-        // se le atendio.
-        cerradoEn: new Date(),
-        cerradoPor: cerradoPor ?? null,
-        cierreAutomatico: false,
-      },
-    })
-
-    if (actualizado.moduloId) {
-      realtimeHub.publish({ tipo: 'modulo.liberado', moduloId: actualizado.moduloId })
-    }
-    return aTurno(actualizado)
+  async marcarAusente(turnoId: string, cerradoPor?: string): Promise<AccionSobreTurno> {
+    return cerrarTurno(turnoId, 'AUSENTE', cerradoPor)
   }
 
   // --- Pantalla de la sala de espera ---
@@ -1541,10 +1720,15 @@ export class PrismaTurnoRepository implements TurnoRepository {
         ? profesionales.filter((p) => profesionalesConCita.has(p.id))
         : profesionales
 
-    // El ultimo llamado de cada consultorio. La lista viene ascendente, asi que
-    // el que quede en el mapa es el mas reciente.
-    const ultimoPorModulo = new Map<string, FilaTurno>()
-    for (const turno of llamados) ultimoPorModulo.set(turno.moduloId!, turno)
+    // El ultimo llamado de cada PUESTO (consultorio + doctor): un consultorio
+    // puede tener varios doctores atendiendo a la vez. La lista viene
+    // ascendente, asi que el que quede en el mapa es el mas reciente.
+    const ultimoPorPuesto = new Map<string, FilaTurno>()
+    for (const turno of llamados) ultimoPorPuesto.set(puestoDe(turno.moduloId!, turno.profesionalId), turno)
+    const puestosPorModulo = new Map<string, FilaTurno[]>()
+    for (const turno of ultimoPorPuesto.values()) {
+      puestosPorModulo.set(turno.moduloId!, [...(puestosPorModulo.get(turno.moduloId!) ?? []), turno])
+    }
 
     /*
      * EL PROXIMO DE CADA DOCTOR.
@@ -1593,31 +1777,33 @@ export class PrismaTurnoRepository implements TurnoRepository {
       return proximoPorProfesional.get(doctor.id)?.codigo ?? null
     }
 
-    const casillas = modulos.map((modulo) => {
-      const turno = ultimoPorModulo.get(modulo.id)
-      const servicio = turno
-        ? servicioPorId.get(turno.servicioId)
-        : modulo.servicioId
-          ? servicioPorId.get(modulo.servicioId)
-          : null
-
-      if (turno) {
-        return {
-          moduloId: modulo.id,
-          moduloNombre: modulo.nombre,
-          servicioId: servicio?.id ?? '',
-          servicioNombre: servicio?.nombre ?? 'Ventanilla',
-          profesionalNombre: turno.profesionalId
-            ? (profesionalPorId.get(turno.profesionalId)?.nombre ?? null)
-            : null,
-          codigo: turno.codigo,
-          horaLlamado: iso(turno.horaLlamado),
-          vecesLlamado: turno.vecesLlamado,
-          siguienteCodigo: proximoDeLaCasilla(modulo.id),
-        }
+    const casillas = modulos.flatMap((modulo): CasillaPantalla[] => {
+      // Con alguien atendiendo: una casilla por doctor, en el orden en que llamaron.
+      const enCurso = puestosPorModulo.get(modulo.id) ?? []
+      if (enCurso.length > 0) {
+        return enCurso.map((turno) => {
+          const servicio = servicioPorId.get(turno.servicioId)
+          return {
+            moduloId: modulo.id,
+            puesto: puestoDe(modulo.id, turno.profesionalId),
+            moduloNombre: modulo.nombre,
+            servicioId: servicio?.id ?? '',
+            servicioNombre: servicio?.nombre ?? 'Ventanilla',
+            profesionalNombre: turno.profesionalId
+              ? (profesionalPorId.get(turno.profesionalId)?.nombre ?? null)
+              : null,
+            codigo: turno.codigo,
+            horaLlamado: iso(turno.horaLlamado),
+            vecesLlamado: turno.vecesLlamado,
+            siguienteCodigo: turno.profesionalId
+              ? (proximoPorProfesional.get(turno.profesionalId)?.codigo ?? null)
+              : proximoDeLaCasilla(modulo.id),
+          }
+        })
       }
 
-      return {
+      const servicio = modulo.servicioId ? servicioPorId.get(modulo.servicioId) : null
+      return [{
         moduloId: modulo.id,
         moduloNombre: modulo.nombre,
         servicioId: servicio?.id ?? '',
@@ -1636,7 +1822,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
         // quien es el proximo avisa al paciente de que se acerque antes de que
         // lo llamen, que es justo el rato que se pierde en la practica.
         siguienteCodigo: proximoDeLaCasilla(modulo.id),
-      }
+      }]
     })
 
     return { casillas, configuracion }
@@ -1664,6 +1850,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
           : {}),
       },
       orderBy: { fechaGeneracion: 'desc' },
+      take: filtro.limite,
     })
     return filas.map(aTurno)
   }
@@ -2064,7 +2251,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
 
     const token = randomBytes(32).toString('base64url')
 
-    const acceso = await prisma.$transaction(async (tx) => {
+    const acceso = await enTransaccion(async (tx) => {
       // Un doctor, un enlace activo: el anterior deja de servir en cuanto se
       // genera uno nuevo, para que no queden varias llaves vivas sueltas.
       // El anterior se revoca y ADEMAS pierde su copia cifrada en la misma
@@ -2130,10 +2317,15 @@ export class PrismaTurnoRepository implements TurnoRepository {
     }
     if (!acceso.profesional.activo) return null
 
-    await prisma.accesoProfesional.update({
-      where: { id: acceso.id },
-      data: { ultimoUsoEn: new Date() },
-    })
+    // Espaciado (ver `MS_ENTRE_APUNTES_DE_USO`): la condicion va en el propio
+    // update, asi dos peticiones a la vez no escriben las dos.
+    const haceUnRato = new Date(Date.now() - MS_ENTRE_APUNTES_DE_USO)
+    if (!acceso.ultimoUsoEn || acceso.ultimoUsoEn < haceUnRato) {
+      await prisma.accesoProfesional.updateMany({
+        where: { id: acceso.id, OR: [{ ultimoUsoEn: null }, { ultimoUsoEn: { lt: haceUnRato } }] },
+        data: { ultimoUsoEn: new Date() },
+      })
+    }
     return aProfesional(acceso.profesional)
   }
 
@@ -2242,6 +2434,7 @@ async function casillaDeTurno(turno: FilaTurno): Promise<CasillaPantalla> {
 
   return {
     moduloId: modulo?.id ?? '',
+    puesto: puestoDe(modulo?.id ?? '', turno.profesionalId),
     moduloNombre: modulo?.nombre ?? '',
     servicioId: servicio?.id ?? '',
     servicioNombre: servicio?.nombre ?? 'Ventanilla',

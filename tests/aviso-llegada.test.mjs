@@ -91,7 +91,7 @@ test('registrar la llegada avisa en vivo a la fila del profesional', async () =>
   const { doctor, cita } = await doctorConCitaDeHoy()
 
   const eventos = await eventosDurante(async () => {
-    const turno = await repo.registrarLlegada(cita.id)
+    const { turno } = await repo.registrarLlegada(cita.id)
     avisarFilaCambiada(turno)
   })
 
@@ -105,7 +105,7 @@ test('el aviso de llegada no lleva ningun dato del paciente', async () => {
   const { cita } = await doctorConCitaDeHoy()
 
   const eventos = await eventosDurante(async () => {
-    const turno = await repo.registrarLlegada(cita.id)
+    const { turno } = await repo.registrarLlegada(cita.id)
     avisarFilaCambiada(turno)
   })
 

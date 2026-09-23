@@ -57,7 +57,8 @@ import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Seleccion } from '@/components/admin/Campos'
 import CargarReporteCitas from './CargarReporteCitas'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
-import { useValorConRetraso } from '@/lib/hooks'
+import { celdaDeAgenda, instanteDeFranja, solicitudDeCita, type CeldaDeAgenda } from '@/lib/citas/cita-a-mano'
+import { useFechaQueSigueAHoy, useValorConRetraso } from '@/lib/hooks'
 import type {
   BloqueHorario,
   CitaEnHorario,
@@ -66,17 +67,6 @@ import type {
   FilaHorario,
   HorarioDia,
 } from '@/lib/turnos/types'
-
-/**
- * Instante ISO de una franja del dia EN COLOMBIA.
- *
- * El desfase va escrito a mano (-05:00) y no se usa la zona del navegador: es
- * la misma razon que en el servidor. Colombia no tiene horario de verano, y un
- * equipo configurado en otra zona agendaria la cita en el dia equivocado.
- */
-function instanteDeFranja(fecha: string, hora: string) {
-  return new Date(`${fecha}T${hora}:00-05:00`).toISOString()
-}
 
 /** "11/09, 09:00" — para mostrar de donde venia una cita que se movio. */
 function fechaYHora(iso: string) {
@@ -201,10 +191,10 @@ function jornadaDeAhora(): Jornada {
   return hora < 13 ? 'MANANA' : 'TARDE'
 }
 
-type CeldaSeleccionada = { profesionalId: string; profesionalNombre: string; hora: string }
-
 export default function AgendaCitasClient() {
   const [fecha, setFecha] = useState(hoyEnColombia)
+  // Si se estaba mirando hoy, pasa solo al dia siguiente a medianoche.
+  useFechaQueSigueAHoy(setFecha)
   const [horario, setHorario] = useState<HorarioDia | null>(null)
   const [cargando, setCargando] = useState(true)
 
@@ -243,7 +233,7 @@ export default function AgendaCitasClient() {
   const [jornadaActiva, setJornadaActiva] = useState<Jornada>(jornadaDeAhora)
 
   // Alta de cita sobre una franja libre.
-  const [celda, setCelda] = useState<CeldaSeleccionada | null>(null)
+  const [celda, setCelda] = useState<CeldaDeAgenda | null>(null)
   const [documento, setDocumento] = useState('')
   const [nombre, setNombre] = useState('')
   const [guardando, setGuardando] = useState(false)
@@ -409,10 +399,12 @@ export default function AgendaCitasClient() {
   )
 
   const abrirNueva = useCallback((profesionalId: string, profesionalNombre: string, hora: string) => {
-    setCelda({ profesionalId, profesionalNombre, hora })
+    // El dia queda fijado AHORA (ver `cita-a-mano.ts`): si el modal sigue
+    // abierto al pasar la medianoche, la cita no se muda sola al dia siguiente.
+    setCelda(celdaDeAgenda(fecha, { id: profesionalId, nombre: profesionalNombre }, hora))
     setDocumento('')
     setNombre('')
-  }, [])
+  }, [fecha])
 
   // Estables a proposito: la parrilla esta memoizada y una funcion nueva en
   // cada render la haria repintarse entera sin que nada haya cambiado.
@@ -441,12 +433,7 @@ export default function AgendaCitasClient() {
     try {
       await pedir('/api/turnos/agenda', {
         method: 'POST',
-        body: JSON.stringify({
-          documentoPaciente: documento,
-          nombrePaciente: nombre,
-          profesionalId: celda.profesionalId,
-          horaCita: instanteDeFranja(fecha, celda.hora),
-        }),
+        body: JSON.stringify(solicitudDeCita(celda, { documento, nombre })),
       })
       toast.success('Cita agendada', `${nombre} a las ${celda.hora} con ${celda.profesionalNombre}.`)
       setCelda(null)
@@ -885,7 +872,7 @@ export default function AgendaCitasClient() {
         onClose={() => setCelda(null)}
         title="Nueva cita"
         description={
-          celda ? `${celda.profesionalNombre} · ${fecha} a las ${celda.hora}` : undefined
+          celda ? `${celda.profesionalNombre} · ${celda.fecha} a las ${celda.hora}` : undefined
         }
       >
         <form onSubmit={agendar} className="space-y-4">

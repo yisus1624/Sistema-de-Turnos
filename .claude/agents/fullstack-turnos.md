@@ -154,8 +154,10 @@ condicionales, y si el componente supera ~120 lineas se parte en subcomponentes.
 Cuando implementes una vista nueva **no inventes estilo**: heredalo.
 
 1. **Primero busca el componente que ya existe.** El catalogo es real y esta en uso:
-   `Button`, `Card`, `Badge`, `DataTable`, `TablePagination`, `Modal`, `ConfirmModal`,
-   `BottomSheet`, `Form`, `EmptyState`, `Loader`, `PageHeader`, `StatCard`, `toast`.
+   `Button`, `Card`, `Badge`, `Modal`, `ConfirmModal`, `BottomSheet`, `EmptyState`,
+   `Loader`, `PageHeader`, `StatCard`, `toast`; para tablas de turnos, `TablaDeTurnos`
+   (`components/admin/TablaDeTurnos.tsx`), y para formularios, los campos de
+   `components/admin/Campos.tsx`.
    Si necesitas una variante, **extiende el componente** (nueva `variant`) en vez de crear un
    boton suelto con clases sueltas. Eso es OCP aplicado a la UI.
 2. **Colores solo desde los tokens.** Paleta `brand.50...950` de `tailwind.config.ts` y las

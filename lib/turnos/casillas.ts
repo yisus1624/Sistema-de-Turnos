@@ -85,3 +85,20 @@ export function modulosVisiblesEnPantalla(entrada: EntradaDePantalla): Set<strin
 
   return visibles
 }
+
+/**
+ * El puesto de una casilla en el televisor: consultorio + doctor.
+ *
+ * Cualquier consultorio puede ser un salon grande con varios doctores
+ * atendiendo a la vez, cada uno en su espacio y sin numero propio. El
+ * televisor les da una fila a cada uno; sin doctor (una ventanilla), el
+ * puesto es el consultorio.
+ */
+export function puestoDe(moduloId: string, profesionalId?: string | null): string {
+  return profesionalId ? `${moduloId}~${profesionalId}` : moduloId
+}
+
+/** La clave de una casilla en el televisor: su puesto o, si no lo trae, su consultorio. */
+export function claveDeCasilla(casilla: { moduloId: string; puesto?: string }): string {
+  return casilla.puesto ?? casilla.moduloId
+}

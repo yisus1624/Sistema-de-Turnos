@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from 'next'
 import { GeistSans } from 'geist/font/sans'
 import './globals.css'
 import 'sileo/styles.css'
-import Providers from './providers'
 import { Toaster } from 'sileo'
 
 const appUrl =
@@ -48,7 +47,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="es">
       <body className={GeistSans.className}>
-        <Providers>{children}</Providers>
+        {/*
+          Sin SessionProvider a proposito: ninguna pantalla usa `useSession` (la
+          sesion se lee en el servidor), y el proveedor pedia /api/auth/session
+          al cargar cada pagina y cada vez que una pestaña volvia a primer plano.
+          Con todo el hospital detras de una sola IP, esas peticiones se comian
+          el cupo de nginx que necesitaban los inicios de sesion de verdad.
+        */}
+        {children}
         <Toaster position="top-right" offset={{ top: 18, right: 18, bottom: 88 }} />
       </body>
     </html>

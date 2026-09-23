@@ -1,4 +1,5 @@
 import type {
+  AccionSobreTurno,
   ActividadCatalogo,
   AccesoProfesional,
   Cita,
@@ -8,10 +9,13 @@ import type {
   EstadisticasDia,
   EstadoPantalla,
   FiltroHistorico,
+  FiltroTurnoAbierto,
+  PeticionDeLlamado,
   HorarioDia,
   ItemAgendaProfesional,
   Jornada,
   JornadaDelDia,
+  LlegadaRegistrada,
   Modulo,
   Profesional,
   Servicio,
@@ -122,6 +126,21 @@ export interface TurnoRepository {
   reiniciarDatosDeHoy(): Promise<void>
 
   /**
+   * TEMPORAL (solo pruebas): si HOY no hay citas, pasa a hoy las del ultimo dia
+   * que tenga, a la misma hora y como PROGRAMADA. No crea ninguna cita: la
+   * simulacion de carga reusa las que ya existen. Devuelve de que dia vinieron
+   * y cuantas eran (`desde: null` si no hay ninguna en dias anteriores).
+   */
+  traerCitasDelUltimoDia(hoy: string, excluirProfesionales?: string[]): Promise<{ desde: string | null; movidas: number }>
+
+  /**
+   * TEMPORAL (solo pruebas): borra los consultorios que la simulacion crea
+   * para poder mostrar mas consultorios de los que hay (los que empiezan por
+   * `prefijo`). Devuelve cuantos borro.
+   */
+  eliminarConsultoriosDeSimulacion(prefijo: string): Promise<number>
+
+  /**
    * Busca las citas de UN DIA (por defecto hoy) por documento del paciente,
    * para que admisiones registre su llegada. Origen real: API del hospital
    * [PENDIENTE].
@@ -135,8 +154,14 @@ export interface TurnoRepository {
   /**
    * Registra que el paciente llego: la cita pasa a PRESENTADO y se genera su
    * turno EN_ESPERA en la fila del profesional correspondiente.
+   *
+   * IDEMPOTENTE. Si la cita ya registro su llegada hoy, devuelve el turno que
+   * genero (`yaRegistrada: true`) en vez de fallar: con la red lenta la
+   * respuesta de la primera vez se pierde, y sin esto admisiones nunca veia el
+   * comprobante que tiene que dictarle al paciente. Dos registros simultaneos
+   * de la misma cita generan un solo turno.
    */
-  registrarLlegada(citaId: string): Promise<Turno>
+  registrarLlegada(citaId: string): Promise<LlegadaRegistrada>
   /**
    * Turno, consultorio y doctor de un turno ya generado, para que admisiones
    * se lo dicte al paciente. Ver `ComprobanteLlegada`.
@@ -165,26 +190,54 @@ export interface TurnoRepository {
    */
   turnoEsDelProfesional(turnoId: string, profesionalId: string): Promise<boolean>
   /**
-   * El paciente que el profesional tiene al frente ahora mismo (su ultimo
-   * turno LLAMADO o EN_ATENCION del dia), o null.
+   * Si el turno es de una fila COMPARTIDA y lo llamo ese funcionario. Es lo que
+   * impide que una cuenta con la seccion del operador cierre o repita, por id,
+   * el turno de un doctor o el de otra ventanilla.
    */
-  turnoEnAtencion(profesionalId: string, fecha: string): Promise<Turno | null>
-  /** Llama el siguiente turno y lo asigna a un modulo (seccion 9). */
-  llamarSiguiente(params: {
-    servicioId?: string
-    profesionalId?: string
-    moduloId: string
-    funcionarioId: string
-  }): Promise<Turno | null>
-  /** Repite el llamado, incrementando el contador (seccion 12). */
-  repetirLlamado(turnoId: string): Promise<Turno>
+  turnoEsDeLaVentanilla(turnoId: string, funcionarioId: string): Promise<boolean>
+  /**
+   * El turno abierto (LLAMADO o EN_ATENCION) de ese dia que cumple el filtro,
+   * el ultimo llamado si hubiera varios, o null.
+   *
+   * Con `profesionalId` es el paciente que el doctor tiene al frente; con
+   * `moduloId` + `funcionarioId`, el de esa ventanilla. Es lo que deja a la
+   * pantalla recuperarlo si se perdio la respuesta del llamado o se recargo la
+   * pagina, en vez de que el siguiente llamado lo cierre solo.
+   */
+  turnoAbierto(filtro: FiltroTurnoAbierto, fecha: string): Promise<Turno | null>
+  /**
+   * Llama el siguiente turno y lo asigna a un modulo (seccion 9), cerrando el
+   * anterior de quien llama (ver `alcanceDelLlamado`).
+   *
+   * `turnoAbiertoEsperado` es el turno que la pantalla cree tener abierto (null
+   * si ninguno). Si el real es otro, lanza `ConflictoDeTurno` (409) con el real
+   * y no toca nada: es el doble clic o el reintento tras una respuesta perdida.
+   * El modulo ocupado por otra persona tambien es 409. Una ventanilla solo
+   * puede llamar filas compartidas desde un modulo compatible.
+   *
+   * Reclamar, cerrar el anterior y marcar el llamado van en una sola operacion
+   * atomica; el aviso a la pantalla se publica despues, y si falla no deshace
+   * el llamado.
+   */
+  llamarSiguiente(params: PeticionDeLlamado): Promise<Turno | null>
+  /**
+   * Repite el llamado, incrementando el contador (seccion 12).
+   *
+   * `vecesLlamadoVisto` es el conteo que tenia la pantalla: si el servidor ya
+   * va por delante, la repeticion ya se hizo y no vuelve a sonar.
+   */
+  repetirLlamado(turnoId: string, opciones?: { vecesLlamadoVisto?: number }): Promise<AccionSobreTurno>
   /**
    * Cierra el turno. `cerradoPor` es quien lo cierra (usuario del sistema, o el
    * id del profesional cuando entra por su enlace): sin el no se podia
    * responder quien dio por atendido o por ausente a un paciente.
+   *
+   * Condicionado al estado e idempotente: si ya esta en el estado pedido,
+   * responde `yaAplicada`; si se cerro de otra forma, `ConflictoDeTurno`. El
+   * turno y su cita cambian en la misma operacion atomica.
    */
-  marcarAtendido(turnoId: string, cerradoPor?: string): Promise<Turno>
-  marcarAusente(turnoId: string, cerradoPor?: string): Promise<Turno>
+  marcarAtendido(turnoId: string, cerradoPor?: string): Promise<AccionSobreTurno>
+  marcarAusente(turnoId: string, cerradoPor?: string): Promise<AccionSobreTurno>
 
   // --- Pantalla de la sala de espera (seccion 10) ---
   /**
@@ -301,4 +354,14 @@ export interface TurnoRepository {
  * rechazar exactamente las mismas vigencias.
  */
 export const MINUTOS_ACCESO_MINIMO = 15
+
+/**
+ * Cada cuanto se apunta el `ultimoUsoEn` de un enlace de consultorio.
+ *
+ * Se escribia en cada peticion del doctor, y su pantalla recarga con cada
+ * evento del hospital: una escritura en la base por recarga y por consultorio
+ * para un dato que la pantalla de enlaces muestra con precision de minutos.
+ * Las dos implementaciones espacian igual.
+ */
+export const MS_ENTRE_APUNTES_DE_USO = 5 * 60 * 1000
 export const MINUTOS_ACCESO_MAXIMO = 72 * 60

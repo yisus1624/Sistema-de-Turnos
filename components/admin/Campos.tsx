@@ -2,6 +2,7 @@
 
 /** Campos de formulario compartidos por los modulos de administracion. */
 
+import { useState } from 'react'
 import { cn } from '@/lib/ui'
 
 const base =
@@ -45,20 +46,41 @@ export function Interruptor({
   disabled,
 }: {
   activo: boolean
-  onChange: (valor: boolean) => void
+  /** Si devuelve una promesa, el interruptor queda bloqueado hasta que termine. */
+  onChange: (valor: boolean) => void | Promise<void>
   etiqueta: string
   disabled?: boolean
 }) {
+  // Bloqueado mientras se guarda: sin esto, un doble clic mandaba dos
+  // peticiones (y dos avisos) antes de que llegara la primera respuesta.
+  const [guardando, setGuardando] = useState(false)
+
+  async function alternar() {
+    if (guardando) return
+    setGuardando(true)
+    try {
+      await onChange(!activo)
+    } finally {
+      setGuardando(false)
+    }
+  }
+
   return (
     <button
       type="button"
       role="switch"
       aria-checked={activo}
       aria-label={etiqueta}
+      aria-busy={guardando}
+      // Mientras guarda se bloquea con `aria-disabled` y no con `disabled`: un
+      // boton deshabilitado suelta el foco, y quien usa teclado volvia al
+      // principio de la pagina tras cada cambio. El doble clic lo frena
+      // `alternar`.
+      aria-disabled={guardando || undefined}
       disabled={disabled}
-      onClick={() => onChange(!activo)}
+      onClick={() => void alternar()}
       className={cn(
-        'relative h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50',
+        'relative h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50 aria-disabled:opacity-50',
         activo ? 'bg-emerald-500' : 'bg-slate-300',
       )}
     >

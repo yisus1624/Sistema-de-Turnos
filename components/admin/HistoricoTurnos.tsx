@@ -11,27 +11,16 @@
  * retraso corto, ver `useValorConRetraso`).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ClockCounterClockwise } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
-import { Badge } from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
-import { hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
-import { useValorConRetraso } from '@/lib/hooks'
-import type { EstadoTurno, Modulo, Servicio, Turno } from '@/lib/turnos/types'
-
-const COLUMNAS = ['Turno', 'Servicio', 'Modulo', 'Generado', 'Llamado', 'Cierre', 'Llamadas', 'Estado']
-
-const etiquetaEstado: Record<EstadoTurno, { texto: string; tono: 'blue' | 'green' | 'amber' | 'red' | 'slate' }> = {
-  EN_ESPERA: { texto: 'En espera', tono: 'slate' },
-  LLAMADO: { texto: 'Llamado', tono: 'blue' },
-  EN_ATENCION: { texto: 'En atencion', tono: 'blue' },
-  ATENDIDO: { texto: 'Atendido', tono: 'green' },
-  AUSENTE: { texto: 'Ausente', tono: 'amber' },
-  CANCELADO: { texto: 'Cancelado', tono: 'red' },
-}
+import { Campo, Entrada, Seleccion, TablaSkeleton } from '@/components/admin/Campos'
+import { COLUMNAS_DE_TURNOS, ETIQUETA_ESTADO_TURNO, TablaDeTurnos } from '@/components/admin/TablaDeTurnos'
+import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { useCatalogosDeTurnos, useUltimaPeticion, useValorConRetraso } from '@/lib/hooks'
+import type { Turno } from '@/lib/turnos/types'
 
 type Filtros = {
   fecha: string
@@ -50,49 +39,45 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
     codigo: '',
   })
   const [turnos, setTurnos] = useState<Turno[]>([])
-  const [servicios, setServicios] = useState<Servicio[]>([])
-  const [modulos, setModulos] = useState<Modulo[]>([])
+  // Con reintento, y con aviso si todavia no se pudieron cargar (ver el hook).
+  const { servicios, modulos, fallo: falloCatalogos } = useCatalogosDeTurnos()
   const [buscando, setBuscando] = useState(true)
+  // Si el servidor recorto el resultado: aviso FIJO, no un toast que se va.
+  const [truncado, setTruncado] = useState(false)
 
-  useEffect(() => {
-    Promise.all([
-      pedir<{ servicios: Servicio[] }>('/api/turnos/servicios'),
-      pedir<{ modulos: Modulo[] }>('/api/turnos/modulos'),
-    ])
-      .then(([s, m]) => {
-        setServicios(s.servicios)
-        setModulos(m.modulos)
-      })
-      .catch(() => {})
-  }, [])
 
-  /** Filtros de la consulta que esta vigente ahora mismo (ver `buscar`). */
-  const consultaVigenteRef = useRef('')
+  // Descarta la respuesta de una consulta que los filtros ya reemplazaron: la
+  // mas lenta llegaba la ultima y ganaba, asi que la tabla podia quedar
+  // mostrando el resultado de un filtro anterior al que marca la pantalla.
+  const consultas = useUltimaPeticion()
 
   const buscar = useCallback(async (activos: Filtros) => {
+    const consulta = consultas.iniciar()
     setBuscando(true)
     const params = new URLSearchParams()
     for (const [clave, valor] of Object.entries(activos)) {
       if (valor) params.set(clave, valor)
     }
 
-    // Descarta la respuesta de una consulta que los filtros ya reemplazaron:
-    // la mas lenta llegaba la ultima y ganaba, asi que la tabla podia quedar
-    // mostrando el resultado de un filtro anterior al que marca la pantalla.
-    const consulta = params.toString()
-    consultaVigenteRef.current = consulta
-
     try {
-      const { turnos: lista } = await pedir<{ turnos: Turno[] }>(`/api/turnos/historico?${params}`)
-      if (consultaVigenteRef.current !== consulta) return
+      const { turnos: lista, truncado } = await pedir<{ turnos: Turno[]; truncado?: boolean }>(
+        `/api/turnos/historico?${params}`,
+        { signal: consulta.signal },
+      )
+      if (!consulta.esVigente()) return
       setTurnos(lista)
+      // El servidor devuelve como mucho un techo de filas: si hay mas, se dice.
+      setTruncado(Boolean(truncado))
     } catch (error) {
-      if (consultaVigenteRef.current !== consulta) return
+      if (!consulta.esVigente()) return
+      // Se vacia: la tabla vieja bajo el filtro nuevo se leia como su resultado.
+      setTurnos([])
+      setTruncado(false)
       toast.error('No se pudo consultar el historico', mensajeDeError(error))
     } finally {
-      if (consultaVigenteRef.current === consulta) setBuscando(false)
+      if (consulta.esVigente()) setBuscando(false)
     }
-  }, [])
+  }, [consultas])
 
   // El retraso evita lanzar una consulta con cada tecla del campo de turno.
   const filtrosDiferidos = useValorConRetraso(filtros)
@@ -100,18 +85,22 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
     buscar(filtrosDiferidos)
   }, [buscar, filtrosDiferidos])
 
-  const nombre = (lista: Array<{ id: string; nombre: string }>, id?: string | null) =>
-    id ? (lista.find((x) => x.id === id)?.nombre ?? '—') : '—'
-
   return (
     <div className="space-y-5">
+      {falloCatalogos ? (
+        <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+          No se pudieron cargar los servicios y consultorios: los nombres pueden salir vacios. Se sigue intentando solo.
+        </p>
+      ) : null}
       <Card>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <Campo etiqueta="Fecha">
             <Entrada
               type="date"
               value={filtros.fecha}
-              onChange={(e) => setFiltros((f) => ({ ...f, fecha: e.target.value }))}
+              // Borrar la fecha consulta hoy (lo que hace el servidor sin
+              // fecha), asi que el campo lo dice en vez de quedar en blanco.
+              onChange={(e) => setFiltros((f) => ({ ...f, fecha: e.target.value || hoyEnColombia() }))}
             />
           </Campo>
 
@@ -151,7 +140,7 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
               onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))}
             >
               <option value="">Todos</option>
-              {Object.entries(etiquetaEstado).map(([valor, { texto }]) => (
+              {Object.entries(ETIQUETA_ESTADO_TURNO).map(([valor, { texto }]) => (
                 <option key={valor} value={valor}>
                   {texto}
                 </option>
@@ -164,6 +153,7 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
               value={filtros.codigo}
               onChange={(e) => setFiltros((f) => ({ ...f, codigo: e.target.value.toUpperCase() }))}
               placeholder="A-025"
+              maxLength={20}
             />
           </Campo>
         </div>
@@ -173,9 +163,14 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
         <CardHeader>
           <CardTitle>Resultados ({turnos.length})</CardTitle>
         </CardHeader>
+        {truncado ? (
+          <p role="status" className="mx-5 mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            Hay mas turnos de los que se muestran. Acota las fechas o los filtros para verlos todos.
+          </p>
+        ) : null}
         <CardContent padded={false}>
           {buscando ? (
-            <TablaSkeleton columnas={COLUMNAS} />
+            <TablaSkeleton columnas={COLUMNAS_DE_TURNOS} />
           ) : turnos.length === 0 ? (
             <div className="p-5">
               <EmptyState
@@ -185,22 +180,7 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
               />
             </div>
           ) : (
-            <Tabla columnas={COLUMNAS}>
-              {turnos.map((turno) => (
-                <tr key={turno.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-semibold text-brand-950">{turno.codigo}</td>
-                  <td className="px-4 py-3 text-slate-600">{nombre(servicios, turno.servicioId)}</td>
-                  <td className="px-4 py-3 text-slate-600">{nombre(modulos, turno.moduloId)}</td>
-                  <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.fechaGeneracion)}</td>
-                  <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.horaLlamado)}</td>
-                  <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.horaAtencion)}</td>
-                  <td className="px-4 py-3 tabular-nums text-slate-600">{turno.vecesLlamado}</td>
-                  <td className="px-4 py-3">
-                    <Badge tone={etiquetaEstado[turno.estado].tono}>{etiquetaEstado[turno.estado].texto}</Badge>
-                  </td>
-                </tr>
-              ))}
-            </Tabla>
+            <TablaDeTurnos turnos={turnos} servicios={servicios} modulos={modulos} />
           )}
         </CardContent>
       </Card>

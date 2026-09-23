@@ -40,11 +40,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import EmptyState from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Loader'
 import { hoyEnColombia, horaCorta, pedir } from '@/lib/api/cliente'
-import { useRecargaEnVivo } from '@/lib/hooks'
+import type { ResultadoDeCarga } from '@/lib/api/reintento'
+import { useCargaConReintento, useLimitador, useRecargaEnVivo, useUltimaPeticion } from '@/lib/hooks'
+import { cambiaLosCatalogos } from '@/lib/realtime/canal'
 import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import { iconoDeServicio } from '@/components/ui/iconos-servicio'
 import { TarjetaIndicador, TONOS_INDICADOR } from '@/components/ui/TarjetaIndicador'
 import type { CasillaPantalla, Modulo, Profesional, Servicio, Turno } from '@/lib/turnos/types'
+
+/** Cada cuanto, como mucho, se vuelve a pedir el dia completo (ver `useLimitador`). */
+const MS_ENTRE_CARGAS_DEL_DIA = 5000
 
 type Resumen = { enEspera: number; llamados: number; atendidos: number; ausentes: number }
 
@@ -136,52 +141,106 @@ export default function TurnosEnCursoClient() {
    */
   const [actualizado, setActualizado] = useState<string | null>(null)
 
-  const cargar = useCallback(async () => {
-    try {
-      // La fecha se calcula en CADA carga, no al montar: esta pantalla vive
-      // abierta en el puesto del administrador y tiene que pasar sola al dia
-      // siguiente.
-      //
-      // Sin este filtro se pedia el historico COMPLETO y con el se calculaban
-      // los cuatro indicadores y la espera por servicio: los turnos de dias
-      // anteriores (incluidos los que quedaron colgados en EN_ESPERA al cerrar
-      // la jornada) sumaban en el tablero de "hoy".
-      const [pantalla, historico, catalogo, puntos, equipo] = await Promise.all([
-        pedir<{ casillas: CasillaPantalla[] }>('/api/turnos/pantalla'),
-        pedir<{ turnos: Turno[] }>(`/api/turnos/historico?fecha=${hoyEnColombia()}`),
-        pedir<{ servicios: Servicio[] }>('/api/turnos/servicios'),
-        // Los consultorios hacen falta para poner nombre al `moduloId` de cada
-        // turno: la pantalla de la sala de espera solo trae los que estan
-        // ocupados ahora mismo, y un turno ya cerrado o recien llamado puede
-        // apuntar a uno que ahi no figura.
-        pedir<{ modulos: Modulo[] }>('/api/turnos/modulos'),
-        // Y los profesionales, para el consultorio del que TODAVIA espera: su
-        // turno aun no tiene modulo asignado (se pone al llamarlo), pero en
-        // admisiones ya le dijeron a que consultorio va, el habitual de su
-        // doctor. Decirle uno distinto aqui seria contradecir su comprobante.
-        pedir<{ profesionales: Profesional[] }>('/api/turnos/profesionales'),
-      ])
-      setCasillas(pantalla.casillas)
-      setTurnos(historico.turnos)
-      setServicios(catalogo.servicios)
-      setModulos(puntos.modulos)
-      setProfesionales(equipo.profesionales)
-      setActualizado(new Date().toISOString())
-    } catch {
-      // Silencioso: es una vista que se refresca sola, no vale la pena molestar
-      // con un aviso en cada intento fallido.
-    } finally {
-      setCargando(false)
-    }
-  }, [])
+  // Solo cuenta la ultima carga de cada cosa: con varios eventos seguidos, una
+  // respuesta vieja que llegara tarde pisaria el tablero bueno.
+  const cargasDeCatalogos = useUltimaPeticion()
+
+  /**
+   * Los catalogos (servicios, consultorios, profesionales): al abrir, y de
+   * nuevo solo cuando cambian (ver `cambiaLosCatalogos`).
+   *
+   * Antes se volvian a pedir con cada evento del hospital, junto con el dia
+   * completo: en hora pico, varias veces por minuto para traer lo mismo. Y
+   * pedirlos solo al abrir tampoco bastaba: un servicio creado o una purga no
+   * aparecian hasta recargar la pagina.
+   */
+  const cargarCatalogos = useCallback(async (): Promise<ResultadoDeCarga> => {
+    const carga = cargasDeCatalogos.iniciar()
+    const { signal } = carga
+    const [catalogo, puntos, equipo] = await Promise.all([
+      pedir<{ servicios: Servicio[] }>('/api/turnos/servicios', { signal }),
+      // Los consultorios hacen falta para poner nombre al `moduloId` de cada
+      // turno: la pantalla de la sala de espera solo trae los que estan
+      // ocupados ahora mismo.
+      pedir<{ modulos: Modulo[] }>('/api/turnos/modulos', { signal }),
+      // Y los profesionales, para el consultorio del que TODAVIA espera: su
+      // turno aun no tiene modulo (se pone al llamarlo), pero en admisiones ya
+      // le dijeron a que consultorio va, el habitual de su doctor.
+      pedir<{ profesionales: Profesional[] }>('/api/turnos/profesionales', { signal }),
+    ])
+    if (!carga.esVigente()) return 'reemplazada'
+    setServicios(catalogo.servicios)
+    setModulos(puntos.modulos)
+    setProfesionales(equipo.profesionales)
+  }, [cargasDeCatalogos])
+
+  const cargasDeSala = useUltimaPeticion()
+  const cargasDelDia = useUltimaPeticion()
+
+  // Sin aviso si fallan: la hora de "actualizado" ya dice desde cuando no llega
+  // nada, y `useCargaConReintento` lo vuelve a intentar solo.
+
+  /** Quien esta en cada consultorio ahora: ligero (la sala va en cache), con cada evento. */
+  const cargarSala = useCallback(async (): Promise<ResultadoDeCarga> => {
+    const carga = cargasDeSala.iniciar()
+    const pantalla = await pedir<{ casillas: CasillaPantalla[] }>('/api/turnos/pantalla', { signal: carga.signal })
+    if (!carga.esVigente()) return 'reemplazada'
+    setCasillas(pantalla.casillas)
+  }, [cargasDeSala])
+
+  /**
+   * Los turnos del dia: la consulta pesada, limitada (ver abajo).
+   *
+   * La fecha se calcula en CADA carga, no al montar: esta pantalla vive abierta
+   * en el puesto del administrador y tiene que pasar sola al dia siguiente.
+   */
+  const cargarDia = useCallback(async (): Promise<ResultadoDeCarga> => {
+    const carga = cargasDelDia.iniciar()
+    const historico = await pedir<{ turnos: Turno[] }>(`/api/turnos/historico?fecha=${hoyEnColombia()}`, {
+      signal: carga.signal,
+    }).finally(() => setCargando(false))
+    if (!carga.esVigente()) return 'reemplazada'
+    setTurnos(historico.turnos)
+    setActualizado(new Date().toISOString())
+  }, [cargasDelDia])
+
+  // Las tres cargas se reintentan solas con espera creciente si fallan.
+  const recargarCatalogos = useCargaConReintento(cargarCatalogos)
+  const recargarSala = useCargaConReintento(cargarSala)
+  const recargarDia = useCargaConReintento(cargarDia)
+
+  /*
+   * EL DIA COMPLETO, COMO MUCHO CADA POCOS SEGUNDOS. Se pedia con cada rafaga
+   * de eventos, y en hora pico eso eran varias consultas pesadas por minuto
+   * desde este monitor. Ahora va limitado y la sala sigue al instante: quien
+   * esta en cada consultorio se ve en el acto, y las cuentas y las colas se
+   * ponen al dia a los pocos segundos, sin perder el ultimo cambio.
+   */
+  const limitadorDelDia = useLimitador(MS_ENTRE_CARGAS_DEL_DIA, () => void recargarDia())
+
+  const recargar = useCallback(() => {
+    void recargarSala()
+    limitadorDelDia.pedir()
+  }, [recargarSala, limitadorDelDia])
 
   useEffect(() => {
-    cargar()
-  }, [cargar])
+    void recargarCatalogos()
+  }, [recargarCatalogos])
 
-  // Eventos en vivo (agrupados): el mismo patron que usan el operador y el
-  // consultorio, en `useRecargaEnVivo`.
-  const conexion = useRecargaEnVivo(cargar)
+  useEffect(() => {
+    recargar()
+  }, [recargar])
+
+  // Eventos en vivo: `useRecargaEnVivo` ya junta en una sola recarga la rafaga
+  // de eventos que llegan casi a la vez (ver `MS_AGRUPAR_EVENTOS`).
+  const conexion = useRecargaEnVivo(recargar, {
+    alEvento: (evento) => {
+      if (cambiaLosCatalogos(evento)) void recargarCatalogos()
+    },
+    // Un servicio creado durante un corte no trae otro evento despues: sin
+    // esto, su tarjeta no aparecia hasta el siguiente cambio de configuracion.
+    alConectar: () => void recargarCatalogos(),
+  })
 
   const resumen = contar(turnos)
 

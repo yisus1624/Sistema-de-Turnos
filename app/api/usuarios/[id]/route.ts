@@ -25,7 +25,11 @@ const cambioSchema = z.object({
   rol: z.enum(['ADMINISTRADOR', 'OPERADOR']).optional(),
   area: z.string().trim().max(60).nullable().optional(),
   activo: z.boolean().optional(),
-  password: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.').optional(),
+  password: z
+    .string()
+    .min(8, 'La contrasena debe tener minimo 8 caracteres.')
+    .max(200, 'La contrasena es demasiado larga.')
+    .optional(),
   secciones: z
     .array(z.string())
     .refine((lista) => lista.every((href) => hrefsValidos.includes(href)), {

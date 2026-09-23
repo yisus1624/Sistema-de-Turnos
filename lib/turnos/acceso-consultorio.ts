@@ -50,12 +50,8 @@
 import { NextResponse } from 'next/server'
 import { turnoRepository } from './repositorio'
 import type { Profesional } from './types'
-import {
-  contextoPeticion,
-  limitarIntentos,
-  limpiarIntentos,
-  registrarEvento,
-} from '@/lib/seguridad/registro'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { apuntarFallo, limpiarIntentos, superaFallos } from '@/lib/seguridad/limitador'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { apiError } from '@/lib/permissions/session'
 
@@ -101,6 +97,12 @@ export class AccesoInvalidoError extends Error {
   }
 }
 
+/**
+ * La forma de un token de consultorio: 32 bytes al azar en base64url, que son
+ * 43 caracteres (ver `crearAccesoProfesional`).
+ */
+const FORMATO_DEL_TOKEN = /^[A-Za-z0-9_-]{43}$/
+
 /** Ventana de los dos limites. */
 const MS_VENTANA = 5 * 60 * 1000
 
@@ -111,12 +113,16 @@ const MS_VENTANA = 5 * 60 * 1000
 const INTENTOS_POR_TOKEN = 30
 
 /**
- * Fallos seguidos desde el MISMO origen. Mas alto que el del token porque
- * detras de una IP puede haber todo el hospital cuando hay proxy: tiene que
- * cortar la avalancha de tokens al azar sin estorbar a un consultorio que
- * reabre su enlace vencido un par de veces.
+ * Intentos fallidos desde el MISMO origen (IP) antes de frenarlo.
+ *
+ * AMPLIO A PROPOSITO. Todo el hospital sale por una sola IP, que cambia sin
+ * aviso y no se puede eximir: varias pestañas con enlaces vencidos recargando
+ * en distintos consultorios no pueden agotar el cupo de todos y dejar fuera al
+ * doctor con su enlace bueno. Quinientos en cinco minutos no los alcanza una
+ * oficina; si los alcanza quien prueba tokens al azar desde un mismo origen.
+ * El freno fino es el del propio enlace (`INTENTOS_POR_TOKEN`).
  */
-const INTENTOS_POR_IP = 50
+const INTENTOS_POR_IP = 500
 
 /** Deja el rechazo apuntado y devuelve el error, para lanzarlo en el sitio. */
 async function rechazoRegistrado(ip: string | null, motivo: string) {
@@ -139,23 +145,35 @@ export async function requireProfesionalPorToken(token: string): Promise<Profesi
   // cookie no llego. Se rechaza y se apunta, que es lo que hace falta.
   if (!token) throw await rechazoRegistrado(ip, 'sin_token')
 
-  if (ip && !limitarIntentos('acceso_consultorio_ip', ip, INTENTOS_POR_IP, MS_VENTANA).permitido) {
+  // El formato real antes que nada: el token llega de una cookie o de una
+  // cabecera y lo escribe quien quiera. Uno que no tiene la forma de los que
+  // genera el sistema no puede ser bueno, y asi no llega ni al limitador ni a
+  // la base, por largo que sea.
+  if (!FORMATO_DEL_TOKEN.test(token)) throw await rechazoRegistrado(ip, 'token_malformado')
+
+  // Se MIRA sin contar: solo cuentan los fallos (abajo). Un doctor usando su
+  // enlace bueno no gasta cupo de nadie.
+  if (ip && superaFallos('acceso_consultorio_ip', ip, INTENTOS_POR_IP)) {
     throw await rechazoRegistrado(ip, 'demasiados_intentos_ip')
   }
 
   // Un mismo enlace fallando una y otra vez si tiene tope: es el enlace vencido
   // que quedo abierto en un televisor o en la pestaña de alguien, recargando.
-  if (!limitarIntentos('token_consultorio', token, INTENTOS_POR_TOKEN, MS_VENTANA).permitido) {
+  if (superaFallos('token_consultorio', token, INTENTOS_POR_TOKEN)) {
     throw await rechazoRegistrado(ip, 'demasiados_intentos')
   }
 
   const profesional = await turnoRepository.validarAccesoProfesional(token)
-  if (!profesional) throw await rechazoRegistrado(ip, 'token_invalido')
+  if (!profesional) {
+    if (ip) apuntarFallo('acceso_consultorio_ip', ip, MS_VENTANA)
+    apuntarFallo('token_consultorio', token, MS_VENTANA)
+    throw await rechazoRegistrado(ip, 'token_invalido')
+  }
 
-  // Entro bien: se le borra la cuenta al enlace y al origen. Sin esto el limite
-  // cuenta peticiones en vez de fallos y el doctor se bloquea a si mismo.
+  // Entro bien: se le borra la cuenta al ENLACE. La del origen no: pueden ser
+  // fallos de otros enlaces, y borrarlos con cada acierto dejaba probar tokens
+  // al azar sin freno mientras algun doctor trabajara desde la misma IP.
   limpiarIntentos('token_consultorio', token)
-  if (ip) limpiarIntentos('acceso_consultorio_ip', ip)
 
   if (debeRegistrarAcceso(profesional.id)) {
     await registrarEvento({

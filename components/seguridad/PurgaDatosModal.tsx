@@ -22,6 +22,7 @@ import Modal from '@/components/ui/Modal'
 import { Campo, Entrada } from '@/components/admin/Campos'
 import { toast } from '@/components/ui/toast'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
+import { useUltimaPeticion, useValorConRetraso } from '@/lib/hooks'
 
 interface ResumenPurga {
   limite: string
@@ -49,21 +50,32 @@ export default function PurgaDatosModal({
    * Sin fecha, la calcula el servidor: la ventana de retencion es una regla del
    * dominio y no algo que cada pantalla deba volver a calcular por su cuenta.
    */
-  const contar = useCallback(async (fecha?: string) => {
-    setContando(true)
-    try {
-      const datos = await pedir<ResumenPurga>(
-        `/api/turnos/citas/purga${fecha ? `?limite=${fecha}` : ''}`,
-      )
-      setResumen(datos)
-      setLimite(datos.limite)
-    } catch (error) {
-      setResumen(null)
-      toast.error('No se pudo calcular la purga', mensajeDeError(error))
-    } finally {
-      setContando(false)
-    }
-  }, [])
+  // Solo cuenta la ultima vista previa: una respuesta vieja que llegara tarde
+  // mostraria el alcance de una fecha que ya no es la elegida, y se confirmaria
+  // la purga creyendo que toca otra cantidad.
+  const vistasPrevias = useUltimaPeticion()
+
+  const contar = useCallback(
+    async (fecha?: string) => {
+      const vista = vistasPrevias.iniciar()
+      setContando(true)
+      try {
+        const datos = await pedir<ResumenPurga>(`/api/turnos/citas/purga${fecha ? `?limite=${fecha}` : ''}`, {
+          signal: vista.signal,
+        })
+        if (!vista.esVigente()) return
+        setResumen(datos)
+        setLimite(datos.limite)
+      } catch (error) {
+        if (!vista.esVigente()) return
+        setResumen(null)
+        toast.error('No se pudo calcular la purga', mensajeDeError(error))
+      } finally {
+        if (vista.esVigente()) setContando(false)
+      }
+    },
+    [vistasPrevias],
+  )
 
   useEffect(() => {
     if (!abierto) return
@@ -71,6 +83,15 @@ export default function PurgaDatosModal({
     setResumen(null)
     contar()
   }, [abierto, contar])
+
+  // La vista previa se pide cuando la fecha deja de cambiar, no en cada tecla:
+  // escribir una fecha a mano disparaba una consulta por digito y agotaba el
+  // cupo de consultas caras antes de llegar a purgar.
+  const limiteDiferido = useValorConRetraso(limite, 500)
+  useEffect(() => {
+    if (!abierto || !limiteDiferido || limiteDiferido === resumen?.limite) return
+    contar(limiteDiferido)
+  }, [abierto, limiteDiferido, resumen?.limite, contar])
 
   async function purgar() {
     if (!resumen) return
@@ -115,7 +136,6 @@ export default function PurgaDatosModal({
             onChange={(e) => {
               setLimite(e.target.value)
               setConfirmacion('')
-              if (e.target.value) contar(e.target.value)
             }}
           />
         </Campo>

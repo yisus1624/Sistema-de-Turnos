@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import {
   MS_SILENCIO_MAXIMO,
@@ -9,6 +9,18 @@ import {
   interpretarMensaje,
 } from '@/lib/realtime/canal'
 import type { EventoTurno } from '@/lib/realtime/hub'
+import { crearUltimaPeticion, type UltimaPeticion } from '@/lib/api/ultima-peticion'
+import { crearLimitador, type Limitador } from '@/lib/api/limitador'
+import {
+  cargarConReintento,
+  crearReintento,
+  esperaDeReintento,
+  type Reintento,
+  type ResultadoDeCarga,
+} from '@/lib/api/reintento'
+import { fechaTrasCambioDeDia } from '@/lib/api/cambio-de-dia'
+import { hoyEnColombia, pedir } from '@/lib/api/cliente'
+import type { Modulo, Servicio } from '@/lib/turnos/types'
 
 /**
  * Devuelve `valor`, pero solo despues de `ms` sin que vuelva a cambiar.
@@ -41,11 +53,25 @@ export type EstadoConexionEnVivo = 'en-vivo' | 'reconectando'
 type CallbacksEnVivo = {
   recargar: () => void
   interesa?: (evento: EventoTurno) => boolean
+  alEvento?: (evento: EventoTurno) => void
+  alConectar?: () => void
 }
 
 type OpcionesRecargaEnVivo = {
   /** Que eventos disparan la recarga. Por defecto, todos. */
   interesa?: (evento: EventoTurno) => boolean
+  /**
+   * Cada evento de datos tal cual llega, antes de juntarlos en una recarga:
+   * para la pantalla que tiene que reaccionar a un tipo concreto (recargar
+   * los catalogos, por ejemplo) sin abrir una segunda conexion.
+   */
+  alEvento?: (evento: EventoTurno) => void
+  /**
+   * Cada vez que el canal (re)conecta, ademas de `recargar`: para lo que solo
+   * se recarga con eventos concretos (los catalogos) y se pierde si ese evento
+   * llego durante el corte.
+   */
+  alConectar?: () => void
   /** Se apaga mientras la pantalla no tenga sentido (sin servicio elegido, enlace vencido). */
   activo?: boolean
 }
@@ -72,26 +98,29 @@ function crearEsperaRearmable(ms: number, alCumplirse: () => void) {
     }, ms)
   }
 
-  return { rearmar, cancelar }
+  // Arma solo si no hay una cuenta en curso: una sucesion de avisos (los
+  // reintentos fallidos del navegador) no puede aplazar el plazo para siempre.
+  const armarSiNoEsta = () => {
+    if (!temporizador) rearmar()
+  }
+
+  return { rearmar, cancelar, armarSiNoEsta }
 }
 
 /**
- * Avisa cuando el navegador vuelve de un hueco en el que pudo perderse eventos:
- * la pestaña estaba dormida o el equipo suspendido, o se cayo la red.
+ * Cuanto se espera antes de decir "reconectando" tras un corte del canal.
+ *
+ * El servidor cierra cada conexion cada pocos minutos a proposito (el
+ * reciclado, ver `lib/realtime/conexion.ts`) y el navegador la reabre en un
+ * segundo. Avisar en el acto ponia el semaforo en rojo en TODAS las pantallas
+ * cada 4-6 minutos, y el personal aprendia a ignorarlo justo cuando importa.
+ * Si en este rato no vuelve a abrir, entonces si es un corte y se avisa.
  */
-function alVolverDeUnHueco(resincronizar: () => void): () => void {
-  const siEstaVisible = () => {
-    if (document.visibilityState === 'visible') resincronizar()
-  }
+const MS_GRACIA_RECONEXION = 4000
 
-  document.addEventListener('visibilitychange', siEstaVisible)
-  window.addEventListener('online', resincronizar)
-
-  return () => {
-    document.removeEventListener('visibilitychange', siEstaVisible)
-    window.removeEventListener('online', resincronizar)
-  }
-}
+// La espera de reintento vive en `lib/api/reintento.ts`: la comparten el canal
+// y el reintento de las cargas. Se reexporta para quien ya la importaba de aqui.
+export { esperaDeReintento }
 
 export type ManejoDeCanal = {
   alConectar: () => void
@@ -121,19 +150,45 @@ export type ManejoDeCanal = {
  */
 export function crearCanalEnVivo(manejo: ManejoDeCanal) {
   let eventos: EventSource | null = null
+  let intentosFallidos = 0
+  let reintento: ReturnType<typeof setTimeout> | null = null
 
   const vigia = crearEsperaRearmable(MS_SILENCIO_MAXIMO, () => {
     manejo.alPerderse()
     reconectar()
   })
+  const avisoDePerdida = crearEsperaRearmable(MS_GRACIA_RECONEXION, manejo.alPerderse)
+
+  function cancelarReintento() {
+    if (reintento) clearTimeout(reintento)
+    reintento = null
+  }
 
   function abrir() {
     const canal = new EventSource(RUTA_EVENTOS_EN_VIVO)
     canal.onopen = () => {
+      intentosFallidos = 0
+      avisoDePerdida.cancelar()
       vigia.rearmar()
       manejo.alConectar()
     }
-    canal.onerror = () => manejo.alPerderse()
+    canal.onerror = () => {
+      // Con gracia: el reciclado del servidor reabre en un segundo y no es un
+      // corte (ver `MS_GRACIA_RECONEXION`).
+      avisoDePerdida.armarSiNoEsta()
+      // Ante un corte de red el navegador reintenta solo (`CONNECTING`). Pero
+      // si el servidor contesto con error (502/503 al reiniciar o desplegar,
+      // o el aforo lleno), `EventSource` se CIERRA PARA SIEMPRE y no vuelve a
+      // intentarlo: la pantalla quedaba muda hasta que el vigia despertara,
+      // mas de un minuto despues. Se reprograma aqui con espera creciente.
+      if (canal.readyState === EventSource.CLOSED && eventos === canal && !reintento) {
+        const espera = esperaDeReintento(intentosFallidos++)
+        reintento = setTimeout(() => {
+          reintento = null
+          reconectar()
+        }, espera)
+      }
+    }
     canal.onmessage = (mensaje: MessageEvent<string>) => {
       vigia.rearmar()
       const recibido = interpretarMensaje(mensaje.data)
@@ -144,15 +199,41 @@ export function crearCanalEnVivo(manejo: ManejoDeCanal) {
     vigia.rearmar()
   }
 
-  function cerrar() {
+  function soltar() {
     vigia.cancelar()
+    avisoDePerdida.cancelar()
+    cancelarReintento()
     eventos?.close()
     eventos = null
   }
 
   function reconectar() {
-    cerrar()
+    soltar()
     abrir()
+  }
+
+  /*
+   * Al volver la red, o al volver la pestaña/el televisor a primer plano (salvapantallas,
+   * otra entrada HDMI, equipo suspendido), no se espera al vigia: el socket
+   * viejo casi seguro murio durante el hueco aunque el navegador diga `OPEN`.
+   * Se rehace ya, y al abrir, `alConectar` pone los datos al dia.
+   */
+  const alVolverLaRed = () => {
+    intentosFallidos = 0
+    reconectar()
+  }
+  const alVolverAPrimerPlano = () => {
+    if (document.visibilityState !== 'visible') return
+    if (eventos?.readyState === EventSource.OPEN) manejo.alConectar()
+    else alVolverLaRed()
+  }
+  window.addEventListener('online', alVolverLaRed)
+  document.addEventListener('visibilitychange', alVolverAPrimerPlano)
+
+  function cerrar() {
+    window.removeEventListener('online', alVolverLaRed)
+    document.removeEventListener('visibilitychange', alVolverAPrimerPlano)
+    soltar()
   }
 
   abrir()
@@ -176,17 +257,18 @@ function engancharRecargaEnVivo(
     alConectar: () => {
       avisarConexion('en-vivo')
       resincronizar()
+      ultimo.current.alConectar?.()
     },
     alPerderse: () => avisarConexion('reconectando'),
     alCambiarLosDatos: (evento) => {
+      ultimo.current.alEvento?.(evento)
       if (leInteresa(evento)) agrupador.rearmar()
     },
   })
 
-  const dejarDeEscuchar = alVolverDeUnHueco(resincronizar)
-
+  // Volver de un hueco (red, pestaña dormida) ya lo cubre el propio canal: se
+  // rehace o se da por conectado, y `alConectar` resincroniza.
   return () => {
-    dejarDeEscuchar()
     agrupador.cancelar()
     canal.cerrar()
   }
@@ -211,14 +293,14 @@ export function useRecargaEnVivo(
   recargar: () => void,
   opciones: OpcionesRecargaEnVivo = {},
 ): EstadoConexionEnVivo {
-  const { activo = true, interesa } = opciones
+  const { activo = true, interesa, alEvento, alConectar } = opciones
   const [conexion, setConexion] = useState<EstadoConexionEnVivo>('reconectando')
   // Los callbacks se leen desde una ref para que un `interesa` escrito en linea
   // no vuelva a abrir la conexion SSE en cada render.
-  const ultimo = useRef<CallbacksEnVivo>({ recargar, interesa })
+  const ultimo = useRef<CallbacksEnVivo>({ recargar, interesa, alEvento, alConectar })
 
   useEffect(() => {
-    ultimo.current = { recargar, interesa }
+    ultimo.current = { recargar, interesa, alEvento, alConectar }
   })
 
   useEffect(() => {
@@ -232,4 +314,155 @@ export function useRecargaEnVivo(
   }, [activo])
 
   return conexion
+}
+
+/**
+ * "La ultima peticion gana" para las recargas de una pantalla (ver
+ * `lib/api/ultima-peticion.ts`). La misma instancia en todos los renders, y la
+ * peticion en curso se cancela al desmontar.
+ */
+export function useUltimaPeticion(): UltimaPeticion {
+  const [peticiones] = useState(crearUltimaPeticion)
+  useEffect(() => () => peticiones.cancelar(), [peticiones])
+  return peticiones
+}
+
+/**
+ * Como mucho una carga cada `msMinimo` (ver `lib/api/limitador.ts`): la misma
+ * instancia en todos los renders, siempre con la `cargar` mas reciente, y lo
+ * pendiente se cancela al desmontar.
+ */
+export function useLimitador(msMinimo: number, cargar: () => void): Limitador {
+  const ultima = useRef(cargar)
+  useEffect(() => {
+    ultima.current = cargar
+  })
+  // Mismo patron que `useReintento`: se crea al montar y se entrega una
+  // fachada estable, para no leer refs durante el render.
+  const actual = useRef<Limitador | null>(null)
+  useEffect(() => {
+    const limitador = crearLimitador(msMinimo, () => ultima.current())
+    actual.current = limitador
+    return () => limitador.cancelar()
+  }, [msMinimo])
+  const [fachada] = useState<Limitador>(() => ({
+    pedir: () => actual.current?.pedir(),
+    cancelar: () => actual.current?.cancelar(),
+  }))
+  return fachada
+}
+
+/**
+ * Reintento autonomo de una carga (ver `lib/api/reintento.ts`): la misma
+ * instancia en todos los renders, y lo pendiente se cancela al desmontar.
+ */
+export function useReintento(): Reintento {
+  // Uno NUEVO por montaje: `cancelar()` es definitivo, y en desarrollo React
+  // monta, desmonta y vuelve a montar; reusar el cancelado dejaria la pantalla
+  // sin reintento.
+  const actual = useRef<Reintento | null>(null)
+  useEffect(() => {
+    const reintento = crearReintento()
+    actual.current = reintento
+    return () => reintento.cancelar()
+  }, [])
+  const [fachada] = useState<Reintento>(() => ({
+    programar: (accion) => actual.current?.programar(accion),
+    exito: () => actual.current?.exito(),
+    cancelar: () => actual.current?.cancelar(),
+  }))
+  return fachada
+}
+
+/**
+ * Una carga de pantalla que se reintenta sola si falla.
+ *
+ * `cargar` pinta lo que corresponda (datos o aviso) y LANZA si fallo; este
+ * hook decide si reintentar: si el fallo es pasajero, vuelve a cargar con
+ * espera creciente hasta lograrlo, sin depender de que llegue un evento del
+ * canal. Un 401/403 no se reintenta (ver `esReintentable`).
+ *
+ * Devuelve la funcion con la que la pantalla recarga en todos lados (al
+ * montar, en cada evento, tras cada accion), estable entre renders.
+ */
+export function useCargaConReintento(
+  cargar: () => Promise<ResultadoDeCarga>,
+  opciones: { omitirReintento?: () => boolean } = {},
+): () => Promise<void> {
+  const ultima = useRef({ cargar, omitir: opciones.omitirReintento })
+  useEffect(() => {
+    ultima.current = { cargar, omitir: opciones.omitirReintento }
+  })
+
+  const reintento = useReintento()
+
+  const recargar = useCallback(async function recargarConReintento(): Promise<void> {
+    await cargarConReintento(() => ultima.current.cargar(), reintento, () => {
+      // Hay una accion en curso (el doctor esta llamando o cerrando): esa accion
+      // recarga al terminar, y un reintento en medio le pisaria la pantalla.
+      if (ultima.current.omitir?.()) return
+      void recargarConReintento()
+    })
+  }, [reintento])
+
+  return recargar
+}
+
+/** Cada cuanto se mira si ya cambio el dia en Colombia. */
+const MS_REVISAR_CAMBIO_DE_DIA = 60_000
+
+/**
+ * Hace que una fecha que estaba en "hoy" pase sola al dia siguiente a
+ * medianoche (ver `fechaTrasCambioDeDia`). La fecha que se eligio a mano no se
+ * toca.
+ */
+export function useFechaQueSigueAHoy(setFecha: (cambiar: (actual: string) => string) => void) {
+  useEffect(() => {
+    let hoy = hoyEnColombia()
+    const id = setInterval(() => {
+      const nuevo = hoyEnColombia()
+      if (nuevo === hoy) return
+      const anterior = hoy
+      hoy = nuevo
+      setFecha((actual) => fechaTrasCambioDeDia(actual, anterior, nuevo))
+    }, MS_REVISAR_CAMBIO_DE_DIA)
+    return () => clearInterval(id)
+  }, [setFecha])
+}
+
+/**
+ * Servicios y modulos para los filtros de las pantallas de consulta (reportes,
+ * historico).
+ *
+ * Antes cada pantalla los pedia por su cuenta y un fallo se tragaba en silencio:
+ * los selectores quedaban vacios y la tabla (y el PDF) ponian "—" como nombre
+ * de cada consultorio, sin ningun aviso. Ahora se reintenta solo y `fallo`
+ * dice si todavia no se pudieron cargar, para mostrarlo.
+ */
+export function useCatalogosDeTurnos() {
+  const [servicios, setServicios] = useState<Servicio[]>([])
+  const [modulos, setModulos] = useState<Modulo[]>([])
+  const [fallo, setFallo] = useState(false)
+
+  const cargar = useCallback(async () => {
+    try {
+      const [s, m] = await Promise.all([
+        pedir<{ servicios: Servicio[] }>('/api/turnos/servicios'),
+        pedir<{ modulos: Modulo[] }>('/api/turnos/modulos'),
+      ])
+      setServicios(s.servicios)
+      setModulos(m.modulos)
+      setFallo(false)
+    } catch (error) {
+      setFallo(true)
+      throw error
+    }
+  }, [])
+
+  const recargar = useCargaConReintento(cargar)
+  useEffect(() => {
+    void recargar()
+  }, [recargar])
+
+  return { servicios, modulos, fallo }
 }

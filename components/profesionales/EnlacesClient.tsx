@@ -66,6 +66,7 @@ import { TarjetaIndicador, TONOS_INDICADOR } from '@/components/ui/TarjetaIndica
 import { iconoDeServicio } from '@/components/ui/iconos-servicio'
 import { Campo, Entrada, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { useFechaQueSigueAHoy } from '@/lib/hooks'
 import type {
   AccesoProfesional,
   Jornada,
@@ -247,6 +248,9 @@ export default function EnlacesClient() {
    * ficha es lo que ese medico SUELE hacer, y no sabe si hoy vino.
    */
   const [fecha, setFecha] = useState(hoyEnColombia)
+  // Si se estaba mirando hoy, pasa solo al dia siguiente a medianoche: los
+  // enlaces se reparten cada mañana con la pantalla abierta desde la vispera.
+  useFechaQueSigueAHoy(setFecha)
   const [jornadasDelDia, setJornadasDelDia] = useState<Map<string, JornadaDelDia>>(new Map())
   const [cargandoJornadas, setCargandoJornadas] = useState(true)
   const [errorJornadas, setErrorJornadas] = useState(false)
@@ -623,12 +627,19 @@ export default function EnlacesClient() {
     }
   }
 
+  // El "Copiado" se apaga solo a los 2 s; el temporizador se limpia si se
+  // cierra la pantalla antes.
+  useEffect(() => {
+    if (!copiado) return
+    const id = setTimeout(() => setCopiado(false), 2000)
+    return () => clearTimeout(id)
+  }, [copiado])
+
   async function copiarEnlace() {
     if (!enlaceGenerado) return
     try {
       await navigator.clipboard.writeText(enlaceGenerado.url)
       setCopiado(true)
-      setTimeout(() => setCopiado(false), 2000)
     } catch {
       toast.error('No se pudo copiar', 'Selecciona y copia el enlace manualmente.')
     }

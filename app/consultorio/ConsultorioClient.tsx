@@ -27,7 +27,9 @@ import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Seleccion } from '@/components/admin/Campos'
 import { esRechazoDeAcceso, hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
-import { useRecargaEnVivo } from '@/lib/hooks'
+import type { ResultadoDeCarga } from '@/lib/api/reintento'
+import { useCargaConReintento, useFechaQueSigueAHoy, useRecargaEnVivo, useUltimaPeticion } from '@/lib/hooks'
+import { avisoDePacienteYaLlamado, llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
 import { afectaALaFila } from '@/lib/realtime/canal'
 import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import { Isotipo, NOMBRE_INSTITUCION } from '@/components/brand/Marca'
@@ -120,6 +122,8 @@ export default function ConsultorioClient() {
   // revisar otro dia sin que eso afecte a quien puede llamar (eso siempre
   // sale de los turnos EN_ESPERA de HOY, via `pendientes`).
   const [fecha, setFecha] = useState(hoyEnColombia())
+  // Si se estaba mirando hoy, pasa solo al dia siguiente a medianoche.
+  useFechaQueSigueAHoy(setFecha)
   const [accion, setAccion] = useState<Accion>(null)
   // El refresco automatico lee la accion en curso desde una ref: si dependiera
   // del estado, el intervalo se recrearia en cada clic.
@@ -129,7 +133,13 @@ export default function ConsultorioClient() {
     accionRef.current = accion
   }, [accion])
 
-  const cargarEstado = useCallback(async () => {
+  // Solo cuenta la ultima recarga: el canal en vivo, el final de cada accion y
+  // el cambio de fecha recargan a la vez, y una respuesta vieja que llegara
+  // tarde pintaria "sin paciente" encima del paciente real.
+  const recargas = useUltimaPeticion()
+
+  const cargarEstado = useCallback(async (): Promise<ResultadoDeCarga> => {
+    const recarga = recargas.iniciar()
     try {
       const data = await pedir<{
         profesional: Profesional
@@ -137,7 +147,8 @@ export default function ConsultorioClient() {
         pendientes: Turno[]
         turnoActual: Turno | null
         agenda: ItemAgendaProfesional[]
-      }>(`/api/consultorio?fecha=${fecha}`, SIN_LOGIN)
+      }>(`/api/consultorio?fecha=${fecha}`, { ...SIN_LOGIN, signal: recarga.signal })
+      if (!recarga.esVigente()) return 'reemplazada'
 
       setProfesional(data.profesional)
       setModulos(data.modulos)
@@ -156,27 +167,40 @@ export default function ConsultorioClient() {
       setTokenInvalido(false)
       setSinConexion(false)
     } catch (error) {
+      if (!recarga.esVigente()) return 'reemplazada'
       // SOLO un rechazo real de acceso vence el enlace. Antes cualquier fallo
       // lo daba por vencido: un microcorte de wifi le mostraba al doctor "este
       // enlace ya no es valido" y ademas apagaba el refresco para siempre, con
       // el enlace bueno en la mano y pacientes esperando.
       if (esRechazoDeAcceso(error)) setTokenInvalido(true)
       else setSinConexion(true)
+      // Se relanza para que `useCargaConReintento` decida si reintentar: un
+      // fallo pasajero se reintenta solo; un enlace vencido, no.
+      throw error
     } finally {
-      setCargando(false)
+      if (recarga.esVigente()) setCargando(false)
     }
-  }, [fecha])
+  }, [fecha, recargas])
+
+  // La carga se reintenta sola con espera creciente si falla (429, 500, sin
+  // red), sin esperar a que llegue un evento que interese a este doctor.
+  const recargar = useCargaConReintento(cargarEstado, {
+    // Durante una accion del doctor no se reintenta: la accion recarga al
+    // terminar, y una recarga en medio le pisaria la pantalla.
+    omitirReintento: () => accionRef.current !== null,
+  })
 
   useEffect(() => {
-    cargarEstado()
-  }, [cargarEstado])
+    void recargar()
+  }, [cargarEstado, recargar])
 
   const refrescarSiNoHayAccion = useCallback(() => {
     // No mientras el doctor esta ejecutando una accion: pisarle el estado a
-    // media operacion lo unico que hace es parpadear la pantalla.
+    // media operacion lo unico que hace es parpadear la pantalla. No se pierde:
+    // al terminar, `ejecutar` recarga siempre.
     if (accionRef.current !== null) return
-    void cargarEstado()
-  }, [cargarEstado])
+    void recargar()
+  }, [recargar])
 
   /**
    * Refresco automatico, en vivo.
@@ -193,10 +217,17 @@ export default function ConsultorioClient() {
     // no obligan a recargar: no mueven la fila de este doctor (ver
     // `afectaALaFila`). Sus propias acciones si recargan, por su propio camino.
     interesa: (evento) =>
-      afectaALaFila(evento, { profesionalId: profesional?.id, moduloId: moduloId || null }),
+      afectaALaFila(evento, {
+        profesionalId: profesional?.id,
+        moduloId: moduloId || null,
+        moduloDelTurnoAbierto: turnoActual?.moduloId ?? null,
+      }),
   })
 
   async function ejecutar(nombre: Accion, tarea: () => Promise<void>) {
+    // Una recarga que salio ANTES de la accion trae el estado de antes: no
+    // puede aterrizar despues y tapar lo que la accion acaba de cambiar.
+    recargas.cancelar()
     setAccion(nombre)
     // Una accion colgada no puede congelar el refresco: se suelta sola.
     const soltar = setTimeout(() => setAccion(null), MS_MAXIMO_POR_ACCION)
@@ -207,25 +238,42 @@ export default function ConsultorioClient() {
     } finally {
       clearTimeout(soltar)
       setAccion(null)
+      // SIEMPRE, salga bien o mal. Con la red lenta el servidor puede haber
+      // llamado al paciente y perderse solo la respuesta: si la pantalla no se
+      // pone al dia, el doctor ve el error sobre el estado viejo, vuelve a
+      // pulsar "Llamar siguiente", y el primer paciente queda cerrado como
+      // atendido sin haber entrado. Esta recarga tambien recoge los eventos
+      // que llegaron mientras la accion estaba en curso.
+      void recargar()
     }
   }
 
+  // Se manda el paciente que el doctor VE abierto: si el servidor ya habia
+  // llamado a otro (se perdio la respuesta), no llama a nadie mas ni cierra a
+  // ese paciente por detras; devuelve el real y la pantalla se pone al dia.
   const llamarSiguiente = () =>
     ejecutar('llamar', async () => {
-      const { turno } = await pedir<{ turno: Turno }>('/api/consultorio/llamar-siguiente', {
-        method: 'POST', ...SIN_LOGIN,
-        body: JSON.stringify({ moduloId }),
-      })
-      setTurnoActual(turno)
-      toast.success('Paciente llamado', turno.nombrePaciente ?? turno.codigo)
-      await cargarEstado()
+      const desenlace = await llamarSiguienteDesde(
+        '/api/consultorio/llamar-siguiente',
+        { moduloId },
+        { ...SIN_LOGIN, turnoVisto: turnoActual },
+      )
+      setTurnoActual(desenlace.turno)
+      if (desenlace.tipo === 'llamado') {
+        toast.success('Paciente llamado', desenlace.turno.nombrePaciente ?? desenlace.turno.codigo)
+      } else {
+        toast.warning('Ya tenias un paciente llamado', avisoDePacienteYaLlamado(desenlace.turno))
+      }
     })
 
+  // El conteo visto evita que el reintento de una repeticion cuya respuesta se
+  // perdio vuelva a sonar en la sala.
   const repetirLlamado = () =>
     ejecutar('repetir', async () => {
       if (!turnoActual) return
       const { turno } = await pedir<{ turno: Turno }>(`/api/consultorio/turnos/${turnoActual.id}/repetir`, {
         method: 'POST', ...SIN_LOGIN,
+        body: JSON.stringify({ vecesLlamadoVisto: turnoActual.vecesLlamado }),
       })
       setTurnoActual(turno)
       toast.info('Llamado repetido', turno.nombrePaciente ?? turno.codigo)
@@ -240,7 +288,6 @@ export default function ConsultorioClient() {
         turnoActual.nombrePaciente ?? turnoActual.codigo,
       )
       setTurnoActual(null)
-      await cargarEstado()
     })
 
   const programadosHoy = agenda.filter((item) => item.estado === 'PROGRAMADA').length
@@ -355,8 +402,8 @@ export default function ConsultorioClient() {
               <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 <WarningCircle size={20} weight="fill" className="mt-0.5 shrink-0" />
                 <span>
-                  Sin conexion con el servidor: lo que ves puede estar desactualizado. Se pone al
-                  dia solo en cuanto vuelva la conexion.
+                  Sin conexion con el servidor: lo que ves puede estar desactualizado. Se sigue
+                  intentando solo y se pone al dia en cuanto vuelva la conexion.
                 </span>
               </div>
             ) : null}

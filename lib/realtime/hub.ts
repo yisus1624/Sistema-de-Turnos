@@ -25,7 +25,7 @@ export type EventoTurno =
   /** Se llamo (o se repitio) un turno: la pantalla lo destaca y lo anuncia. */
   | { tipo: 'turno.llamado'; casilla: CasillaPantalla; repetido: boolean }
   /** El consultorio quedo libre: la pantalla apaga esa casilla. */
-  | { tipo: 'modulo.liberado'; moduloId: string }
+  | { tipo: 'modulo.liberado'; moduloId: string; puesto?: string }
   /**
    * Cambio la fila de espera (una llegada registrada en admisiones, un turno
    * nuevo de ventanilla): quien atiende esa fila recarga sus pendientes.
@@ -51,6 +51,12 @@ export type EventoTurno =
    * que decide que sale hacia alla.
    */
   | { tipo: 'configuracion.cambiada' }
+  /**
+   * El panel de simulacion borro los turnos de hoy (solo pruebas). Todas las
+   * pantallas vuelven a pedir su estado: sin esto, el televisor seguia
+   * mostrando los turnos borrados hasta la resincronizacion del minuto.
+   */
+  | { tipo: 'datos.reiniciados' }
 
 const EVENTO = 'turno'
 

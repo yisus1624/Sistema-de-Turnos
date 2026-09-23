@@ -7,7 +7,9 @@ export const loginSchema = z.object({
     .trim()
     .min(3, 'Ingresa tu usuario.')
     .max(40, 'El usuario es demasiado largo.'),
-  password: z.string().min(1, 'Ingresa tu contrasena.'),
+  // Con tope: la contrasena se compara con bcrypt en el servidor, y una de
+  // megas es trabajo gratis para quien quiera cansarlo.
+  password: z.string().min(1, 'Ingresa tu contrasena.').max(200, 'La contrasena es demasiado larga.'),
 })
 
 export type LoginInput = z.infer<typeof loginSchema>

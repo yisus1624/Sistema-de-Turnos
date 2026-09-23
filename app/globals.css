@@ -49,6 +49,22 @@
     background: var(--turnos-bg);
   }
 
+  /*
+   * EN EL TELEVISOR, TODO ESCALA CON LA PANTALLA.
+   *
+   * La cabecera, el pie y los mandos se escriben en `rem`, y en un 4K se veian
+   * como sellos en una esquina: la misma letra que en un 1080p, en la mitad
+   * de tamaño fisico. Mientras la pantalla de sala esta montada, el `rem`
+   * pasa a medirse contra el lado corto (16 px en 1080p, 32 px en 4K). El
+   * piso de 16 px es el tamaño normal: en los TV pequeños (720p, 768p) la
+   * cabecera, el reloj y los mandos no deben quedar mas chicos que en un
+   * computador. Los turnos no dependen de esto: su letra la
+   * calcula el plan de distribucion.
+   */
+  html:has([data-pantalla-tv]) {
+    font-size: clamp(16px, 1.48vmin, 48px);
+  }
+
   body {
     min-height: 100vh;
     min-height: -webkit-fill-available;
@@ -235,7 +251,38 @@
  * porque es lo que le dice que su clic hizo algo. Lo que se quita es el
  * desplazamiento y el cambio de tamano.
  */
+/*
+ * EL TURNO RECIEN LLAMADO DESTELLA: una capa clara que aparece y se va unas
+ * veces sobre su fila, para que la sala levante la vista. Solo se anima la
+ * OPACIDAD de esa capa, que el navegador resuelve en la tarjeta grafica sin
+ * volver a pintar la fila: en el televisor (a veces un equipo modesto) no
+ * pesa. Animar sombras o brillo obliga a repintar en cada cuadro.
+ */
+@keyframes llamado-tv {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+.llamado-tv {
+  position: relative;
+}
+.llamado-tv::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(253, 224, 71, 0.38);
+  pointer-events: none;
+  opacity: 0;
+  will-change: opacity;
+  animation: llamado-tv 0.9s ease-in-out 5;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  /* Sin parpadeo: el cambio de color de la fila basta. */
+  .llamado-tv::after {
+    animation: none !important;
+  }
+
   *,
   *::before,
   *::after {
@@ -250,6 +297,15 @@
   .animate-spin {
     animation-duration: 1.2s !important;
     animation-iteration-count: infinite !important;
+  }
+
+  /* El resalte del turno recien llamado en el televisor se queda como un
+     fundido, sin crecer: es lo que le dice a la sala a quien acaban de
+     llamar, y un cambio de color no marea a nadie. */
+  .resalte-tv {
+    transition-property: background-color, box-shadow, color !important;
+    transition-duration: 400ms !important;
+    transform: none !important;
   }
 
   /* Nada se encoge ni se desplaza al pulsarlo. */

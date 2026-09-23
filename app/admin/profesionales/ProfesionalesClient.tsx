@@ -69,7 +69,7 @@ import { TarjetaIndicador, TONOS_INDICADOR } from '@/components/ui/TarjetaIndica
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
-import { useValorConRetraso } from '@/lib/hooks'
+import { useFechaQueSigueAHoy, useUltimaPeticion, useValorConRetraso } from '@/lib/hooks'
 import type {
   Jornada,
   JornadaDelDia,
@@ -187,6 +187,8 @@ export default function ProfesionalesClient() {
    * ese dia y las citas no se borran.
    */
   const [fecha, setFecha] = useState(hoyEnColombia())
+  // Si se estaba mirando hoy, pasa solo al dia siguiente a medianoche.
+  useFechaQueSigueAHoy(setFecha)
   const [jornadasDelDia, setJornadasDelDia] = useState<Map<string, JornadaDelDia>>(new Map())
   const [cargandoJornadas, setCargandoJornadas] = useState(true)
   const [errorJornadas, setErrorJornadas] = useState(false)
@@ -232,25 +234,33 @@ export default function ProfesionalesClient() {
     }
   }, [])
 
+  // Al pasar dias con las flechas, la respuesta lenta de un dia anterior no
+  // puede pintar sus jornadas bajo la fecha nueva.
+  const consultasDeJornadas = useUltimaPeticion()
+
   /** Lo que cada doctor trabajo el dia que se esta mirando. */
   const cargarJornadasDelDia = useCallback(async (dia: string) => {
+    const consulta = consultasDeJornadas.iniciar()
     setCargandoJornadas(true)
     try {
       const { jornadas } = await pedir<{ jornadas: JornadaDelDia[] }>(
         `/api/turnos/profesionales/jornadas?fecha=${dia}`,
+        { signal: consulta.signal },
       )
+      if (!consulta.esVigente()) return
       setJornadasDelDia(new Map(jornadas.map((j) => [j.profesionalId, j])))
       setErrorJornadas(false)
     } catch (error) {
+      if (!consulta.esVigente()) return
       toast.error('No se pudo cargar lo que trabajaron ese dia', mensajeDeError(error))
       // Se marca el error en vez de dejar el mapa vacio: vacio significa
       // "nadie trabajo", y eso seria afirmar algo que no se sabe.
       setJornadasDelDia(new Map())
       setErrorJornadas(true)
     } finally {
-      setCargandoJornadas(false)
+      if (consulta.esVigente()) setCargandoJornadas(false)
     }
-  }, [])
+  }, [consultasDeJornadas])
 
   useEffect(() => {
     cargar()

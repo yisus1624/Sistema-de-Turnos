@@ -43,7 +43,7 @@ const usuarioSchema = z.object({
     .regex(/^[a-zA-Z0-9._-]+$/, 'El usuario solo admite letras, numeros, punto, guion y guion bajo.'),
   rol: z.enum(['ADMINISTRADOR', 'OPERADOR']),
   area: z.string().trim().max(60).nullable().optional(),
-  password: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.'),
+  password: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.').max(200, 'La contrasena es demasiado larga.'),
   secciones: seccionesSchema.nullable().optional(),
 })
 

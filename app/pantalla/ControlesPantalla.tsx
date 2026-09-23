@@ -18,9 +18,16 @@
 import { CornersIn, CornersOut, SpeakerHigh, SpeakerX } from '@phosphor-icons/react/dist/ssr'
 import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import type { EstadoConexionEnVivo } from '@/lib/hooks'
+import type { AvisoDeSonido } from '@/lib/turnos/pantalla-tv'
 
 type ControlesPantallaProps = {
   conexion: EstadoConexionEnVivo
+  /**
+   * El navegador no deja sonar y alguien deberia oir (ver `avisoDeSonido`).
+   * Se muestra aqui, junto a los mandos, y no encima de los turnos.
+   */
+  avisoSonido: AvisoDeSonido
+  activarSonido: () => void
   sonidoActivo: boolean
   alternarSonido: () => void
   pantallaCompleta: boolean
@@ -34,6 +41,8 @@ type ControlesPantallaProps = {
 
 export default function ControlesPantalla({
   conexion,
+  avisoSonido,
+  activarSonido,
   sonidoActivo,
   alternarSonido,
   pantallaCompleta,
@@ -53,7 +62,24 @@ export default function ControlesPantalla({
       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
+      {avisoSonido ? (
+        /*
+          Visible pero sin tapar nada: una pastilla ambar junto a los mandos.
+          Sin ella, un televisor que se reinicio sin kiosco quedaba mudo y nadie
+          se enteraba hasta que un paciente perdia su turno.
+        */
+        <button
+          onClick={activarSonido}
+          aria-label="Sonido desactivado: toca para activar"
+          className="flex h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-amber-100 px-4 text-sm font-bold text-amber-900 transition-colors duration-[var(--suave)] hover:bg-amber-200"
+        >
+          <SpeakerX size="1.25rem" weight="bold" />
+          {/* En pantallas angostas, corto: el texto largo empujaba los mandos fuera. */}
+          <span className="hidden 2xl:inline">Sonido desactivado: toca para activar</span>
+          <span className="2xl:hidden">Activar sonido</span>
+        </button>
+      ) : null}
       <IndicadorConexion estado={conexion} />
       <button
         onClick={alternarSonido}
@@ -61,7 +87,7 @@ export default function ControlesPantalla({
         aria-label={sonidoActivo ? 'Desactivar sonido' : 'Activar sonido'}
         title={sonidoActivo ? 'Desactivar sonido' : 'Activar sonido'}
       >
-        {sonidoActivo ? <SpeakerHigh size={22} weight="bold" /> : <SpeakerX size={22} weight="bold" />}
+        {sonidoActivo ? <SpeakerHigh size="1.4rem" weight="bold" /> : <SpeakerX size="1.4rem" weight="bold" />}
       </button>
       <button
         onClick={alternarPantallaCompleta}
@@ -69,7 +95,7 @@ export default function ControlesPantalla({
         aria-label={pantallaCompleta ? 'Salir de pantalla completa' : 'Ver en pantalla completa'}
         title={pantallaCompleta ? 'Salir de pantalla completa' : 'Ver en pantalla completa'}
       >
-        {pantallaCompleta ? <CornersIn size={22} weight="bold" /> : <CornersOut size={22} weight="bold" />}
+        {pantallaCompleta ? <CornersIn size="1.4rem" weight="bold" /> : <CornersOut size="1.4rem" weight="bold" />}
       </button>
     </div>
   )

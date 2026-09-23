@@ -1,8 +1,8 @@
 /**
  * Seguridad basica del sistema (requerimiento seccion 17).
  *
- * Cubre dos cosas: limitar los intentos de inicio de sesion y dejar un
- * "registro de actividades importantes".
+ * Deja el "registro de actividades importantes". El limite de intentos de
+ * inicio de sesion vive aparte, en `./limitador`.
  *
  * EL REGISTRO SE GUARDA EN LA BASE. Antes vivia en un arreglo en memoria del
  * proceso: se perdia entero en cada reinicio y en cada despliegue, y en un
@@ -11,13 +11,16 @@
  * registro de auditoria que desaparece al reiniciar no sirve para lo que
  * existe: contestar quien hizo que, y cuando, semanas despues.
  *
- * El limite de intentos SI sigue en memoria, y ahi esta bien: es una ventana de
- * minutos contra la fuerza bruta, no un dato que haya que conservar.
  */
 import { headers } from 'next/headers'
 import { prisma } from '@/lib/prisma'
 import { esFechaValida, instanteDeFranja } from '@/lib/turnos/tiempo'
+import { ipReenviadaPorElProxy } from './origen'
 import type { EventoSeguridad, FiltroEventos } from './tipos'
+
+// El limitador de intentos vive en `./limitador`; se reexporta aqui para
+// quien ya lo importaba de este modulo.
+export { limitarIntentos, limpiarIntentos, MAXIMO_INTENTOS_EN_MEMORIA } from './limitador'
 
 export type { EventoSeguridad, FiltroEventos } from './tipos'
 
@@ -30,19 +33,6 @@ export type { EventoSeguridad, FiltroEventos } from './tipos'
  */
 const MAXIMO_POR_CONSULTA = 1000
 
-declare global {
-  var __turnosIntentos: Map<string, { conteo: number; expiraEn: number }> | undefined
-}
-
-const intentos: Map<string, { conteo: number; expiraEn: number }> =
-  globalThis.__turnosIntentos ?? new Map()
-
-// Se guarda SIEMPRE, tambien en produccion. Antes solo en desarrollo, y eso
-// dejaba el limite de intentos sin efecto donde de verdad importa: si Next
-// evalua este modulo en otro contexto, el contador de intentos fallidos
-// arranca de cero y la proteccion contra fuerza bruta del inicio de sesion
-// deja de contar.
-globalThis.__turnosIntentos = intentos
 
 /**
  * Si hay un proxy de confianza delante de la aplicacion.
@@ -78,11 +68,7 @@ export async function contextoPeticion() {
 
   if (!confiarEnProxy) return { ip: null, agente }
 
-  const reenviado = cabeceras.get('x-forwarded-for')
-  // El primero de la lista es el cliente; los siguientes son los proxies por
-  // los que paso.
-  const ip = reenviado?.split(',')[0]?.trim() || cabeceras.get('x-real-ip') || null
-
+  const ip = ipReenviadaPorElProxy(cabeceras.get('x-forwarded-for'), cabeceras.get('x-real-ip'))
   return { ip, agente }
 }
 
@@ -181,125 +167,4 @@ export async function tiposDeEvento(): Promise<string[]> {
     orderBy: { tipo: 'asc' },
   })
   return filas.map((f) => f.tipo)
-}
-
-/**
- * Limita cuantas veces se puede repetir una accion por identificador dentro de
- * una ventana de tiempo. Evita fuerza bruta contra el inicio de sesion.
- */
-/**
- * Purga las ventanas ya vencidas.
- *
- * Sin esto el mapa crece para siempre: una entrada por cada IP y por cada
- * usuario que alguna vez intento entrar. En un servidor que lleva meses
- * levantado eso es una fuga de memoria lenta pero segura.
- */
-function purgarVencidos(ahora: number) {
-  for (const [clave, ventana] of intentos) {
-    if (ventana.expiraEn <= ahora) intentos.delete(clave)
-  }
-}
-
-let ultimaPurga = 0
-
-/**
- * Cuantas ventanas se guardan como maximo.
- *
- * SIN ESTE TECHO EL MAPA NO TIENE FONDO. La purga de arriba solo borra las
- * ventanas YA VENCIDAS, y como mucho cada sesenta segundos; dentro de la
- * ventana de cinco minutos las entradas se quedan. El problema es de donde
- * salen las claves: en el acceso del consultorio el identificador es el TOKEN
- * (ver `lib/turnos/acceso-consultorio.ts`), que lo elige quien hace la
- * peticion. Un bucle mandando tokens inventados a /api/consultorio/<token>
- * estrena una entrada por intento y se lleva la memoria del proceso por
- * delante, y con ella la pantalla de la sala de espera.
- *
- * Cincuenta mil ventanas son unos pocos megas y quedan muy por encima de
- * cualquier uso real: el hospital tiene decenas de funcionarios y de enlaces,
- * no decenas de miles. Si se llega a este numero, no es trabajo: es una
- * avalancha.
- */
-export const MAXIMO_INTENTOS_EN_MEMORIA = 50_000
-
-/**
- * Cuantas ventanas se tiran de golpe cuando el mapa se llena.
- *
- * Por tandas y no de una en una: liberar un 10% deja sitio para un buen rato,
- * en vez de pagar un barrido en cada peticion de la avalancha.
- */
-const DESALOJO_POR_TANDA = MAXIMO_INTENTOS_EN_MEMORIA / 10
-
-/**
- * Hace sitio cuando el mapa toca el techo.
- *
- * Primero purga lo vencido, que es gratis y suele bastar. Si despues sigue
- * lleno, se descartan las ventanas MAS ANTIGUAS (el `Map` conserva el orden de
- * insercion, asi que las primeras son las que llevan mas tiempo dentro).
- *
- * POR QUE DESCARTAR LAS VIEJAS Y NO RECHAZAR LA NUEVA. Rechazar la nueva
- * significa DEJAR DE CONTAR a partir de ese momento: al atacante le bastaria
- * llenar el mapa para que el siguiente identificador —por ejemplo el usuario
- * del administrador en el inicio de sesion— pasara sin limite. Descartando las
- * viejas, el limitador sigue vivo y se queda con lo reciente, que es donde
- * esta el ataque en curso; lo que se pierde son ventanas a punto de vencer de
- * todas formas.
- */
-function hacerSitio(ahora: number) {
-  purgarVencidos(ahora)
-  ultimaPurga = ahora
-
-  if (intentos.size < MAXIMO_INTENTOS_EN_MEMORIA) return
-
-  let porDesalojar = DESALOJO_POR_TANDA
-  for (const clave of intentos.keys()) {
-    if (porDesalojar <= 0) return
-    intentos.delete(clave)
-    porDesalojar -= 1
-  }
-}
-
-export function limitarIntentos(
-  accion: string,
-  identificador: string,
-  limite: number,
-  ventanaMs: number,
-) {
-  const clave = `${accion}:${identificador.trim().toLowerCase() || 'desconocido'}`
-  const ahora = Date.now()
-
-  // Barrido periodico, no en cada llamada: recorrer el mapa entero en cada
-  // intento de login seria peor que la fuga que evita.
-  if (ahora - ultimaPurga > 60_000) {
-    purgarVencidos(ahora)
-    ultimaPurga = ahora
-  }
-
-  const actual = intentos.get(clave)
-
-  if (!actual || actual.expiraEn <= ahora) {
-    if (intentos.size >= MAXIMO_INTENTOS_EN_MEMORIA) hacerSitio(ahora)
-    intentos.set(clave, { conteo: 1, expiraEn: ahora + ventanaMs })
-    return { permitido: true, reintentarEnSegundos: 0 }
-  }
-
-  actual.conteo += 1
-  return {
-    permitido: actual.conteo <= limite,
-    reintentarEnSegundos: Math.max(1, Math.ceil((actual.expiraEn - ahora) / 1000)),
-  }
-}
-
-/**
- * Borra la cuenta de intentos de un identificador. Se llama cuando la accion
- * SALE BIEN.
- *
- * Sin esto el limite contaba tambien los aciertos, asi que no medía "cuantas
- * veces han fallado" sino "cuantas veces se ha usado": un mostrador donde
- * varias personas entran con la misma cuenta se bloqueaba solo a media mañana,
- * sin que nadie hubiera escrito mal una contrasena. Contando unicamente los
- * fallos, el limite frena la fuerza bruta —que por definicion falla— y deja
- * trabajar a quien acierta.
- */
-export function limpiarIntentos(accion: string, identificador: string) {
-  intentos.delete(`${accion}:${identificador.trim().toLowerCase() || 'desconocido'}`)
 }

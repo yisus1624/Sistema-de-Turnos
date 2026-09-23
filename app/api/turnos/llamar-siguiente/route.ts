@@ -3,16 +3,22 @@ import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarLlamado } from '@/lib/turnos/rastro-llamado'
+import { PIDE_RECARGAR, cuerpoJson, faltaElTurnoVisto, idSchema, turnoAbiertoIdSchema } from '@/lib/validators/turnos'
 
-const bodySchema = z
-  .object({
-    servicioId: z.string().min(1).optional(),
-    profesionalId: z.string().min(1).optional(),
-    moduloId: z.string().min(1, 'Debes indicar el consultorio o la ventanilla.'),
-  })
-  .refine((datos) => datos.servicioId || datos.profesionalId, {
-    message: 'Debes indicar el servicio o el profesional.',
-  })
+/**
+ * Solo filas compartidas (ventanillas).
+ *
+ * Ya no acepta `profesionalId`: con el, un operador podia llevarse a los
+ * pacientes de un doctor y, al llamar desde su consultorio, cerrarle al que
+ * tuviera adentro. Los pacientes con cita los llama su profesional desde su
+ * enlace. El repositorio comprueba ademas que el servicio sea de fila
+ * compartida y que la ventanilla le corresponda.
+ */
+const bodySchema = z.object({
+  servicioId: idSchema,
+  moduloId: idSchema,
+  turnoAbiertoId: turnoAbiertoIdSchema,
+})
 
 export async function POST(request: Request) {
   try {
@@ -20,15 +26,19 @@ export async function POST(request: Request) {
     // queda registrado en el historico (requerimiento seccion 23).
     const session = await requireSeccion('/operador')
 
-    const body = await request.json().catch(() => null)
-    const parsed = bodySchema.safeParse(body)
+    const cuerpo = await cuerpoJson(request)
+    if (faltaElTurnoVisto(cuerpo)) return NextResponse.json({ error: PIDE_RECARGAR }, { status: 400 })
+
+    const parsed = bodySchema.safeParse(cuerpo)
     if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos invalidos.' }, { status: 400 })
+      return NextResponse.json({ error: 'Debes indicar el servicio y la ventanilla.' }, { status: 400 })
     }
 
     const turno = await turnoRepository.llamarSiguiente({
-      ...parsed.data,
+      servicioId: parsed.data.servicioId,
+      moduloId: parsed.data.moduloId,
       funcionarioId: session.user.id,
+      turnoAbiertoEsperado: parsed.data.turnoAbiertoId,
     })
 
     if (!turno) {

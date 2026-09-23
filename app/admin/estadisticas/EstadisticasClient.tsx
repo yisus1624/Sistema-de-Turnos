@@ -2,14 +2,15 @@
 
 /** Indicadores de atencion (requerimiento seccion 19). */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChartBar } from '@phosphor-icons/react/dist/ssr'
+import { useCargaConReintento, useFechaQueSigueAHoy, useUltimaPeticion } from '@/lib/hooks'
+import { useCallback, useEffect, useState } from 'react'
+import { ChartBar, WifiSlash } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import EmptyState from '@/components/ui/EmptyState'
-import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { Skeleton } from '@/components/ui/Loader'
-import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { hoyEnColombia, pedir } from '@/lib/api/cliente'
+import type { ResultadoDeCarga } from '@/lib/api/reintento'
 import type { EstadisticasDia, EstadisticasServicio } from '@/lib/turnos/types'
 
 const COLUMNAS_SERVICIO = ['Servicio', 'Generados', 'Atendidos', 'Ausentes', 'Pendientes', 'Espera', 'Atencion']
@@ -71,37 +72,46 @@ function porcentajeAsistencia(resumen: EstadisticasServicio) {
 
 export default function EstadisticasClient() {
   const [fecha, setFecha] = useState(hoyEnColombia())
+  // Si se estaba mirando hoy, pasa solo al dia siguiente a medianoche.
+  useFechaQueSigueAHoy(setFecha)
   const [datos, setDatos] = useState<EstadisticasDia | null>(null)
   const [cargando, setCargando] = useState(true)
 
-  /**
-   * Ultimo dia pedido: descarta la respuesta de una consulta que el usuario ya
-   * reemplazo al cambiar de fecha. Sin esto, mover el selector rapido podia
-   * dejar en pantalla los indicadores de un dia distinto al que marca el campo,
-   * que en un tablero de cifras no se nota a simple vista.
-   */
-  const diaPedidoRef = useRef('')
+  // Si la ultima consulta fallo. Las cifras se vacian: las del dia anterior
+  // bajo la fecha nueva se leian como las de esa fecha, y en un tablero de
+  // cifras eso no se nota a simple vista.
+  const [fallo, setFallo] = useState(false)
+  // La ultima consulta gana: mover el selector rapido no puede dejar en
+  // pantalla los indicadores de un dia distinto al que marca el campo.
+  const consultas = useUltimaPeticion()
 
-  const cargar = useCallback(async (dia: string) => {
-    diaPedidoRef.current = dia
+  const cargar = useCallback(async (): Promise<ResultadoDeCarga> => {
+    const consulta = consultas.iniciar()
     setCargando(true)
     try {
       const { estadisticas } = await pedir<{ estadisticas: EstadisticasDia }>(
-        `/api/turnos/estadisticas?fecha=${dia}`,
+        `/api/turnos/estadisticas?fecha=${fecha}`,
+        { signal: consulta.signal },
       )
-      if (diaPedidoRef.current !== dia) return
+      if (!consulta.esVigente()) return 'reemplazada'
       setDatos(estadisticas)
+      setFallo(false)
     } catch (error) {
-      if (diaPedidoRef.current !== dia) return
-      toast.error('No se pudieron cargar las estadisticas', mensajeDeError(error))
+      if (!consulta.esVigente()) return 'reemplazada'
+      setDatos(null)
+      setFallo(true)
+      // Se relanza para que `useCargaConReintento` lo reintente solo.
+      throw error
     } finally {
-      if (diaPedidoRef.current === dia) setCargando(false)
+      if (consulta.esVigente()) setCargando(false)
     }
-  }, [])
+  }, [consultas, fecha])
+
+  const recargar = useCargaConReintento(cargar)
 
   useEffect(() => {
-    cargar(fecha)
-  }, [cargar, fecha])
+    void recargar()
+  }, [cargar, recargar])
 
   const conMovimiento = datos?.porServicio.filter((s) => s.generados > 0) ?? []
 
@@ -115,6 +125,12 @@ export default function EstadisticasClient() {
 
       {cargando ? (
         <EstadisticasSkeleton />
+      ) : fallo ? (
+        <EmptyState
+          icon={WifiSlash}
+          title="No se pudieron cargar las estadisticas"
+          description="Se sigue intentando solo. En cuanto el servidor responda, las cifras de este dia apareceran aqui."
+        />
       ) : !datos || datos.total.generados === 0 ? (
         <EmptyState
           icon={ChartBar}

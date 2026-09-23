@@ -69,7 +69,11 @@ export function apiError(error: unknown) {
     typeof error === 'object' && error && 'status' in error
       ? Number((error as { status: unknown }).status)
       : 500
-  const esperado = Number.isFinite(status) && status >= 400 && status < 500
+  // 4xx y el 503 MARCADO: errores escritos a proposito para el funcionario. El
+  // 503 solo pasa si lo declara uno de los errores de "vuelve a intentarlo"
+  // (servidor ocupado, transaccion que choco); cualquier otro error con status
+  // 503 podria traer un texto tecnico, y ese no sale.
+  const esperado = Number.isFinite(status) && ((status >= 400 && status < 500) || (status === 503 && esPasajeroMarcado(error)))
 
   if (!esperado) {
     console.error('[api] fallo inesperado', error)
@@ -83,5 +87,23 @@ export function apiError(error: unknown) {
   }
 
   const message = error instanceof Error ? error.message : 'Ocurrio un error inesperado.'
-  return Response.json({ error: message }, { status })
+  return Response.json({ error: message, ...datosParaCliente(error) }, { status })
+}
+
+/** Si el error se declara a proposito como "vuelve a intentarlo" (ver `ErrorPasajero`). */
+function esPasajeroMarcado(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'vuelveAIntentarlo' in error && error.vuelveAIntentarlo === true
+}
+
+/**
+ * Lo que un error esperado quiere contarle al cliente ademas del mensaje.
+ *
+ * Lo usa el 409 de un turno (`ConflictoDeTurno`): junto con "ese paciente ya
+ * fue llamado" viaja el turno real, para que la pantalla se ponga al dia sin
+ * otra consulta. Solo se leen los errores que lo declaran a proposito.
+ */
+function datosParaCliente(error: unknown): Record<string, unknown> {
+  if (typeof error !== 'object' || error === null || !('datosParaCliente' in error)) return {}
+  const datos: unknown = error.datosParaCliente
+  return typeof datos === 'object' && datos !== null ? { ...datos } : {}
 }

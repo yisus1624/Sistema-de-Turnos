@@ -48,54 +48,49 @@ async function pacienteEnEspera(profesionalId, hora) {
     profesionalId,
     horaCita: new Date(`${HOY}T${hora}:00-05:00`).toISOString(),
   })
-  return repo.registrarLlegada(cita.id)
+  return (await repo.registrarLlegada(cita.id)).turno
 }
 
-test('un doctor no puede llamar desde el consultorio de otro servicio', async () => {
+// UN CONSULTORIO PUEDE SER UN SALON CON VARIOS DOCTORES. En el hospital hay
+// consultorios generales con varios doctores dentro, de cualquier servicio,
+// cada uno en su espacio y sin numero propio. Ninguno puede quedar bloqueado
+// con "consultorio ocupado", y a ninguno se le cierra el paciente por detras.
+
+test('un doctor puede llamar desde un consultorio de otro servicio', async () => {
   const { doctor } = await doctorConConsultorio()
   await pacienteEnEspera(doctor.id, '10:00')
 
-  await assert.rejects(
-    () =>
-      repo.llamarSiguiente({
-        profesionalId: doctor.id,
-        // Consultorio de odontologia.
-        moduloId: 'mod-consultorio-9',
-        funcionarioId: doctor.id,
-      }),
-    /no pertenece a/i,
-  )
+  const llamado = await repo.llamarSiguiente({
+    profesionalId: doctor.id,
+    // Consultorio de odontologia.
+    moduloId: 'mod-consultorio-9',
+    funcionarioId: doctor.id,
+  })
+  assert.equal(llamado.estado, 'LLAMADO')
+  assert.equal(llamado.moduloId, 'mod-consultorio-9')
 })
 
-test('un doctor no puede llamar en un consultorio ocupado por otro doctor', async () => {
+test('dos doctores atienden a la vez en el mismo consultorio y cada uno sale en su fila', async () => {
   const a = await doctorConConsultorio()
   const b = await doctorConConsultorio()
 
   await pacienteEnEspera(a.doctor.id, '10:15')
   await pacienteEnEspera(b.doctor.id, '10:15')
 
-  const llamadoDeA = await repo.llamarSiguiente({
-    profesionalId: a.doctor.id,
-    moduloId: a.modulo.id,
-    funcionarioId: a.doctor.id,
-  })
+  const llamadoDeA = await repo.llamarSiguiente({ profesionalId: a.doctor.id, moduloId: a.modulo.id, funcionarioId: a.doctor.id })
+  const llamadoDeB = await repo.llamarSiguiente({ profesionalId: b.doctor.id, moduloId: a.modulo.id, funcionarioId: b.doctor.id })
   assert.equal(llamadoDeA.estado, 'LLAMADO')
+  assert.equal(llamadoDeB.estado, 'LLAMADO')
 
-  await assert.rejects(
-    () =>
-      repo.llamarSiguiente({
-        profesionalId: b.doctor.id,
-        moduloId: a.modulo.id,
-        funcionarioId: b.doctor.id,
-      }),
-    /lo esta usando/i,
-  )
-
-  // Y lo que de verdad importa: el paciente de A sigue en atencion, no cerrado.
+  // A nadie se le cierra el paciente por detras.
   const historico = await repo.historico({ profesionalId: a.doctor.id, fecha: HOY })
-  const suyo = historico.find((t) => t.id === llamadoDeA.id)
-  assert.equal(suyo.estado, 'LLAMADO', 'a nadie se le cierra el paciente por detras')
-  assert.equal(suyo.horaAtencion ?? null, null)
+  assert.equal(historico.find((t) => t.id === llamadoDeA.id).estado, 'LLAMADO')
+
+  // En el televisor, una fila por doctor, las dos con el mismo consultorio.
+  const { casillas } = await repo.estadoPantalla()
+  const delConsultorio = casillas.filter((c) => c.moduloId === a.modulo.id && c.codigo)
+  assert.deepEqual(delConsultorio.map((c) => c.codigo).sort(), [llamadoDeA.codigo, llamadoDeB.codigo].sort())
+  assert.equal(new Set(delConsultorio.map((c) => c.puesto)).size, 2, 'cada doctor tiene su puesto')
 })
 
 test('no se puede llamar desde un consultorio desactivado', async () => {
@@ -183,7 +178,7 @@ test('no se puede desactivar un consultorio con un turno en atencion', async () 
   )
 
   // Y en cuanto el doctor lo cierra, ya se puede apagar.
-  const enAtencion = await repo.turnoEnAtencion(doctor.id, HOY)
+  const enAtencion = await repo.turnoAbierto({ profesionalId: doctor.id }, HOY)
   await repo.marcarAtendido(enAtencion.id, 'usuario-prueba')
 
   const apagado = await repo.actualizarModulo(modulo.id, { activo: false })
