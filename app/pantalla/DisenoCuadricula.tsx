@@ -7,6 +7,7 @@
  */
 import { useMemo, type ReactNode } from 'react'
 import type { CasillaPantalla, ConfiguracionSistema } from '@/lib/turnos/types'
+import type { Resaltes } from '@/lib/turnos/pantalla-tv'
 import { Isotipo, NOMBRE_INSTITUCION, NOMBRE_SISTEMA } from '@/components/brand/Marca'
 import { conNombresDePantalla } from '@/lib/turnos/nombre-consultorio'
 import Cuadricula from './Cuadricula'
@@ -17,13 +18,13 @@ import { useEspacioMedido } from './useDistribucion'
 export default function DisenoCuadricula({
   casillas: recibidas,
   configuracion,
-  resaltado,
+  resaltes,
   mensajeVacio,
   controles,
 }: {
   casillas: CasillaPantalla[]
   configuracion: ConfiguracionSistema
-  resaltado: string | null
+  resaltes: Resaltes
   mensajeVacio: string
   controles: ReactNode
 }) {
@@ -95,7 +96,7 @@ export default function DisenoCuadricula({
         ninguno: `Cuadricula` mide el espacio y ajusta columnas y letra a
         cualquier televisor (ver `planDeCuadricula`).
       */}
-      <Cuadricula casillas={casillas} pantalla={pantalla} resaltado={resaltado} mensajeVacio={mensajeVacio} />
+      <Cuadricula casillas={casillas} pantalla={pantalla} resaltes={resaltes} mensajeVacio={mensajeVacio} />
 
       {configuracion.mensajePie ? (
         <footer className="relative z-10 shrink-0 overflow-hidden whitespace-nowrap bg-brand-950 px-8 py-3 text-center text-lg font-medium tracking-[0.01em] text-white">

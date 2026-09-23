@@ -9,10 +9,29 @@ import type { EstadoDelAudio } from './anuncio'
 import type { CasillaPantalla } from './types'
 
 /**
- * Cuanto dura el resalte de la casilla recien llamada. Lo usan la pantalla (para
- * apagarlo) y la rotacion de paginas (que no se va de la pagina antes).
+ * Cuanto dura el resalte (fila azul que destella) de un turno recien llamado.
+ * Cada llamado tiene el suyo: varios pueden estar resaltados a la vez. Lo usa
+ * tambien la rotacion de paginas, que no se va de la pagina antes.
  */
-export const MS_RESALTE = 10000
+export const MS_RESALTE = 20000
+
+/**
+ * Cuanto dura la etiqueta "NUEVO" de un turno recien llamado: mas que el
+ * resalte, para quien levanta la vista tarde y quiere saber que cambio.
+ */
+export const MS_NUEVO = 60000
+
+/** Los llamados recientes que el televisor marca (ver `useResaltes`). */
+export interface Resaltes {
+  /** El ultimo llamado: la rotacion de paginas salta a su pagina. */
+  ultimo: string | null
+  /** Filas que se pintan de azul y destellan. */
+  resaltados: ReadonlySet<string>
+  /** Filas que llevan la etiqueta "NUEVO". */
+  nuevos: ReadonlySet<string>
+}
+
+export const SIN_RESALTES: Resaltes = { ultimo: null, resaltados: new Set(), nuevos: new Set() }
 
 export type AvisoDeSonido = 'tocar_para_activar' | null
 

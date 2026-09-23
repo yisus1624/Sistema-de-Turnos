@@ -13,6 +13,8 @@
  */
 import { memo, useMemo, type ReactNode } from 'react'
 import { claveDeCasilla } from '@/lib/turnos/casillas'
+import type { Resaltes } from '@/lib/turnos/pantalla-tv'
+import { EtiquetaNuevo } from './EtiquetaNuevo'
 import type { CasillaPantalla } from '@/lib/turnos/types'
 import { planDeCuadricula, type Espacio, type Letra, type PaginaDeCuadricula } from '@/lib/turnos/distribucion-pantalla'
 import { cn } from '@/lib/ui'
@@ -45,13 +47,13 @@ function agrupar(casillas: CasillaPantalla[]): Grupo[] {
 export default function Cuadricula({
   casillas,
   pantalla,
-  resaltado,
+  resaltes,
   mensajeVacio,
 }: {
   casillas: CasillaPantalla[]
   /** La pantalla entera: la letra se mide contra ella. */
   pantalla: Espacio
-  resaltado: string | null
+  resaltes: Resaltes
   mensajeVacio: string
 }) {
   const [espacio, medir] = useEspacioMedido()
@@ -59,6 +61,7 @@ export default function Cuadricula({
   const ordenadas = useMemo(() => grupos.flatMap((g) => g.casillas.map((casilla) => ({ ...casilla, grupo: g.clave }))), [grupos])
   const plan = useMemo(() => planDeCuadricula(espacio, ordenadas, pantalla), [espacio, ordenadas, pantalla])
   // La pagina del consultorio recien llamado, para saltar a ella (ver `usePaginaRotativa`).
+  const resaltado = resaltes.ultimo
   const indiceResaltado = ordenadas.findIndex((casilla) => claveDeCasilla(casilla) === resaltado)
   const paginaResaltada = plan.paginas.findIndex((p) => indiceResaltado >= p.desde && indiceResaltado < p.hasta)
   const numero = usePaginaRotativa(
@@ -89,7 +92,8 @@ export default function Cuadricula({
                       key={claveDeCasilla(casilla)}
                       casilla={casilla}
                       letra={pagina.letra}
-                      resaltada={resaltado === claveDeCasilla(casilla)}
+                      resaltada={resaltes.resaltados.has(claveDeCasilla(casilla))}
+                      nueva={resaltes.nuevos.has(claveDeCasilla(casilla))}
                     />
                   ))}
                 </Tarjetas>
@@ -150,12 +154,23 @@ function Banda({ texto, tamano, className }: { texto: string; tamano: number; cl
  * puerta). El medico va al pie, con menos peso; nada del paciente aparece
  * aqui. Memorizada: cada llamado cambia UNA casilla, no las veinte.
  */
-const Casilla = memo(function Casilla({ casilla, letra, resaltada }: { casilla: CasillaPantalla; letra: Letra; resaltada: boolean }) {
+const Casilla = memo(function Casilla({
+  casilla,
+  letra,
+  resaltada,
+  nueva,
+}: {
+  casilla: CasillaPantalla
+  letra: Letra
+  resaltada: boolean
+  nueva: boolean
+}) {
   const ocupada = Boolean(casilla.codigo)
   return (
     <div
       className={cn(
-        'resalte-tv flex h-full min-h-0 flex-col overflow-hidden rounded-[1.5rem] bg-white transition-shadow duration-700 ease-[var(--curva)]',
+        'resalte-tv relative flex h-full min-h-0 flex-col overflow-hidden rounded-[1.5rem] bg-white transition-shadow duration-700 ease-[var(--curva)]',
+        ocupada && resaltada && 'llamado-tv',
         ocupada && resaltada
           ? 'shadow-[0_0_0_0.3rem_rgb(52,211,153),0_12px_32px_rgba(10,38,52,.18)]'
           : 'shadow-[0_0_0_1px_rgba(10,38,52,.07),0_4px_14px_rgba(10,38,52,.07)]',
@@ -166,6 +181,7 @@ const Casilla = memo(function Casilla({ casilla, letra, resaltada }: { casilla: 
         tamano={letra.consultorio}
         className={cn('font-extrabold uppercase tracking-[-0.01em]', ocupada ? 'bg-brand-100 text-brand-900' : 'bg-slate-100 text-slate-600')}
       />
+      {ocupada && nueva ? <EtiquetaNuevo tamano={letra.turno * 0.28} className="right-[0.5rem] top-[0.5rem]" /> : null}
       {ocupada ? <Ocupada casilla={casilla} letra={letra} resaltada={resaltada} /> : <Libre tamano={letra.medico} />}
     </div>
   )

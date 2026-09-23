@@ -20,7 +20,7 @@
 import { useMemo, type ReactNode } from 'react'
 import { claveDeCasilla } from '@/lib/turnos/casillas'
 import { conNombresDePantalla } from '@/lib/turnos/nombre-consultorio'
-import { filasDeCartelera } from '@/lib/turnos/pantalla-tv'
+import { filasDeCartelera, type Resaltes } from '@/lib/turnos/pantalla-tv'
 import {
   POCAS_FILAS,
   ladoCorto,
@@ -41,7 +41,7 @@ type CarteleraProps = {
   casillas: CasillaPantalla[]
   configuracion: ConfiguracionSistema
   /** Modulo cuyo turno se acaba de llamar; se resalta unos segundos. */
-  resaltado: string | null
+  resaltes: Resaltes
   hora: string | null
   /** Los mandos del televisor (sonido, pantalla completa), ya montados. */
   controles: ReactNode
@@ -49,7 +49,7 @@ type CarteleraProps = {
   mensajeSinLlamados: string
 }
 
-export default function Cartelera({ casillas: recibidas, configuracion, resaltado, hora, controles, mensajeSinLlamados }: CarteleraProps) {
+export default function Cartelera({ casillas: recibidas, configuracion, resaltes, hora, controles, mensajeSinLlamados }: CarteleraProps) {
   // "CONSULTORIO 1" en vez de "CONS 01- CONSULTA EXTERNA": solo lo que se pinta.
   const casillas = useMemo(() => conNombresDePantalla(recibidas, 'cartelera'), [recibidas])
   /*
@@ -66,7 +66,7 @@ export default function Cartelera({ casillas: recibidas, configuracion, resaltad
         <>
           <CabeceraCartelera servicio={servicio} hora={hora} controles={controles} />
           <div className="relative z-10 flex min-h-0 flex-1 justify-end px-[2.5vmin] pb-[2vmin]">
-            <Tabla filas={filas} pantalla={pantalla} resaltado={resaltado} mensajeSinLlamados={mensajeSinLlamados} />
+            <Tabla filas={filas} pantalla={pantalla} resaltes={resaltes} mensajeSinLlamados={mensajeSinLlamados} />
           </div>
           {/* Con muchas filas el pie cede alto: es el que deja caberlas en una pagina. */}
           <PieCartelera compacto={filas.length > POCAS_FILAS && !tablaConFoto(filas.length, pantalla)} />
@@ -90,7 +90,7 @@ function Pantalla({ ruta, children }: { ruta: string; children: (pantalla: Espac
 type TablaProps = {
   filas: CasillaPantalla[]
   pantalla: Espacio
-  resaltado: string | null
+  resaltes: Resaltes
   mensajeSinLlamados: string
 }
 
@@ -107,7 +107,8 @@ function espacioDeFilas(hueco: Espacio, altoEncabezado: number, relleno: number)
  * La tarjeta se ajusta a sus filas en vez de estirarse hasta el pie: con uno o
  * dos consultorios, antes quedaba una tabla casi vacia con filas delgadas.
  */
-function Tabla({ filas, pantalla, resaltado, mensajeSinLlamados }: TablaProps) {
+function Tabla({ filas, pantalla, resaltes, mensajeSinLlamados }: TablaProps) {
+  const resaltado = resaltes.ultimo
   const [hueco, medirHueco] = useEspacioMedido()
   const [encabezado, medirEncabezado] = useEspacioMedido()
   const relleno = Math.max(8, Math.round(ladoCorto(pantalla) * 0.011))
@@ -147,7 +148,7 @@ function Tabla({ filas, pantalla, resaltado, mensajeSinLlamados }: TablaProps) {
         </div>
         <div className="relative min-h-0" style={{ padding: relleno }}>
           {visibles.length > 0 ? (
-            <Filas visibles={visibles} plan={plan} resaltado={resaltado} />
+            <Filas visibles={visibles} plan={plan} resaltes={resaltes} />
           ) : (
             <p className="grid min-h-[30vmin] place-items-center px-8 text-center text-[clamp(0.95rem,2.1vmin,1.4rem)] font-medium text-slate-600">
               {mensajeSinLlamados}
@@ -184,7 +185,7 @@ function Columnas({ plan, filas, children }: { plan: PlanDeCartelera; filas?: nu
  * SU fila, parpadea unos segundos y vuelve al color de las demas: el cambio de
  * color es lo que hace levantar la vista.
  */
-function Filas({ visibles, plan, resaltado }: { visibles: CasillaPantalla[]; plan: PlanDeCartelera; resaltado: string | null }) {
+function Filas({ visibles, plan, resaltes }: { visibles: CasillaPantalla[]; plan: PlanDeCartelera; resaltes: Resaltes }) {
   return (
     <Columnas plan={plan} filas={Math.ceil(visibles.length / plan.columnas)}>
       {visibles.map((casilla) => (
@@ -192,8 +193,9 @@ function Filas({ visibles, plan, resaltado }: { visibles: CasillaPantalla[]; pla
           key={claveDeCasilla(casilla)}
           casilla={casilla}
           plan={plan}
-          destacada={resaltado === claveDeCasilla(casilla)}
-          resaltada={resaltado === claveDeCasilla(casilla)}
+          destacada={resaltes.resaltados.has(claveDeCasilla(casilla))}
+          resaltada={resaltes.resaltados.has(claveDeCasilla(casilla))}
+          nueva={resaltes.nuevos.has(claveDeCasilla(casilla))}
         />
       ))}
     </Columnas>

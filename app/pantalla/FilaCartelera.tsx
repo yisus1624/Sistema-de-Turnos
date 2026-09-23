@@ -13,6 +13,7 @@
  */
 import type { CSSProperties } from 'react'
 import { leerLugarYNumero } from '@/lib/turnos/nombre-consultorio'
+import { EtiquetaNuevo } from './EtiquetaNuevo'
 import { Door, MapPin, Stethoscope, User } from '@phosphor-icons/react/dist/ssr'
 import type { FormaDeFila, PlanDeCartelera } from '@/lib/turnos/distribucion-pantalla'
 import type { CasillaPantalla } from '@/lib/turnos/types'
@@ -78,6 +79,8 @@ type FilaProps = {
   destacada: boolean
   /** Recien llamado: se resalta unos segundos. */
   resaltada: boolean
+  /** Llamado en el ultimo minuto: lleva la etiqueta "NUEVO". */
+  nueva: boolean
 }
 
 /**
@@ -85,15 +88,16 @@ type FilaProps = {
  * bloques parecidos: si estuvieran escritas aparte, bastaria tocar una para
  * que la tabla se viera torcida desde la sala.
  */
-export function FilaCartelera({ casilla, plan, destacada, resaltada }: FilaProps) {
+export function FilaCartelera({ casilla, plan, destacada, resaltada, nueva }: FilaProps) {
   return (
     <div
       className={cn(
-        'resalte-tv grid min-h-0 items-center overflow-hidden rounded-[1.1rem] transition-[background-color,box-shadow] duration-700 ease-[var(--curva)]',
+        'resalte-tv relative grid min-h-0 items-center overflow-hidden rounded-[1.1rem] transition-[background-color,box-shadow] duration-700 ease-[var(--curva)]',
         resaltada && 'llamado-tv ring-[0.3rem] ring-inset ring-amber-300',
       )}
       style={{ ...estiloDeReja(plan), backgroundColor: destacada ? AZUL_FILA_ACTUAL : FONDO_FILA }}
     >
+      {nueva ? <EtiquetaNuevo tamano={plan.letra.turno * 0.34} className="left-[0.35rem] top-[0.3rem]" /> : null}
       <CodigoDeTurno codigo={casilla.codigo} tamano={plan.letra.turno} destacada={destacada} resaltada={resaltada} />
       {plan.forma === 'dos-pisos' ? (
         // A donde ir arriba, con quien debajo: la misma jerarquia, apilada.

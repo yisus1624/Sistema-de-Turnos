@@ -1,6 +1,7 @@
 'use client'
 
 import { CONFIGURACION_INICIAL } from '@/lib/turnos/configuracion-inicial'
+import { SIN_RESALTES, type Resaltes } from '@/lib/turnos/pantalla-tv'
 import type { CasillaPantalla } from '@/lib/turnos/types'
 import Cartelera from '../Cartelera'
 import ControlesPantalla from '../ControlesPantalla'
@@ -39,7 +40,11 @@ type MuestraProps = {
 
 export default function MuestraCliente({ cantidad, diseno, medicoLargo, resaltar }: MuestraProps) {
   const casillas = casillasSimuladas(cantidad, medicoLargo)
-  const resaltado = resaltar ? (casillas.findLast((casilla) => casilla.codigo)?.moduloId ?? null) : null
+  // Como si acabaran de llamar los dos ultimos: los dos resaltados y "NUEVO".
+  const llamados = casillas.filter((casilla) => casilla.codigo).slice(-2).map((casilla) => casilla.moduloId)
+  const resaltes: Resaltes = resaltar
+    ? { ultimo: llamados.at(-1) ?? null, resaltados: new Set(llamados), nuevos: new Set(llamados) }
+    : SIN_RESALTES
   const controles = (
     <ControlesPantalla
       conexion="en-vivo"
@@ -67,7 +72,7 @@ export default function MuestraCliente({ cantidad, diseno, medicoLargo, resaltar
         <Cartelera
           casillas={casillas}
           configuracion={CONFIGURACION}
-          resaltado={resaltado}
+          resaltes={resaltes}
           hora="08:30 a. m."
           controles={controles}
           mensajeSinLlamados="Aun no se ha llamado ningun turno."
@@ -81,7 +86,7 @@ export default function MuestraCliente({ cantidad, diseno, medicoLargo, resaltar
       <DisenoCuadricula
         casillas={casillas}
         configuracion={CONFIGURACION}
-        resaltado={resaltado}
+        resaltes={resaltes}
         mensajeVacio="Aun no hay consultorios ni ventanillas activos."
         controles={controles}
       />

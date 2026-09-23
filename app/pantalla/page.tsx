@@ -27,7 +27,6 @@ import { CONFIGURACION_INICIAL } from '@/lib/turnos/configuracion-inicial'
 import type { CasillaPantalla, ConfiguracionSistema } from '@/lib/turnos/types'
 import { CampanaDeLlamado, desbloquearAudio, sonarCampana } from '@/lib/turnos/anuncio'
 import {
-  MS_RESALTE,
   avisoDeSonido,
   eventoPideResincronizar,
   mensajeSinCasillas,
@@ -39,6 +38,7 @@ import Cartelera from './Cartelera'
 import DisenoCuadricula from './DisenoCuadricula'
 import { horaColombiana, useAhora } from './Reloj'
 import ControlesPantalla from './ControlesPantalla'
+import { useResaltes } from './useResaltes'
 import { useAudioDelTelevisor } from './useAudioDelTelevisor'
 
 
@@ -218,9 +218,9 @@ export default function PantallaPublicaPage() {
   // Nunca se reordena ni se quita por tiempo: solo cambia el contenido de la
   // casilla cuyo modulo llamo o se libero.
   const [casillas, setCasillas] = useState<CasillaPantalla[]>([])
-  // Un solo modulo resaltado a la vez: el foco sigue al llamado mas reciente,
-  // no se queda pegado en el anterior mientras ya se esta llamando a otro.
-  const [resaltado, setResaltado] = useState<string | null>(null)
+  // Los llamados recientes, cada uno con su reloj: varios pueden quedar
+  // resaltados a la vez (ver `useResaltes`).
+  const { resaltes, resaltar } = useResaltes()
 
   // Un unico reloj para los dos diseños (ver `useAhora`). La cuadricula lo
   // pinta con su propio `Reloj` abajo; la cartelera lo recibe ya formateado.
@@ -233,7 +233,6 @@ export default function PantallaPublicaPage() {
   const [campana] = useState(() => new CampanaDeLlamado(sonarCampana))
   const sonidoRef = useRef(sonidoActivo)
   const configuracionRef = useRef(configuracion)
-  const timerResalteRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Cuantos eventos en vivo ha recibido cada modulo. Sirve para saber que
   // casillas de una resincronizacion que ya venia de camino quedaron obsoletas
   // (ver `cargarEstado`). Solo cuentan los eventos que cambian una casilla.
@@ -296,22 +295,6 @@ export default function PantallaPublicaPage() {
     const siguientes = cambiar(casillasRef.current)
     casillasRef.current = siguientes
     setCasillas(siguientes)
-  }, [])
-
-  /**
-   * Prende el resalte de un modulo y programa que se apague solo. Quitar el
-   * timer previo (de OTRO modulo) apaga su resalte de inmediato: el foco
-   * salta al ultimo llamado en vez de quedarse encendido en dos casillas a
-   * la vez mientras el anterior espera a que se cumplan sus 8 segundos.
-   */
-  const resaltar = useCallback((moduloId: string) => {
-    if (timerResalteRef.current) clearTimeout(timerResalteRef.current)
-
-    setResaltado(moduloId)
-    timerResalteRef.current = setTimeout(() => {
-      setResaltado((actual) => (actual === moduloId ? null : actual))
-      timerResalteRef.current = null
-    }, MS_RESALTE)
   }, [])
 
   const ajustesDeSonido = useCallback(
@@ -433,12 +416,6 @@ export default function PantallaPublicaPage() {
   useEffect(() => {
     cargarEstado()
   }, [cargarEstado])
-
-  useEffect(() => {
-    return () => {
-      if (timerResalteRef.current) clearTimeout(timerResalteRef.current)
-    }
-  }, [])
 
   const manejarEvento = useCallback((evento: EventoTurno) => {
     // Se cuenta ANTES de aplicar nada: cualquier resincronizacion que este de
@@ -614,7 +591,7 @@ export default function PantallaPublicaPage() {
       <Cartelera
         casillas={casillas}
         configuracion={configuracion}
-        resaltado={resaltado}
+        resaltes={resaltes}
         hora={ahora ? horaColombiana(ahora) : null}
         mensajeSinLlamados={estadoDeCarga === 'listo' ? 'Aun no se ha llamado ningun turno.' : mensajeSinCasillas(estadoDeCarga)}
         controles={
@@ -637,7 +614,7 @@ export default function PantallaPublicaPage() {
     <DisenoCuadricula
       casillas={casillas}
       configuracion={configuracion}
-      resaltado={resaltado}
+      resaltes={resaltes}
       mensajeVacio={mensajeSinCasillas(estadoDeCarga)}
       controles={
         <ControlesPantalla
