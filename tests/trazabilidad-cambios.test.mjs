@@ -87,33 +87,3 @@ test('una carga que no creo catalogo no ensucia el detalle', () => {
   assert.equal(detalle.creadas, 10)
   assert.equal(detalle.errores, 1)
 })
-
-// --- Como se lee el detalle en la pantalla del registro ---
-
-const { resumirDetalle } = await import('@/lib/seguridad/detalle')
-
-test('un cambio se lee "antes -> despues", no como un objeto', () => {
-  const texto = resumirDetalle({ cambios: { jornada: { antes: 'MANANA', despues: 'TARDE' } } })
-
-  assert.equal(texto, 'jornada: MANANA -> TARDE')
-})
-
-test('un evento sin nada que contar no pinta una fila vacia', () => {
-  assert.equal(resumirDetalle(undefined), '—')
-  assert.equal(resumirDetalle({ cambios: {} }), '—')
-})
-
-test('el resto del detalle se sigue leyendo junto a los cambios', () => {
-  const texto = resumirDetalle({ motivo: 'La tarde no puede empezar antes', cambios: { volumen: { antes: 1, despues: 0 } } })
-
-  assert.equal(texto, 'motivo: La tarde no puede empezar antes · volumen: 1 -> 0')
-})
-
-test('un campo que se queda vacio se lee como "sin asignar"', () => {
-  assert.equal(resumirDetalle({ cambios: { consultorio: { antes: 'Consultorio 3', despues: null } } }),
-    'consultorio: Consultorio 3 -> sin asignar')
-})
-
-test('las listas se leen separadas por comas', () => {
-  assert.equal(resumirDetalle({ jornadasAjustadas: ['Dr. Perez: MANANA -> TARDE'] }), 'jornadasAjustadas: Dr. Perez: MANANA -> TARDE')
-})

@@ -69,10 +69,6 @@ export const secciones: SeccionSistema[] = [
   //   { href: '/admin/estadisticas', label: 'Estadisticas', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
   //   { href: '/operador/historico', label: 'Historico', grupo: 'Atencion', rol: 'OPERADOR' },
   //
-  // Registro de actividad: el hospital decidio no guardar la bitacora (ver
-  // `registrarEvento`). Su codigo sigue en `app/admin/seguridad`.
-  //   { href: '/admin/seguridad', label: 'Registro de actividad', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
-  //
   // Llamado de turnos: EL OPERADOR NO PASA TURNOS. Cada medico llama a sus
   // propios pacientes desde el enlace de su consultorio, y el operador solo
   // agenda citas y registra llegadas. Esta pantalla servia para las filas por

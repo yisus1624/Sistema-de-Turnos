@@ -13,26 +13,14 @@
  *
  */
 import { headers } from 'next/headers'
-import { prisma } from '@/lib/prisma'
-import { esFechaValida, instanteDeFranja } from '@/lib/turnos/tiempo'
 import { ipReenviadaPorElProxy } from './origen'
-import type { EventoSeguridad, FiltroEventos } from './tipos'
+import type { EventoSeguridad } from './tipos'
 
 // El limitador de intentos vive en `./limitador`; se reexporta aqui para
 // quien ya lo importaba de este modulo.
 export { limitarIntentos, limpiarIntentos, MAXIMO_INTENTOS_EN_MEMORIA } from './limitador'
 
-export type { EventoSeguridad, FiltroEventos } from './tipos'
-
-/**
- * Tope de lo que devuelve una consulta.
- *
- * El registro ya no se recorta al guardar —la base se queda con todo, que es
- * de lo que se trata—, asi que el limite solo protege a la pantalla de pedir
- * medio año de actividad en una sola tabla.
- */
-const MAXIMO_POR_CONSULTA = 1000
-
+export type { EventoSeguridad } from './tipos'
 
 /**
  * Si hay un proxy de confianza delante de la aplicacion.
@@ -92,62 +80,4 @@ export async function registrarEvento(evento: Omit<EventoSeguridad, 'fecha'>) {
       ...evento.detalle,
     })
   }
-}
-
-const UN_DIA_MS = 24 * 60 * 60 * 1000
-
-/**
- * Los dos extremos de un dia de Colombia, como instantes.
- *
- * La columna guarda un instante, no un dia. Comparando contra la medianoche
- * del servidor, un equipo en otra zona partiria los dias por donde no es y la
- * actividad de la tarde saldria fechada al dia siguiente.
- */
-function rangoDelDia(dia: string) {
-  const inicio = new Date(instanteDeFranja(dia, '00:00'))
-  return { gte: inicio, lt: new Date(inicio.getTime() + UN_DIA_MS) }
-}
-
-/** Lee el registro, opcionalmente acotado a un dia, un tipo o solo los fallos. */
-export async function listarEventos(filtro: FiltroEventos = {}): Promise<EventoSeguridad[]> {
-  const limite = Math.min(Math.max(filtro.limite ?? 200, 1), MAXIMO_POR_CONSULTA)
-
-  const filas = await prisma.eventoSeguridad.findMany({
-    where: {
-      ...(filtro.tipo ? { tipo: filtro.tipo } : {}),
-      ...(filtro.soloFallidos ? { exito: false } : {}),
-      ...(filtro.fecha && esFechaValida(filtro.fecha) ? { fecha: rangoDelDia(filtro.fecha) } : {}),
-    },
-    orderBy: { fecha: 'desc' },
-    take: limite,
-  })
-
-  return filas.map((fila) => ({
-    fecha: fila.fecha.toISOString(),
-    tipo: fila.tipo,
-    exito: fila.exito,
-    usuarioId: fila.usuarioId,
-    usuarioNombre: fila.usuarioNombre,
-    identificador: fila.identificador,
-    ip: fila.ip,
-    detalle: (fila.detalle as Record<string, unknown> | null) ?? undefined,
-  }))
-}
-
-/**
- * Los tipos de evento que hay guardados, para llenar el selector de la
- * pantalla.
- *
- * Se preguntan a la base y no se sacan de la pagina que se esta viendo: con
- * los tipos deducidos de los ultimos doscientos eventos, filtrar por "cita
- * cancelada" era imposible los dias en que no se habia cancelado ninguna
- * todavia, que es justo cuando se busca.
- */
-export async function tiposDeEvento(): Promise<string[]> {
-  const filas = await prisma.eventoSeguridad.findMany({
-    distinct: ['tipo'],
-    select: { tipo: true },
-    orderBy: { tipo: 'asc' },
-  })
-  return filas.map((f) => f.tipo)
 }
