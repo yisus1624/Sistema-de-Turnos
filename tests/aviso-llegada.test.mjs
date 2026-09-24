@@ -32,6 +32,19 @@ mock.module(comoUrl('node_modules/next/headers.js'), {
   },
 })
 
+// El registro de seguridad escribe en la base con Prisma y el repositorio en
+// memoria no lo cubre: la llegada registrada por la ruta apuntaba su evento en
+// la base de DATABASE_URL. Ver `autorizacion-rutas.test.mjs`.
+const registroReal = await import(comoUrl('lib/seguridad/registro.ts'))
+mock.module(comoUrl('lib/seguridad/registro.ts'), {
+  namedExports: {
+    ...registroReal,
+    registrarEvento: async () => {},
+    listarEventos: async () => [],
+    tiposDeEvento: async () => [],
+  },
+})
+
 // Las pruebas nunca tocan la base de datos real. Ver el modulo.
 await import('./repositorios-en-memoria.mjs')
 
