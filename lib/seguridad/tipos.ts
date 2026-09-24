@@ -28,13 +28,3 @@ export interface EventoSeguridad {
   ip?: string | null
   detalle?: Record<string, unknown>
 }
-
-/** Filtros con los que se consulta el registro. */
-export interface FiltroEventos {
-  /** Un dia concreto en Colombia, AAAA-MM-DD. Sin el, se ven todos. */
-  fecha?: string
-  tipo?: string
-  /** Solo lo que salio mal: intentos de entrada rechazados y cosas asi. */
-  soloFallidos?: boolean
-  limite?: number
-}

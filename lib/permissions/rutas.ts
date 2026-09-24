@@ -46,7 +46,6 @@ export const secciones: SeccionSistema[] = [
   { href: '/admin/profesionales', label: 'Profesionales', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/usuarios', label: 'Usuarios', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/pantalla', label: 'Pantalla y audio', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
-  { href: '/admin/seguridad', label: 'Registro de actividad', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/pruebas', label: 'Simulacion de carga', grupo: 'Pruebas', rol: 'ADMINISTRADOR' },
 
   // --- Operador ---
