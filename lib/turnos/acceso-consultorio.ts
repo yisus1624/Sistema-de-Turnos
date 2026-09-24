@@ -46,9 +46,19 @@
  * decir con un proxy declarado delante (ver `contextoPeticion`). Sin el, la IP
  * la escribe el propio cliente: bloquear por ella no protegeria de nada y
  * podria dejar fuera a todo el hospital, que sale por una sola salida.
+ *
+ * EL FRENO POR ORIGEN NO TUMBA A QUIEN YA ESTABA TRABAJANDO. Con el hospital
+ * saliendo por una sola IP, un equipo del wifi de pacientes probando tokens
+ * frenaba esa IP y el freno rechazaba tambien los enlaces BUENOS, con el mismo
+ * 401 de "enlace no valido": todos los consultorios en rojo a la vez, y
+ * regenerar enlaces no servia mientras durara. Ahora el freno solo corta lo que
+ * este servidor no ha visto entrar bien (ver `entroBienHacePoco`), que es justo
+ * lo que prueba quien adivina, y responde 429, que la pantalla reintenta sola.
  */
+import { createHash } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { turnoRepository } from './repositorio'
+import { MINUTOS_ACCESO_MAXIMO } from './repository'
 import type { Profesional } from './types'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { apuntarFallo, limpiarIntentos, superaFallos } from '@/lib/seguridad/limitador'
@@ -98,6 +108,22 @@ export class AccesoInvalidoError extends Error {
 }
 
 /**
+ * El origen de la peticion esta frenado por demasiados fallos (429).
+ *
+ * NO ES "ENLACE NO VALIDO", y el codigo importa: con un 401 la pantalla del
+ * doctor daba su enlace por vencido y le pedia uno nuevo; un 429 es "espera y
+ * vuelve", que es lo que de verdad pasa, porque el freno se levanta solo.
+ */
+export class FrenoDeAccesoError extends Error {
+  readonly status = 429
+
+  constructor() {
+    super('Hay demasiados intentos de entrada desde esta red. Espera unos minutos: la pantalla vuelve a intentarlo sola.')
+    this.name = 'FrenoDeAccesoError'
+  }
+}
+
+/**
  * La forma de un token de consultorio: 32 bytes al azar en base64url, que son
  * 43 caracteres (ver `crearAccesoProfesional`).
  */
@@ -125,20 +151,31 @@ const INTENTOS_POR_TOKEN = 30
 const INTENTOS_POR_IP = 500
 
 /** Deja el rechazo apuntado y devuelve el error, para lanzarlo en el sitio. */
-async function rechazoRegistrado(ip: string | null, motivo: string) {
+async function rechazoRegistrado(ip: string | null, motivo: string, error: Error = new AccesoInvalidoError()) {
   await registrarEvento({ tipo: EVENTOS.ACCESO_PROFESIONAL, exito: false, ip, detalle: { motivo } })
-  return new AccesoInvalidoError()
+  return error
 }
 
 /**
  * Valida el token de la ruta y devuelve el profesional. Lanza
  * `AccesoInvalidoError` (401) si no sirve, para que `apiError` lo traduzca
  * sin exponer detalles del motivo (no existe / vencio / fue revocado se ven
- * igual desde afuera, a proposito).
+ * igual desde afuera, a proposito), o `FrenoDeAccesoError` (429) si su origen
+ * esta frenado y el enlace no es de los que ya entraron bien.
  */
 export async function requireProfesionalPorToken(token: string): Promise<Profesional> {
   const { ip } = await contextoPeticion()
+  await exigirQuePuedaIntentarlo(token, ip)
 
+  const profesional = await turnoRepository.validarAccesoProfesional(token)
+  if (!profesional) throw await rechazoPorEnlaceInvalido(token, ip)
+
+  await registrarEntrada(profesional, token, ip)
+  return profesional
+}
+
+/** Lo que se rechaza SIN ir a la base: sin token, mal formado o frenado. */
+async function exigirQuePuedaIntentarlo(token: string, ip: string | null) {
   // Sin token no se gasta el cupo del limitador: la clave seria la cadena
   // vacia, un mismo cubo compartido por todas las peticiones sin cookie, y
   // bastaria un bucle sin token para agotarlo y dejar fuera al doctor cuya
@@ -151,10 +188,11 @@ export async function requireProfesionalPorToken(token: string): Promise<Profesi
   // la base, por largo que sea.
   if (!FORMATO_DEL_TOKEN.test(token)) throw await rechazoRegistrado(ip, 'token_malformado')
 
-  // Se MIRA sin contar: solo cuentan los fallos (abajo). Un doctor usando su
-  // enlace bueno no gasta cupo de nadie.
-  if (ip && superaFallos('acceso_consultorio_ip', ip, INTENTOS_POR_IP)) {
-    throw await rechazoRegistrado(ip, 'demasiados_intentos_ip')
+  // Se MIRA sin contar: solo cuentan los fallos. Un doctor usando su enlace
+  // bueno no gasta cupo de nadie, y si ya entro bien, el freno de su origen no
+  // lo toca: lo que frena es lo que nunca entro.
+  if (origenFrenado(ip) && !entroBienHacePoco(token)) {
+    throw await rechazoRegistrado(ip, 'demasiados_intentos_ip', new FrenoDeAccesoError())
   }
 
   // Un mismo enlace fallando una y otra vez si tiene tope: es el enlace vencido
@@ -162,30 +200,87 @@ export async function requireProfesionalPorToken(token: string): Promise<Profesi
   if (superaFallos('token_consultorio', token, INTENTOS_POR_TOKEN)) {
     throw await rechazoRegistrado(ip, 'demasiados_intentos')
   }
+}
 
-  const profesional = await turnoRepository.validarAccesoProfesional(token)
-  if (!profesional) {
-    if (ip) apuntarFallo('acceso_consultorio_ip', ip, MS_VENTANA)
-    apuntarFallo('token_consultorio', token, MS_VENTANA)
-    throw await rechazoRegistrado(ip, 'token_invalido')
-  }
+function origenFrenado(ip: string | null): boolean {
+  if (!ip) return false
+  return superaFallos('acceso_consultorio_ip', ip, INTENTOS_POR_IP)
+}
 
+/** Cuenta el fallo (del enlace y de su origen) y devuelve el 401. */
+async function rechazoPorEnlaceInvalido(token: string, ip: string | null) {
+  if (ip) apuntarFallo('acceso_consultorio_ip', ip, MS_VENTANA)
+  apuntarFallo('token_consultorio', token, MS_VENTANA)
+  // Revocado, vencido o de un doctor dado de baja: deja de ser de los que
+  // pasan el freno, o seguiria llegando a la base mientras el origen este frenado.
+  olvidarEnlace(token)
+  return rechazoRegistrado(ip, 'token_invalido')
+}
+
+async function registrarEntrada(profesional: Profesional, token: string, ip: string | null) {
   // Entro bien: se le borra la cuenta al ENLACE. La del origen no: pueden ser
   // fallos de otros enlaces, y borrarlos con cada acierto dejaba probar tokens
   // al azar sin freno mientras algun doctor trabajara desde la misma IP.
   limpiarIntentos('token_consultorio', token)
+  recordarQueEntro(token)
 
-  if (debeRegistrarAcceso(profesional.id)) {
-    await registrarEvento({
-      tipo: EVENTOS.ACCESO_PROFESIONAL,
-      exito: true,
-      ip,
-      identificador: profesional.id,
-      detalle: { profesional: profesional.nombre },
-    })
+  if (!debeRegistrarAcceso(profesional.id)) return
+  await registrarEvento({
+    tipo: EVENTOS.ACCESO_PROFESIONAL,
+    exito: true,
+    ip,
+    identificador: profesional.id,
+    detalle: { profesional: profesional.nombre },
+  })
+}
+
+/**
+ * Cuanto se recuerda que un enlace entro bien: lo que dura el enlace mas largo
+ * que el sistema genera. Recordarlo no le da ningun permiso —cada peticion lo
+ * sigue validando contra la base, y uno revocado se rechaza igual—: solo le
+ * deja llegar a esa validacion mientras su origen esta frenado.
+ */
+const MS_RECUERDO_DEL_ENLACE = MINUTOS_ACCESO_MAXIMO * 60 * 1000
+
+declare global {
+  var __turnosEnlacesQueEntraron: Map<string, number> | undefined
+}
+
+/**
+ * Huella de los enlaces que entraron bien, con hasta cuando se recuerdan.
+ *
+ * Solo entra aqui un token que la base dio por bueno, asi que quien prueba
+ * tokens al azar no puede llenarla ni colarse por ella: sus tokens nunca
+ * entraron, y con el origen frenado se cortan sin consultar la base, igual que
+ * antes. Se guarda la huella (SHA-256) y no el token, que es una llave.
+ */
+const enlacesQueEntraron: Map<string, number> = globalThis.__turnosEnlacesQueEntraron ?? new Map()
+globalThis.__turnosEnlacesQueEntraron = enlacesQueEntraron
+
+function huellaDe(token: string): string {
+  return createHash('sha256').update(token).digest('base64url')
+}
+
+function entroBienHacePoco(token: string): boolean {
+  return (enlacesQueEntraron.get(huellaDe(token)) ?? 0) > Date.now()
+}
+
+function recordarQueEntro(token: string) {
+  const ahora = Date.now()
+  const huella = huellaDe(token)
+  if (!enlacesQueEntraron.has(huella)) olvidarLosVencidos(ahora)
+  enlacesQueEntraron.set(huella, ahora + MS_RECUERDO_DEL_ENLACE)
+}
+
+function olvidarEnlace(token: string) {
+  enlacesQueEntraron.delete(huellaDe(token))
+}
+
+/** Se barre al llegar un enlace nuevo, que es pocas veces al dia. */
+function olvidarLosVencidos(ahora: number) {
+  for (const [huella, hasta] of enlacesQueEntraron) {
+    if (hasta <= ahora) enlacesQueEntraron.delete(huella)
   }
-
-  return profesional
 }
 
 /**

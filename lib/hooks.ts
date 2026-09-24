@@ -13,6 +13,7 @@ import { crearUltimaPeticion, type UltimaPeticion } from '@/lib/api/ultima-petic
 import { crearLimitador, type Limitador } from '@/lib/api/limitador'
 import {
   cargarConReintento,
+  crearComprobacionPeriodica,
   crearReintento,
   esperaDeReintento,
   type Reintento,
@@ -406,6 +407,25 @@ export function useCargaConReintento(
   }, [reintento])
 
   return recargar
+}
+
+/**
+ * Mientras `activo`, vuelve a llamar a `comprobar` cada tanto (ver
+ * `crearComprobacionPeriodica`), siempre con la `comprobar` mas reciente. Lo
+ * usa la pantalla del doctor con el enlace rechazado: un rechazo pasajero se
+ * recupera solo en vez de dejarla en rojo hasta que alguien pulse F5.
+ */
+export function useComprobacionPeriodica(activo: boolean, comprobar: () => Promise<unknown>) {
+  const ultima = useRef(comprobar)
+  useEffect(() => {
+    ultima.current = comprobar
+  })
+
+  useEffect(() => {
+    if (!activo) return
+    const comprobacion = crearComprobacionPeriodica(() => ultima.current())
+    return () => comprobacion.detener()
+  }, [activo])
 }
 
 /** Cada cuanto se mira si ya cambio el dia en Colombia. */

@@ -15,22 +15,27 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Info, WarningCircle } from '@phosphor-icons/react/dist/ssr'
 import { toast } from '@/components/ui/toast'
 import { esRechazoDeAcceso, hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { ResultadoDeCarga } from '@/lib/api/reintento'
-import { useCargaConReintento, useFechaQueSigueAHoy, useRecargaEnVivo, useUltimaPeticion } from '@/lib/hooks'
+import {
+  useCargaConReintento,
+  useComprobacionPeriodica,
+  useFechaQueSigueAHoy,
+  useRecargaEnVivo,
+  useUltimaPeticion,
+} from '@/lib/hooks'
 import { avisoDePacienteYaLlamado, llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
 import { afectaALaFila } from '@/lib/realtime/canal'
 import { etiquetaDeRetroceso, resumenDelDia } from '@/lib/consultorio/presentacion'
 import type { PlanDeRetroceso } from '@/lib/turnos/reglas-retroceso'
-import { cn } from '@/lib/ui'
 import type { ItemAgendaProfesional, Modulo, Profesional, Servicio, Turno } from '@/lib/turnos/types'
 import { EncabezadoConsultorio } from './EncabezadoConsultorio'
 import { TarjetaPaciente } from './TarjetaPaciente'
 import { BotonesDeAtencion, type AccionDoctor } from './BotonesDeAtencion'
 import { AgendaDeHoy } from './AgendaDeHoy'
 import { ConfirmarRetroceso } from './ConfirmarRetroceso'
+import { Aviso, AvisoAPantallaCompleta, ComprobarDeNuevo } from './AvisosConsultorio'
 
 type Accion = AccionDoctor | null
 
@@ -52,60 +57,6 @@ const SIN_LOGIN = { sinRedirigirAlLogin: true } as const
  * libera y el refresco continua.
  */
 const MS_MAXIMO_POR_ACCION = 20000
-
-type TonoAviso = 'rojo' | 'ambar'
-
-const COLOR_AVISO: Record<TonoAviso, string> = {
-  rojo: 'bg-red-50 text-red-600',
-  ambar: 'bg-amber-50 text-amber-600',
-}
-
-function AvisoAPantallaCompleta({
-  tono,
-  titulo,
-  descripcion,
-}: {
-  tono: TonoAviso
-  titulo: string
-  descripcion: string
-}) {
-  return (
-    <main className="grid min-h-screen place-items-center bg-[var(--turnos-bg)] px-6 text-center">
-      <div className="max-w-md space-y-4">
-        <div className={cn('mx-auto grid h-16 w-16 place-items-center rounded-2xl', COLOR_AVISO[tono])}>
-          <WarningCircle size={32} weight="fill" />
-        </div>
-        <h1 className="text-xl font-semibold tracking-[-0.02em] text-brand-950">{titulo}</h1>
-        <p className="text-sm leading-6 text-slate-600">{descripcion}</p>
-      </div>
-    </main>
-  )
-}
-
-const TONO_AVISO = {
-  rojo: 'border-red-200 bg-red-50 text-red-800',
-  ambar: 'border-amber-200 bg-amber-50 text-amber-800',
-  azul: 'border-acento-100 bg-acento-50 text-acento-900',
-} as const
-
-/** Un aviso dentro de la pantalla, sobre las tarjetas. */
-function Aviso({
-  tono,
-  icono,
-  children,
-}: {
-  tono: keyof typeof TONO_AVISO
-  icono: 'alerta' | 'info'
-  children: React.ReactNode
-}) {
-  const Icono = icono === 'alerta' ? WarningCircle : Info
-  return (
-    <div role="status" className={cn('flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm leading-6', TONO_AVISO[tono])}>
-      <Icono size={20} weight="fill" className="mt-0.5 shrink-0" />
-      <span>{children}</span>
-    </div>
-  )
-}
 
 /*
   YA NO RECIBE EL TOKEN, Y NO PUEDE RECIBIRLO.
@@ -187,7 +138,8 @@ export default function ConsultorioClient() {
       if (esRechazoDeAcceso(error)) setTokenInvalido(true)
       else setSinConexion(true)
       // Se relanza para que `useCargaConReintento` decida si reintentar: un
-      // fallo pasajero se reintenta solo; un enlace vencido, no.
+      // fallo pasajero se reintenta solo y enseguida; un rechazo no se martilla,
+      // lo vuelve a comprobar `useComprobacionPeriodica`, mas espaciado.
       throw error
     } finally {
       if (recarga.esVigente()) setCargando(false)
@@ -205,6 +157,25 @@ export default function ConsultorioClient() {
   useEffect(() => {
     void recargar()
   }, [cargarEstado, recargar])
+
+  /*
+    EL ENLACE RECHAZADO NO ES UN FINAL. Un 401 o un 403 tambien llegan por un
+    freno pasajero del servidor o por un intermediario (nginx, un WAF), y antes
+    la pantalla se quedaba en rojo, sin canal en vivo y sin volver a intentarlo,
+    hasta que alguien pulsara F5: todos los consultorios caidos por un rato de
+    rechazo. Ahora lo sigue comprobando sola; un enlace revocado de verdad sigue
+    rechazado y el aviso se queda.
+  */
+  useComprobacionPeriodica(tokenInvalido, recargar)
+  const [comprobando, setComprobando] = useState(false)
+  const comprobarAhora = async () => {
+    setComprobando(true)
+    try {
+      await recargar()
+    } finally {
+      setComprobando(false)
+    }
+  }
 
   const refrescarSiNoHayAccion = useCallback(() => {
     // No mientras el doctor esta ejecutando una accion: pisarle el estado a
@@ -377,8 +348,10 @@ export default function ConsultorioClient() {
       <AvisoAPantallaCompleta
         tono="rojo"
         titulo="Este enlace ya no es valido"
-        descripcion="Puede que haya vencido o que se haya generado uno nuevo. Pide un enlace nuevo a la oficina de sistemas del hospital."
-      />
+        descripcion="Puede que haya vencido o que se haya generado uno nuevo. Si es asi, pide un enlace nuevo a la oficina de sistemas del hospital."
+      >
+        <ComprobarDeNuevo comprobando={comprobando} alComprobar={() => void comprobarAhora()} />
+      </AvisoAPantallaCompleta>
     )
   }
 

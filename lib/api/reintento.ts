@@ -97,6 +97,44 @@ export function crearReintento(
   }
 }
 
+/** Cuantas comprobaciones de un rechazo van al ritmo corto antes de espaciarse. */
+const COMPROBACIONES_SEGUIDAS = 10
+const MS_COMPROBAR_RECHAZO = 30_000
+const MS_COMPROBAR_RECHAZO_ESPACIADO = 5 * 60_000
+
+/**
+ * Espera antes de volver a comprobar un acceso RECHAZADO (401/403).
+ *
+ * Un rechazo no siempre es definitivo: el freno del servidor o un intermediario
+ * (nginx, un WAF) cortan un rato y se levantan solos. Por eso no se abandona,
+ * pero tampoco se martilla como un fallo de red: cada intento con un enlace
+ * vencido de verdad queda apuntado en el registro de seguridad, que tiene que
+ * seguir sirviendo para encontrar los intentos que importan. Las primeras
+ * comprobaciones van cada 30 a 60 segundos, lo que dura un freno pasajero;
+ * despues, cada 5 a 10 minutos. Con azar, para que las pantallas rechazadas a
+ * la vez no vuelvan todas en el mismo segundo.
+ */
+export function esperaTrasRechazo(intento: number, azar = Math.random()): number {
+  const base = intento < COMPROBACIONES_SEGUIDAS ? MS_COMPROBAR_RECHAZO : MS_COMPROBAR_RECHAZO_ESPACIADO
+  return Math.round(base * (1 + azar))
+}
+
+/**
+ * Vuelve a llamar a `comprobar` cada tanto hasta que se detiene: tras cada
+ * comprobacion, salga como salga, programa la siguiente (ver
+ * `esperaTrasRechazo`). La pantalla la detiene cuando vuelve a entrar o al
+ * salir; detenida, ya no programa nada.
+ */
+export function crearComprobacionPeriodica(
+  comprobar: () => Promise<unknown>,
+  opciones: { programar?: Programador } = {},
+): { detener: () => void } {
+  const ciclo = crearReintento({ programar: opciones.programar, espera: esperaTrasRechazo })
+  const siguiente = () => ciclo.programar(() => void comprobar().then(siguiente, siguiente))
+  siguiente()
+  return { detener: () => ciclo.cancelar() }
+}
+
 /**
  * Lo que devuelve una carga: nada si pinto sus datos, o 'reemplazada' si salio
  * otra mas nueva mientras viajaba (ver `lib/api/ultima-peticion.ts`).
