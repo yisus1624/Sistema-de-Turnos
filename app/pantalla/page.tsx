@@ -477,9 +477,26 @@ export default function PantallaPublicaPage() {
       return
     }
 
-    // El doctor retrocedio al turno anterior: su puesto vuelve a mostrar al
-    // paciente de antes (o queda libre), EN SILENCIO y sin marca de "NUEVO".
-    // No es un llamado: es deshacer uno que no debio pasar.
+    /*
+     * El doctor retrocedio: su puesto vuelve a mostrar al paciente de antes, o
+     * queda libre.
+     *
+     * SUENA Y SE RESALTA COMO UN LLAMADO, y tiene que hacerlo. Antes se pintaba
+     * EN SILENCIO —el razonamiento era "no es un llamado, es deshacer uno"—,
+     * pero desde la sala eso no se sostiene: al doctor que pulso "Siguiente"
+     * sin querer ya le sono el turno del que no tocaba, y el paciente anterior
+     * puede haberse levantado o haber salido creyendo que habia terminado.
+     * Devolverlo a la casilla sin campana y ademas apagandole el resalte lo
+     * dejaba reapareciendo en silencio, sin nada que le diga a esa persona que
+     * vuelva a entrar; y en un televisor con paginas rotando, su fila podia ni
+     * estar a la vista. Volver a atencion ES que lo esten llamando.
+     *
+     * El resalte del puesto se apaga primero (era del llamado que se deshizo) y
+     * se vuelve a encender sobre el paciente restaurado: los dos comparten
+     * clave, porque es el mismo consultorio y el mismo doctor.
+     *
+     * Sin casilla no hay a quien anunciar: el puesto queda libre, en silencio.
+     */
     if (evento.tipo === 'turno.devuelto') {
       contar(evento.puesto)
       apagar(evento.puesto)
@@ -487,6 +504,10 @@ export default function PantallaPublicaPage() {
       aplicarCasillas((previas) =>
         casilla ? colocarLlamado(previas, casilla) : liberarPuesto(previas, evento.puesto),
       )
+      if (casilla) {
+        resaltar(evento.puesto)
+        anunciar()
+      }
     }
   }, [aplicarCasillas, anunciar, resaltar, apagar, cargarEstado])
 
