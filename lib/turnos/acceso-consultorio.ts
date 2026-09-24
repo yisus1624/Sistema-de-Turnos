@@ -94,9 +94,18 @@ export function tokenDeLaPeticion(request: Request): string {
     const separador = parte.indexOf('=')
     if (separador === -1) continue
     if (parte.slice(0, separador).trim() !== COOKIE_CONSULTORIO) continue
-    return decodeURIComponent(parte.slice(separador + 1).trim())
+    return decodificarToken(parte.slice(separador + 1).trim())
   }
   return ''
+}
+
+/** Un `%` roto es un token invalido (''), no un error: con el 500 la pantalla reintentaba sin fin. */
+function decodificarToken(crudo: string): string {
+  try {
+    return decodeURIComponent(crudo)
+  } catch {
+    return ''
+  }
 }
 
 export class AccesoInvalidoError extends Error {
