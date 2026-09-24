@@ -42,7 +42,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       exito: true,
       usuarioId: session.user.id,
       usuarioNombre: session.user.name ?? null,
-      identificador: cita.documentoPaciente,
+      identificador: cita.id,
       detalle: {
         citaId: cita.id,
         horaAnterior: cita.horaCitaOriginal,
@@ -80,7 +80,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
       exito: true,
       usuarioId: session.user.id,
       usuarioNombre: session.user.name ?? null,
-      identificador: cita.documentoPaciente,
+      identificador: cita.id,
       detalle: { citaId: cita.id, horaCita: cita.horaCita, motivo: cita.motivoCancelacion },
     })
 

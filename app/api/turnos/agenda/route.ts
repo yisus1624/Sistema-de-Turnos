@@ -54,7 +54,7 @@ export async function POST(request: Request) {
       exito: true,
       usuarioId: session.user.id,
       usuarioNombre: session.user.name ?? null,
-      identificador: cita.documentoPaciente,
+      identificador: cita.id,
       detalle: { citaId: cita.id, horaCita: cita.horaCita, profesionalId: cita.profesionalId },
     })
 
