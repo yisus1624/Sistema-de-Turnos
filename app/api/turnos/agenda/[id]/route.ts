@@ -5,7 +5,7 @@ import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 
-const SECCIONES_AGENDA = ['/admin/citas', '/operador/agenda', '/admin/pruebas'] as const
+const SECCIONES_AGENDA = ['/admin/citas', '/operador/agenda'] as const
 
 /**
  * Reprograma la cita: la mueve de hora, y si hace falta de doctor.

@@ -15,7 +15,7 @@ import { diaColombia } from '@/lib/turnos/tiempo'
 
 export async function GET(request: Request) {
   try {
-    await requireSeccion('/admin/citas', '/operador/agenda', '/admin/pruebas')
+    await requireSeccion('/admin/citas', '/operador/agenda')
 
     const { searchParams } = new URL(request.url)
     // Sin fecha, hoy: sin ella el repositorio devolvia la historia completa
@@ -39,7 +39,7 @@ const citaSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const session = await requireSeccion('/admin/citas', '/operador/agenda', '/admin/pruebas')
+    const session = await requireSeccion('/admin/citas', '/operador/agenda')
 
     const body = await request.json().catch(() => null)
     const parsed = citaSchema.safeParse(body)
