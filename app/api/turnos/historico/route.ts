@@ -34,6 +34,14 @@ function filtrosDe(searchParams: URLSearchParams) {
   })
 }
 
+function fechasPedidas(searchParams: URLSearchParams) {
+  return {
+    fecha: searchParams.get('fecha') || undefined,
+    fechaDesde: searchParams.get('fechaDesde') || undefined,
+    fechaHasta: searchParams.get('fechaHasta') || undefined,
+  }
+}
+
 export async function GET(request: Request) {
   try {
     // POR SECCION, no por rol. Es lo que usa el resto del sistema, y la
@@ -68,12 +76,11 @@ export async function GET(request: Request) {
     const funcionarioId = veTodo ? filtros.data.funcionarioId : session.user.id
 
     // Sin fechas, hoy; un rango, como mucho un trimestre (ver `rango-historico`).
+    // El monitor en vivo solo necesita el dia: quien entra unicamente por
+    // '/admin/turnos' no puede usarlo para sacar meses de turnos.
+    const soloHoy = veTodo && !tieneSeccion(session, '/admin/historico', '/admin/reportes')
     const rango = acotarRangoDelHistorico(
-      {
-        fecha: searchParams.get('fecha') || undefined,
-        fechaDesde: searchParams.get('fechaDesde') || undefined,
-        fechaHasta: searchParams.get('fechaHasta') || undefined,
-      },
+      soloHoy ? {} : fechasPedidas(searchParams),
       diaColombia(new Date()),
     )
 
