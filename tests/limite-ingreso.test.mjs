@@ -15,6 +15,8 @@ const {
   frenoDeIngreso,
   apuntarFalloDeIngreso,
   olvidarFallosDeIngreso,
+  retardoDeIngresoMs,
+  MS_TOPE_RETARDO_INGRESO,
   FALLOS_POR_CUENTA_Y_ORIGEN,
   FALLOS_POR_CUENTA,
   FALLOS_POR_ORIGEN,
@@ -65,7 +67,28 @@ test('entrar bien borra los fallos de esa cuenta en ese origen', () => {
   assert.equal(frenoDeIngreso('distraido', '198.51.100.200'), 'permitido')
 })
 
-test('sin IP de fiar cuentan los limites por cuenta', () => {
+test('sin IP de fiar, los fallos de un extraño no bloquean la cuenta: la frenan con espera creciente', () => {
   fallar('sin-ip', null, FALLOS_POR_CUENTA_Y_ORIGEN)
-  assert.equal(frenoDeIngreso('sin-ip', null), 'cuenta_en_espera')
+  assert.equal(frenoDeIngreso('sin-ip', null), 'permitido')
+  const espera = retardoDeIngresoMs('sin-ip', null)
+  assert.ok(espera > 0)
+  fallar('sin-ip', null, 1)
+  assert.ok(retardoDeIngresoMs('sin-ip', null) > espera)
+})
+
+test('la espera sin IP de fiar tiene tope y se borra al entrar bien', () => {
+  fallar('tope', null, FALLOS_POR_CUENTA - 1)
+  assert.equal(retardoDeIngresoMs('tope', null), MS_TOPE_RETARDO_INGRESO)
+  olvidarFallosDeIngreso('tope', null)
+  assert.equal(retardoDeIngresoMs('tope', null), 0)
+})
+
+test('con IP de fiar no hay espera: manda el bloqueo por origen', () => {
+  fallar('con-ip', '203.0.113.9', 3)
+  assert.equal(retardoDeIngresoMs('con-ip', '203.0.113.9'), 0)
+})
+
+test('sin IP de fiar sigue el bloqueo por cuenta ante el ataque masivo', () => {
+  fallar('masiva', null, FALLOS_POR_CUENTA)
+  assert.equal(frenoDeIngreso('masiva', null), 'cuenta_en_espera')
 })

@@ -18,6 +18,7 @@ import {
   apuntarFalloDeIngreso,
   frenoDeIngreso,
   olvidarFallosDeIngreso,
+  retardoDeIngresoMs,
   type FrenoDeIngreso,
 } from '@/lib/seguridad/limite-ingreso'
 import { loginSchema } from '@/lib/validators/auth'
@@ -61,6 +62,11 @@ const duracionSesionSegundos = 12 * 60 * 60
  * Un token sin marca es de antes de existir la version de credenciales: se
  * respeta para no cerrar a todo el personal el dia del despliegue.
  */
+function esperarRetardoDeIngreso(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise((resolver) => setTimeout(resolver, ms))
+}
+
 function credencialesCambiaron(delToken: unknown, actual: number | undefined) {
   return typeof delToken === 'number' && delToken !== (actual ?? 0)
 }
@@ -128,6 +134,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           await rechazar(freno === 'cuenta_en_espera' ? 'demasiados_intentos_usuario' : 'demasiados_intentos_ip')
           throw new IngresoEnEspera(freno)
         }
+
+        // Sin IP de fiar no se bloquea la cuenta: se la frena con espera creciente.
+        await esperarRetardoDeIngreso(retardoDeIngresoMs(usuario, ip))
 
         let encontrado
         try {
