@@ -362,7 +362,12 @@ async function conCupoRespaldado<T>(
   escribir: () => Promise<T>,
 ): Promise<T> {
   return conUnicidadRespaldada(
-    { [INDICE_CUPO_MANUAL]: cupoOcupado(nombreProfesional, horaCita) },
+    {
+      [INDICE_CUPO_MANUAL]: cupoOcupado(nombreProfesional, horaCita),
+      // El unico (dia, documento, doctor, hora) incluye las canceladas: volver
+      // a dar ese cupo al mismo paciente respondia 500.
+      citaDelDia: `Este paciente ya tiene registrada una cita con ${nombreProfesional} a las ${horaColombia(horaCita)} de ese dia (aunque este cancelada, se conserva en el historial). Elige otra hora.`,
+    },
     escribir,
   )
 }
