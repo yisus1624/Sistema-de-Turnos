@@ -50,6 +50,7 @@ const UNICOS = {
     { target: ['nombre'], valor: exacta('nombre') },
     { target: ['lower(TRIM(BOTH FROM nombre))'], valor: nombreNormalizado },
     { target: ['prefijo'], valor: exacta('prefijo') },
+    { target: ['claveExterna'], valor: exacta('claveExterna') },
   ],
   modulo: [
     { target: ['nombre'], valor: exacta('nombre') },
@@ -129,7 +130,7 @@ function cumple(fila, where = {}) {
 let secuencia = 0
 
 const POR_DEFECTO = {
-  servicio: () => ({ modoFila: 'POR_PROFESIONAL', activo: true }),
+  servicio: () => ({ modoFila: 'POR_PROFESIONAL', activo: true, claveExterna: null }),
   modulo: () => ({ servicioId: null, activo: true, claveExterna: null }),
   profesional: () => ({ jornada: 'COMPLETA', moduloId: null, usuarioId: null, activo: true, claveExterna: null }),
   cita: () => ({

@@ -132,6 +132,13 @@ model Servicio {
   modoFila ModoFila @default(POR_PROFESIONAL)
   activo   Boolean  @default(true)
 
+  /// Como reconoce la carga diaria a este servicio en el reporte del hospital
+  /// ("ODONTOLOGIA", "CONSULTA EXTERNA"; ver `lib/citas/reporte-hospital.ts`).
+  /// Mismo motivo que en `Modulo.claveExterna`: el administrador puede
+  /// renombrarlo sin que la carga siguiente deje de encontrarlo o lo duplique.
+  /// Null en los que se crean a mano.
+  claveExterna String? @unique
+
   modulos       Modulo[]
   profesionales Profesional[]
   citas         Cita[]

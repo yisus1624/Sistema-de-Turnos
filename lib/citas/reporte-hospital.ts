@@ -60,6 +60,13 @@ export interface Referencia {
 }
 
 export interface ServicioDerivado {
+  /**
+   * Con lo que la carga reconoce este servicio carga tras carga
+   * (`Servicio.claveExterna`). Es FIJA, como la de consultorios y doctores:
+   * el administrador puede renombrar el servicio sin que la carga siguiente
+   * deje de encontrarlo o lo duplique.
+   */
+  clave: string
   nombre: string
   prefijo: string
 }
@@ -95,8 +102,12 @@ export interface ReporteLeido {
  * hace al paciente, y el consultorio como respaldo cuando el procedimiento
  * viene vacio.
  */
-export const SERVICIO_ODONTOLOGIA: ServicioDerivado = { nombre: 'Odontologia', prefijo: 'O' }
-export const SERVICIO_CONSULTA_EXTERNA: ServicioDerivado = { nombre: 'Consulta externa', prefijo: 'C' }
+export const SERVICIO_ODONTOLOGIA: ServicioDerivado = { clave: 'ODONTOLOGIA', nombre: 'Odontologia', prefijo: 'O' }
+export const SERVICIO_CONSULTA_EXTERNA: ServicioDerivado = {
+  clave: 'CONSULTA EXTERNA',
+  nombre: 'Consulta externa',
+  prefijo: 'C',
+}
 
 export function servicioDeLaCita(procedimiento: string, consultorio: string): ServicioDerivado {
   const texto = sinTildes(`${procedimiento} ${consultorio}`).toUpperCase()
