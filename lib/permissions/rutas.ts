@@ -46,7 +46,6 @@ export const secciones: SeccionSistema[] = [
   { href: '/admin/profesionales', label: 'Profesionales', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/usuarios', label: 'Usuarios', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/pantalla', label: 'Pantalla y audio', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
-  { href: '/admin/seguridad', label: 'Registro de actividad', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/pruebas', label: 'Simulacion de carga', grupo: 'Pruebas', rol: 'ADMINISTRADOR' },
 
   // --- Operador ---
@@ -69,6 +68,10 @@ export const secciones: SeccionSistema[] = [
   //   { href: '/admin/historico', label: 'Historico', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
   //   { href: '/admin/estadisticas', label: 'Estadisticas', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
   //   { href: '/operador/historico', label: 'Historico', grupo: 'Atencion', rol: 'OPERADOR' },
+  //
+  // Registro de actividad: el hospital decidio no guardar la bitacora (ver
+  // `registrarEvento`). Su codigo sigue en `app/admin/seguridad`.
+  //   { href: '/admin/seguridad', label: 'Registro de actividad', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   //
   // Llamado de turnos: EL OPERADOR NO PASA TURNOS. Cada medico llama a sus
   // propios pacientes desde el enlace de su consultorio, y el operador solo

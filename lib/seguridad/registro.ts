@@ -73,17 +73,16 @@ export async function contextoPeticion() {
 }
 
 /**
- * Deja constancia de una accion.
+ * Deja constancia de una accion en el log del servidor.
  *
- * HAY QUE ESPERARLA. Es `async` porque escribe en la base, y quien la llama
- * tiene que hacer `await`: en un servidor sin estado la peticion puede
- * terminar antes de que salga la escritura, y el evento que se pierde es justo
- * el de la accion que alguien va a tener que explicar despues.
+ * EL REGISTRO DE ACTIVIDAD YA NO SE GUARDA EN LA BASE, por decision del
+ * hospital: no se consultaba y ocupaba espacio. Los fallos (accesos
+ * rechazados, intentos de ingreso) se siguen anotando por consola, que es lo
+ * que sirve para diagnosticar; los exitos no dejan rastro. La tabla
+ * `eventos_seguridad` se conserva vacia: quitarla seria una migracion
+ * destructiva y no hace falta.
  *
- * NO TUMBA LA ACCION QUE AUDITA. Si la base falla al guardar el apunte, se
- * grita por consola con el evento entero —que al menos queda en el registro del
- * servidor— pero no se lanza el error: que no se pueda escribir la bitacora no
- * puede impedir que se registre la llegada de un paciente.
+ * Sigue siendo `async` para no tocar a las decenas de rutas que la esperan.
  */
 export async function registrarEvento(evento: Omit<EventoSeguridad, 'fecha'>) {
   if (!evento.exito) {
@@ -92,22 +91,6 @@ export async function registrarEvento(evento: Omit<EventoSeguridad, 'fecha'>) {
       ip: evento.ip,
       ...evento.detalle,
     })
-  }
-
-  try {
-    await prisma.eventoSeguridad.create({
-      data: {
-        tipo: evento.tipo,
-        exito: evento.exito,
-        usuarioId: evento.usuarioId ?? null,
-        usuarioNombre: evento.usuarioNombre ?? null,
-        identificador: evento.identificador ?? null,
-        ip: evento.ip ?? null,
-        detalle: (evento.detalle ?? undefined) as never,
-      },
-    })
-  } catch (error) {
-    console.error('[seguridad] no se pudo guardar el evento', evento, error)
   }
 }
 
