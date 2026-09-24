@@ -174,7 +174,10 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
     if (datos.rol !== undefined) registro.rol = datos.rol
     if (datos.area !== undefined) registro.area = datos.area ?? null
     if (datos.activo !== undefined) registro.activo = datos.activo
-    if (datos.password) registro.passwordHash = await cifrarContrasena(datos.password)
+    if (datos.password) {
+      registro.passwordHash = await cifrarContrasena(datos.password)
+      registro.versionCredenciales = (registro.versionCredenciales ?? 0) + 1
+    }
     if (datos.secciones !== undefined) registro.secciones = normalizarSecciones(datos.secciones)
     // Un administrador siempre ve todo; el campo solo aplica a OPERADOR.
     if (registro.rol === 'ADMINISTRADOR') registro.secciones = null

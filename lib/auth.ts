@@ -57,6 +57,14 @@ const LARGO_USUARIO_ANOTADO = 40
 /** Jornada larga en ventanilla: la sesion dura un dia habil completo. */
 const duracionSesionSegundos = 12 * 60 * 60
 
+/**
+ * Un token sin marca es de antes de existir la version de credenciales: se
+ * respeta para no cerrar a todo el personal el dia del despliegue.
+ */
+function credencialesCambiaron(delToken: unknown, actual: number | undefined) {
+  return typeof delToken === 'number' && delToken !== (actual ?? 0)
+}
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   secret: process.env.NEXTAUTH_SECRET,
   trustHost: true,
@@ -167,13 +175,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           rol: encontrado.rol,
           area: encontrado.area,
           secciones: encontrado.secciones ?? null,
+          versionCredenciales: encontrado.versionCredenciales ?? 0,
         }
       },
     }),
   ],
   callbacks: {
     async jwt({ token, user }) {
-      if (user) token.sub = user.id
+      if (user) {
+        token.sub = user.id
+        token.versionCredenciales = user.versionCredenciales
+      }
 
       if (token.sub) {
         // Revalidar en cada peticion: si el administrador desactiva la cuenta,
@@ -202,6 +214,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
 
         if (!actual) return null
+        if (credencialesCambiaron(token.versionCredenciales, actual.versionCredenciales)) return null
 
         token.name = actual.nombre
         token.usuario = actual.usuario

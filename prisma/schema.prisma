@@ -106,6 +106,8 @@ model Usuario {
   /// Secciones (hrefs) permitidas a un OPERADOR. Vacio = las de su rol.
   /// Se ignora para ADMINISTRADOR, que siempre ve todo.
   secciones     String[]   @default([])
+  /// Sube en cada cambio de contrasena: los JWT emitidos con otra version caen.
+  versionCredenciales Int  @default(0)
   fechaCreacion DateTime   @default(now())
   actualizadoEn DateTime   @updatedAt
 

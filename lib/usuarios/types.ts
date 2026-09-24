@@ -29,6 +29,8 @@ export interface Usuario {
    * para ADMINISTRADOR, que siempre ve todo.
    */
   secciones?: string[] | null
+  /** Sube con cada cambio de contrasena; invalida las sesiones anteriores. */
+  versionCredenciales?: number
 }
 
 /** Datos para crear o editar un usuario desde la administracion. */

@@ -27,6 +27,7 @@ type FilaUsuario = {
   area: string | null
   activo: boolean
   secciones: string[]
+  versionCredenciales: number
   fechaCreacion: Date
 }
 
@@ -54,6 +55,7 @@ function aUsuario(fila: FilaUsuario): Usuario {
     activo: fila.activo,
     fechaCreacion: fila.fechaCreacion.toISOString(),
     secciones: fila.secciones.length > 0 ? fila.secciones : null,
+    versionCredenciales: fila.versionCredenciales,
   }
 }
 
@@ -65,6 +67,7 @@ const CAMPOS_PUBLICOS = {
   area: true,
   activo: true,
   secciones: true,
+  versionCredenciales: true,
   fechaCreacion: true,
 } as const
 
@@ -132,6 +135,7 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
       area?: string | null
       activo?: boolean
       passwordHash?: string
+      versionCredenciales?: { increment: number }
       secciones?: string[]
     } = {}
 
@@ -148,7 +152,10 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
     if (datos.rol !== undefined) cambios.rol = datos.rol
     if (datos.area !== undefined) cambios.area = datos.area ?? null
     if (datos.activo !== undefined) cambios.activo = datos.activo
-    if (datos.password) cambios.passwordHash = await cifrarContrasena(datos.password)
+    if (datos.password) {
+      cambios.passwordHash = await cifrarContrasena(datos.password)
+      cambios.versionCredenciales = { increment: 1 }
+    }
     if (datos.secciones !== undefined) cambios.secciones = datos.secciones ?? []
 
     // Un administrador siempre ve todo; el campo solo aplica a OPERADOR.
