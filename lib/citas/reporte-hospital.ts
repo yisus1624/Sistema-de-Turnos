@@ -25,6 +25,7 @@
  * paciente en admisiones y ponerlo en la fila del doctor correcto: documento,
  * nombre, hora, profesional, consultorio y procedimiento.
  */
+import { esFechaValida, instanteDeFranja } from '@/lib/turnos/tiempo'
 
 /** Una cita del reporte, ya interpretada. */
 export interface FilaReporte {
@@ -129,13 +130,24 @@ export function claveDe(texto: string) {
 }
 
 /**
- * Fecha del reporte a dia AAAA-MM-DD.
+ * Fecha del reporte a dia AAAA-MM-DD, o `null` si no se reconoce o no existe.
  *
  * Llega como DD/MM/AAAA (formato colombiano) en el XML, y como celda de fecha
  * en el XLSX, que Excel entrega ya convertida. Se aceptan los dos, y tambien
  * AAAA-MM-DD por si algun dia cambian el formato del informe.
+ *
+ * SE COMPRUEBA QUE EL DIA EXISTA. Armar la cadena no basta: "32/09/2026" o
+ * "09/14/2026" (el mes primero) daban un dia imposible que reventaba al
+ * calcular el instante de la cita, y con el la carga entera; "31/02/2026" ni
+ * siquiera reventaba, y la cita quedaba guardada en un dia que no existe.
  */
 export function normalizarFecha(valor: unknown): string | null {
+  const candidata = fechaConForma(valor)
+  return candidata && esFechaValida(candidata) ? candidata : null
+}
+
+/** La fecha escrita como AAAA-MM-DD, exista ese dia o no. */
+function fechaConForma(valor: unknown): string | null {
   if (valor instanceof Date && !Number.isNaN(valor.getTime())) {
     // Excel entrega las fechas como medianoche UTC del dia que muestra la
     // celda. Se toma esa fecha tal cual y NO se convierte a Colombia: hacerlo
@@ -144,8 +156,6 @@ export function normalizarFecha(valor: unknown): string | null {
   }
 
   const texto = String(valor ?? '').trim()
-  if (!texto) return null
-
   const conBarras = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(texto)
   if (conBarras) {
     const [, dia, mes, ano] = conBarras
@@ -153,9 +163,7 @@ export function normalizarFecha(valor: unknown): string | null {
   }
 
   const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(texto)
-  if (iso) return iso[0].slice(0, 10)
-
-  return null
+  return iso ? iso[0].slice(0, 10) : null
 }
 
 /** Hora del reporte a "HH:MM". Acepta "07:00", "7:00" y "07:00:00". */
@@ -175,18 +183,6 @@ export function normalizarHora(valor: unknown): string | null {
   if (horas > 23 || minutos > 59) return null
 
   return `${String(horas).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`
-}
-
-/**
- * Instante de una cita, EN COLOMBIA.
- *
- * El desfase va escrito a mano (-05:00) y no se usa la zona del proceso:
- * Colombia no tiene horario de verano, y si el servidor esta en otra zona la
- * cita del hospital caeria en el dia equivocado. Es la misma regla que en
- * `lib/turnos/tiempo.ts`.
- */
-function instanteDeCita(fecha: string, hora: string) {
-  return new Date(`${fecha}T${hora}:00-05:00`).toISOString()
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +205,18 @@ export interface CamposCrudos {
 const texto = (valor: unknown) => normalizarEspacios(String(valor ?? ''))
 
 /**
+ * Por que no sirve la fecha de una fila.
+ *
+ * Se distingue la que no parece una fecha de la que tiene forma de fecha pero
+ * no existe: a esta ultima casi siempre le pasa que viene con el mes primero,
+ * y decirlo es lo que le ahorra al funcionario adivinar que corregir.
+ */
+function motivoDeFecha(valor: unknown) {
+  if (!fechaConForma(valor)) return `Fecha no reconocida: "${texto(valor)}".`
+  return `La fecha "${texto(valor)}" no existe en el calendario. El reporte debe traerla como dia/mes/año (DD/MM/AAAA).`
+}
+
+/**
  * Convierte una fila cruda en una cita, o dice por que no se puede.
  *
  * Devuelve el motivo en vez de lanzar: una fila mala no puede tumbar la carga
@@ -217,7 +225,7 @@ const texto = (valor: unknown) => normalizarEspacios(String(valor ?? ''))
  */
 export function interpretarFila(fila: number, crudo: CamposCrudos): FilaReporte | ErrorFila {
   const fecha = normalizarFecha(crudo.fecha)
-  if (!fecha) return { fila, motivo: `Fecha no reconocida: "${texto(crudo.fecha)}".` }
+  if (!fecha) return { fila, motivo: motivoDeFecha(crudo.fecha) }
 
   const hora = normalizarHora(crudo.hora)
   if (!hora) return { fila, motivo: `Hora no reconocida: "${texto(crudo.hora)}".` }
@@ -242,7 +250,9 @@ export function interpretarFila(fila: number, crudo: CamposCrudos): FilaReporte 
   return {
     fila,
     fecha,
-    horaCita: instanteDeCita(fecha, hora),
+    // En hora de Colombia, con el desfase escrito a mano: es la misma regla
+    // que usa toda la agenda.
+    horaCita: instanteDeFranja(fecha, hora),
     tipoDocumento: texto(crudo.tipoDocumento) || null,
     documentoPaciente: documento,
     nombrePaciente,
