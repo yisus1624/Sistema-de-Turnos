@@ -71,6 +71,8 @@ import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import { useFechaQueSigueAHoy, useUltimaPeticion, useValorConRetraso } from '@/lib/hooks'
+import { diaVecino } from '@/lib/api/dia-elegido'
+import { esFechaValida } from '@/lib/turnos/tiempo'
 import type {
   Jornada,
   JornadaDelDia,
@@ -279,19 +281,9 @@ export default function ProfesionalesClient() {
       COLORES_SERVICIO[(orden.get(servicioId) ?? 0) % COLORES_SERVICIO.length]
   }, [servicios])
 
-  /**
-   * Un dia adelante o atras.
-   *
-   * Se calcula sobre la fecha en texto y a mediodia UTC: partiendo de
-   * medianoche, un equipo configurado en otra zona saltaria dos dias o ninguno
-   * al sumar uno.
-   */
+  /** Un dia adelante o atras (ver `diaVecino`: nunca lanza con una fecha invalida). */
   const moverDia = useCallback((dias: number) => {
-    setFecha((actual) => {
-      const dia = new Date(`${actual}T12:00:00Z`)
-      dia.setUTCDate(dia.getUTCDate() + dias)
-      return dia.toISOString().slice(0, 10)
-    })
+    setFecha((actual) => diaVecino(actual, dias))
   }, [])
 
   /**
@@ -511,7 +503,10 @@ export default function ProfesionalesClient() {
             <input
               type="date"
               value={fecha}
-              onChange={(e) => setFecha(e.target.value)}
+              onChange={(e) => {
+                // Vacio o con un año imposible mientras se corrige: se conserva la ultima fecha buena.
+                if (esFechaValida(e.target.value)) setFecha(e.target.value)
+              }}
               aria-label="Dia que se esta mirando"
               className="w-[8.5rem] border-0 bg-transparent p-0 text-sm font-semibold tabular-nums text-brand-950 outline-none"
             />
