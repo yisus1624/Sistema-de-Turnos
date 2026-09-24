@@ -2,13 +2,14 @@
 
 /**
  * Los avisos de la pantalla del doctor: el que ocupa la pantalla entera (enlace
- * rechazado, sin conexion) y el que va sobre las tarjetas.
+ * rechazado, sin conexion, cambio de doctor) y el que va sobre las tarjetas.
  *
  * Viven aparte de `ConsultorioClient` para que la pantalla quede en lo que
  * hace —cargar, llamar, cerrar— y no en como se pinta cada aviso.
  */
 import { Info, WarningCircle } from '@phosphor-icons/react/dist/ssr'
 import { Button } from '@/components/ui/Button'
+import type { CambioDeDoctor } from '@/lib/consultorio/presentacion'
 import { cn } from '@/lib/ui'
 
 type TonoAviso = 'rojo' | 'ambar'
@@ -62,6 +63,31 @@ export function ComprobarDeNuevo({ comprobando, alComprobar }: { comprobando: bo
         Reintentar
       </Button>
     </div>
+  )
+}
+
+/**
+ * La pantalla paso a ser de otro doctor (ver `cambioDeDoctor`).
+ *
+ * Ocupa la pantalla entera y pide un clic A PROPOSITO: si solo cambiaran los
+ * datos, el doctor que seguia ahi veria pacientes ajenos como propios y podria
+ * llamar o cerrar a los de otro. Antes de seguir, tiene que haber leido de
+ * quien es ahora.
+ */
+export function AvisoDeCambioDeDoctor({ cambio, alContinuar }: { cambio: CambioDeDoctor; alContinuar: () => void }) {
+  return (
+    <AvisoAPantallaCompleta
+      tono="ambar"
+      titulo="Esta pantalla cambio de doctor"
+      descripcion={`En este navegador se abrio el enlace de ${cambio.ahora}, y un navegador solo puede tener abierto un consultorio a la vez. Lo que veias de ${cambio.antes} ya no se muestra aqui, para que nadie llame ni cierre por error a los pacientes de otro.`}
+    >
+      <div className="space-y-4 pt-1">
+        <p className="text-sm leading-6 text-slate-600">
+          Si eres {cambio.antes}, vuelve a abrir tu enlace: este navegador pasara a tu consultorio.
+        </p>
+        <Button onClick={alContinuar}>Ver el consultorio de {cambio.ahora}</Button>
+      </div>
+    </AvisoAPantallaCompleta>
   )
 }
 

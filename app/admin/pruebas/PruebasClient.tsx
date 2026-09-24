@@ -159,7 +159,7 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
         // servidor ya tenia otro (409), lo adopta en vez de fallar.
         const desenlace = await llamarSiguienteDesde(
           '/api/consultorio/llamar-siguiente',
-          { moduloId: doctor.moduloId },
+          { moduloId: doctor.moduloId, profesionalId: doctor.profesionalId },
           { headers: { 'x-consultorio-token': doctor.token }, turnoVisto: doctor.turnoActual ?? null },
         )
         const { turno } = desenlace

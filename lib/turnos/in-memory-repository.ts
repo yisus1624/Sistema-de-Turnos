@@ -549,8 +549,10 @@ function validarFranjaDeCita(params: {
  *
  * Las reglas:
  *   1. El modulo tiene que estar activo.
- *   2. Un doctor, solo en un consultorio de su servicio (o sin asignar); una
- *      ventanilla, solo filas compartidas y un modulo compatible.
+ *   2. Un doctor, en cualquier consultorio (un salon puede tener doctores de
+ *      varios servicios); CUAL es no lo elige la pantalla: la ruta del
+ *      consultorio pasa el asignado al doctor (`consultorioDelProfesional`).
+ *      Una ventanilla, solo filas compartidas y un modulo compatible.
  *   3. No puede haber OTRA persona atendiendo ahi en este momento (409).
  */
 function validarModuloParaLlamar(modulo: Modulo, quien: SolicitudDeLlamado) {

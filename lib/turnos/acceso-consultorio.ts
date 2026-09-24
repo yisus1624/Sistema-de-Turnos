@@ -64,6 +64,7 @@ import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { apuntarFallo, limpiarIntentos, superaFallos } from '@/lib/seguridad/limitador'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { apiError } from '@/lib/permissions/session'
+import { cuerpoJson, profesionalVistoSchema } from '@/lib/validators/turnos'
 
 /**
  * Nombre de la cookie de sesion del consultorio. Lo comparten `proxy.ts`
@@ -293,6 +294,57 @@ function olvidarLosVencidos(ahora: number) {
  */
 export async function requireProfesionalDelConsultorio(request: Request): Promise<Profesional> {
   return requireProfesionalPorToken(tokenDeLaPeticion(request))
+}
+
+/**
+ * La pantalla que actua muestra a OTRO doctor que el de la cookie (409).
+ *
+ * No es un enlace malo (401): la cookie sirve, pero es de otro. Tampoco lleva
+ * `turnoActual`, a diferencia del 409 de un turno: la pantalla no tiene nada
+ * que adoptar, tiene que recargar y ver de quien es ahora.
+ */
+export class OtroProfesionalError extends Error {
+  readonly status = 409
+
+  constructor() {
+    super(
+      'En este navegador se abrio el enlace de otro doctor, asi que esta pantalla ya no corresponde al consultorio abierto. No se hizo ningun cambio. Recarga la pagina (tecla F5).',
+    )
+    this.name = 'OtroProfesionalError'
+  }
+}
+
+/**
+ * Exige que la pantalla que actua muestre al MISMO profesional de la cookie.
+ *
+ * Hay UNA cookie de consultorio por navegador. En un PC compartido, abrir el
+ * enlace de otro doctor la cambia, y las pestañas que ya estaban abiertas
+ * pasaban a actuar como ese otro sin enterarse: "Llamar siguiente" en la
+ * pestaña del Dr. A llamaba al paciente del Dr. B y le cerraba al que tenia
+ * adentro. La pantalla declara a quien muestra; si no es el de la cookie, no se
+ * toca nada.
+ *
+ * Si no lo declara, pasa: es una pestaña abierta con el codigo de antes, que
+ * tiene que seguir funcionando hasta que recargue.
+ */
+export function exigirMismoProfesional(profesional: Profesional, cuerpo: unknown): void {
+  const visto = profesionalVistoSchema.safeParse(cuerpo)
+  if (!visto.success || visto.data.profesionalId === undefined) return
+  if (visto.data.profesionalId !== profesional.id) throw new OtroProfesionalError()
+}
+
+/**
+ * El profesional de la cookie, comprobado contra el que muestra la pantalla, y
+ * el cuerpo ya leido: una peticion solo se puede leer una vez, y la ruta lo
+ * necesita para lo suyo.
+ */
+export async function requireProfesionalDeLaPantalla(
+  request: Request,
+): Promise<{ profesional: Profesional; cuerpo: unknown }> {
+  const profesional = await requireProfesionalDelConsultorio(request)
+  const cuerpo = await cuerpoJson(request)
+  exigirMismoProfesional(profesional, cuerpo)
+  return { profesional, cuerpo }
 }
 
 /**

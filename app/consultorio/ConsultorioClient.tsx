@@ -27,7 +27,7 @@ import {
 } from '@/lib/hooks'
 import { avisoDePacienteYaLlamado, llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
 import { afectaALaFila } from '@/lib/realtime/canal'
-import { etiquetaDeRetroceso, resumenDelDia } from '@/lib/consultorio/presentacion'
+import { cambioDeDoctor, etiquetaDeRetroceso, resumenDelDia, type CambioDeDoctor } from '@/lib/consultorio/presentacion'
 import type { PlanDeRetroceso } from '@/lib/turnos/reglas-retroceso'
 import type { ItemAgendaProfesional, Modulo, Profesional, Servicio, Turno } from '@/lib/turnos/types'
 import { EncabezadoConsultorio } from './EncabezadoConsultorio'
@@ -35,7 +35,7 @@ import { TarjetaPaciente } from './TarjetaPaciente'
 import { BotonesDeAtencion, type AccionDoctor } from './BotonesDeAtencion'
 import { AgendaDeHoy } from './AgendaDeHoy'
 import { ConfirmarRetroceso } from './ConfirmarRetroceso'
-import { Aviso, AvisoAPantallaCompleta, ComprobarDeNuevo } from './AvisosConsultorio'
+import { Aviso, AvisoAPantallaCompleta, AvisoDeCambioDeDoctor, ComprobarDeNuevo } from './AvisosConsultorio'
 
 type Accion = AccionDoctor | null
 
@@ -75,6 +75,10 @@ export default function ConsultorioClient() {
   const [sinConexion, setSinConexion] = useState(false)
 
   const [profesional, setProfesional] = useState<Profesional | null>(null)
+  // El doctor que esta pantalla ya mostraba, para darse cuenta si al recargar
+  // es otro (ver `cambioDeDoctor`); y el cambio, hasta que se lea el aviso.
+  const profesionalVisto = useRef<Profesional | null>(null)
+  const [doctorCambiado, setDoctorCambiado] = useState<CambioDeDoctor | null>(null)
   // El consultorio ASIGNADO en la agenda del hospital. No se elige aqui.
   const [consultorio, setConsultorio] = useState<Modulo | null>(null)
   const [servicio, setServicio] = useState<Servicio | null>(null)
@@ -119,6 +123,15 @@ export default function ConsultorioClient() {
         retroceso: PlanDeRetroceso | null
       }>(`/api/consultorio?fecha=${fecha}`, { ...SIN_LOGIN, signal: recarga.signal })
       if (!recarga.esVigente()) return 'reemplazada'
+
+      // Otro doctor en la cookie (se abrio su enlace en este navegador): la
+      // pantalla se reinicia con lo suyo y se tapa con el aviso hasta leerlo.
+      const cambio = cambioDeDoctor(profesionalVisto.current, data.profesional)
+      profesionalVisto.current = data.profesional
+      if (cambio) {
+        setDoctorCambiado(cambio)
+        setConfirmandoRetroceso(false)
+      }
 
       setProfesional(data.profesional)
       setConsultorio(data.consultorio)
@@ -236,14 +249,22 @@ export default function ConsultorioClient() {
     }
   }
 
+  // A QUIEN muestra esta pantalla. Viaja en cada accion: si en este navegador
+  // se abrio el enlace de otro doctor, la cookie ya es de ese otro y el
+  // servidor responde 409 sin tocar nada (ver `exigirMismoProfesional`).
+  const profesionalId = profesional?.id
+
   // Se manda el paciente que el doctor VE abierto: si el servidor ya habia
   // llamado a otro (se perdio la respuesta), no llama a nadie mas ni cierra a
   // ese paciente por detras; devuelve el real y la pantalla se pone al dia.
+  // El consultorio ya lo pone el servidor (el asignado); `moduloId` se sigue
+  // mandando solo para que un servidor de la version anterior, si se vuelve
+  // atras un despliegue, no rechace el llamado.
   const llamarSiguiente = () =>
     ejecutar('llamar', async () => {
       const desenlace = await llamarSiguienteDesde(
         '/api/consultorio/llamar-siguiente',
-        { moduloId },
+        { moduloId, profesionalId },
         { ...SIN_LOGIN, turnoVisto: turnoActual },
       )
       setTurnoActual(desenlace.turno)
@@ -261,7 +282,7 @@ export default function ConsultorioClient() {
       if (!turnoActual) return
       const { turno } = await pedir<{ turno: Turno }>(`/api/consultorio/turnos/${turnoActual.id}/repetir`, {
         method: 'POST', ...SIN_LOGIN,
-        body: JSON.stringify({ vecesLlamadoVisto: turnoActual.vecesLlamado }),
+        body: JSON.stringify({ vecesLlamadoVisto: turnoActual.vecesLlamado, profesionalId }),
       })
       setTurnoActual(turno)
       toast.info('Llamado repetido', turno.nombrePaciente ?? turno.codigo)
@@ -270,7 +291,11 @@ export default function ConsultorioClient() {
   const cerrarTurno = (tipo: 'atendido' | 'ausente') =>
     ejecutar(tipo, async () => {
       if (!turnoActual) return
-      await pedir(`/api/consultorio/turnos/${turnoActual.id}/${tipo}`, { method: 'POST', ...SIN_LOGIN })
+      await pedir(`/api/consultorio/turnos/${turnoActual.id}/${tipo}`, {
+        method: 'POST',
+        ...SIN_LOGIN,
+        body: JSON.stringify({ profesionalId }),
+      })
       toast[tipo === 'atendido' ? 'success' : 'warning'](
         tipo === 'atendido' ? 'Atencion finalizada' : 'Paciente ausente',
         turnoActual.nombrePaciente ?? turnoActual.codigo,
@@ -307,7 +332,11 @@ export default function ConsultorioClient() {
           {
             method: 'POST',
             ...SIN_LOGIN,
-            body: JSON.stringify({ turnoAbiertoId: plan.devolver?.id ?? null, restaurarId: plan.restaurar?.id ?? null }),
+            body: JSON.stringify({
+              turnoAbiertoId: plan.devolver?.id ?? null,
+              restaurarId: plan.restaurar?.id ?? null,
+              profesionalId,
+            }),
           },
         )
         // Se pinta ya lo que devolvio el servidor, sin esperar la recarga.
@@ -353,6 +382,10 @@ export default function ConsultorioClient() {
         <ComprobarDeNuevo comprobando={comprobando} alComprobar={() => void comprobarAhora()} />
       </AvisoAPantallaCompleta>
     )
+  }
+
+  if (doctorCambiado) {
+    return <AvisoDeCambioDeDoctor cambio={doctorCambiado} alContinuar={() => setDoctorCambiado(null)} />
   }
 
   // Sin datos y sin rechazo del servidor: el enlace sirve, lo que fallo fue la
