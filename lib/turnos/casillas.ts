@@ -17,6 +17,7 @@
  * daba por bueno justo lo contrario de lo que hacia produccion. Aqui esta una
  * sola vez, sin base de datos delante, y se puede probar caso por caso.
  */
+import type { CasillaPantalla } from './types'
 
 export interface EntradaDePantalla {
   /** Consultorios y ventanillas ACTIVOS del catalogo. */
@@ -96,6 +97,14 @@ export function modulosVisiblesEnPantalla(entrada: EntradaDePantalla): Set<strin
  */
 export function puestoDe(moduloId: string, profesionalId?: string | null): string {
   return profesionalId ? `${moduloId}~${profesionalId}` : moduloId
+}
+
+/**
+ * La casilla libre de un consultorio, a partir de cualquiera de las suyas: sin
+ * turno y sin puesto, como la manda el servidor cuando nadie atiende ahi.
+ */
+export function casillaLibreDe(casilla: CasillaPantalla): CasillaPantalla {
+  return { ...casilla, puesto: undefined, codigo: null, horaLlamado: null, vecesLlamado: 0 }
 }
 
 /** La clave de una casilla en el televisor: su puesto o, si no lo trae, su consultorio. */

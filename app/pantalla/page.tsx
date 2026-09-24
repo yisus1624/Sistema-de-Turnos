@@ -33,7 +33,7 @@ import {
   type EstadoDeCarga,
 } from '@/lib/turnos/pantalla-tv'
 import { decidirLlamadoEnVivo, mezclarFotoDePantalla } from '@/lib/turnos/mezcla-pantalla'
-import { claveDeCasilla } from '@/lib/turnos/casillas'
+import { casillaLibreDe, claveDeCasilla } from '@/lib/turnos/casillas'
 import Cartelera from './Cartelera'
 import DisenoCuadricula from './DisenoCuadricula'
 import { horaColombiana, useAhora } from './Reloj'
@@ -99,16 +99,6 @@ async function pedirFotoDePantalla(signal: AbortSignal): Promise<FotoDePantalla>
   const respuesta = await fetch('/api/turnos/pantalla', { cache: 'no-store', signal })
   if (!respuesta.ok) throw new Error(`La pantalla no pudo ponerse al dia (estado ${respuesta.status}).`)
   return respuesta.json()
-}
-
-/** Una casilla "libre" (sin turno) para reponer un modulo cuando se libera. */
-function casillaLibreDesde(casilla: CasillaPantalla): CasillaPantalla {
-  return {
-    ...casilla,
-    codigo: null,
-    horaLlamado: null,
-    vecesLlamado: 0,
-  }
 }
 
 /**
@@ -181,7 +171,7 @@ function liberarPuesto(previas: CasillaPantalla[], clave: string): CasillaPantal
   if (!liberada) return previas
   const otrosDelConsultorio = previas.some((c) => c !== liberada && c.moduloId === liberada.moduloId)
   if (otrosDelConsultorio) return previas.filter((c) => c !== liberada)
-  return previas.map((c) => (c === liberada ? { ...casillaLibreDesde(c), puesto: undefined } : c))
+  return previas.map((c) => (c === liberada ? casillaLibreDe(c) : c))
 }
 
 export default function PantallaPublicaPage() {
@@ -351,9 +341,13 @@ export default function PantallaPublicaPage() {
         llamados = mezcla.llamadosNuevos
         return mezcla.casillas
       })
-      llamados.forEach(() => anunciar())
-      const ultimo = llamados.at(-1)
-      if (ultimo) resaltar(ultimo)
+      // Una campanada y un resalte (con su "NUEVO") por cada llamado. Vienen
+      // por hora, asi que el ultimo resaltado es el mas reciente y la
+      // rotacion de paginas salta al suyo.
+      for (const clave of llamados) {
+        anunciar()
+        resaltar(clave)
+      }
     },
     [aplicarCasillas, anunciar, resaltar, modulosTocadosDesde],
   )

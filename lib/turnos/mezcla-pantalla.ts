@@ -1,5 +1,5 @@
 import type { CasillaPantalla } from './types'
-import { claveDeCasilla } from './casillas'
+import { casillaLibreDe, claveDeCasilla } from './casillas'
 
 /**
  * Cuanto tiempo despues de un llamado todavia vale la pena anunciarlo al
@@ -57,27 +57,67 @@ export function mezclarFotoDePantalla(
   tocadosDuranteElViaje: ReadonlySet<string>,
   ahoraMs: number,
 ): ResultadoMezcla {
-  const porModulo = new Map(previas.map((c) => [claveDeCasilla(c), c]))
+  const pintadasPorModulo = agruparPorModulo(previas)
+  const casillas: CasillaPantalla[] = []
   const nuevos: CasillaPantalla[] = []
 
-  const casillas = foto.map((nueva) => {
-    const previa = porModulo.get(claveDeCasilla(nueva))
-    if (previa && tocadosDuranteElViaje.has(claveDeCasilla(nueva))) return previa
-
-    if (previa && esLlamadoNoVisto(previa, nueva, ahoraMs)) nuevos.push(nueva)
-    return nueva
-  })
+  for (const [moduloId, deLaFoto] of agruparPorModulo(foto)) {
+    const pintadas = pintadasPorModulo.get(moduloId) ?? []
+    const mezcla = mezclarConsultorio(pintadas, deLaFoto, tocadosDuranteElViaje)
+    casillas.push(...mezcla)
+    nuevos.push(...mezcla.filter((c) => esLlamadoNoVisto(pintadas, c, ahoraMs)))
+  }
 
   return { casillas, llamadosNuevos: ordenarPorHora(nuevos).map(claveDeCasilla) }
+}
+
+/** Las casillas de cada consultorio, en el orden en que aparecen. */
+function agruparPorModulo(casillas: CasillaPantalla[]): Map<string, CasillaPantalla[]> {
+  const grupos = new Map<string, CasillaPantalla[]>()
+  for (const casilla of casillas) grupos.set(casilla.moduloId, [...(grupos.get(casilla.moduloId) ?? []), casilla])
+  return grupos
+}
+
+/**
+ * Las casillas de UN consultorio tras la foto, puesto por puesto.
+ *
+ * SE COMPARA POR CONSULTORIO, NO SOLO POR CLAVE: la casilla libre no trae
+ * puesto (clave "M") y la ocupada si ("M~P"). Comparando solo la clave, un
+ * llamado sobre un consultorio Libre no encontraba su casilla previa y entraba
+ * sin campana, y un "Atendido" llegado durante el viaje (lo pintado ya era la
+ * libre "M") dejaba que la foto vieja repintara el turno cerrado.
+ *
+ * Los puestos que recibieron un evento durante el viaje se quedan como estan
+ * pintados; los demas, como dice la foto. Si no queda ningun puesto ocupado, el
+ * consultorio muestra su casilla libre.
+ */
+function mezclarConsultorio(
+  pintadas: CasillaPantalla[],
+  deLaFoto: CasillaPantalla[],
+  tocados: ReadonlySet<string>,
+): CasillaPantalla[] {
+  const tocada = (c: CasillaPantalla) => tocados.has(claveDeCasilla(c))
+  const ocupadas = [
+    ...deLaFoto.filter((c) => c.codigo && !tocada(c)),
+    ...pintadas.filter((c) => c.codigo && tocada(c)),
+  ]
+  if (ocupadas.length > 0) return ocupadas
+  const estaLibre = (c: CasillaPantalla) => !c.codigo
+  return [deLaFoto.find(estaLibre) ?? pintadas.find(estaLibre) ?? casillaLibreDe(deLaFoto[0])]
 }
 
 function ordenarPorHora(casillas: CasillaPantalla[]): CasillaPantalla[] {
   return [...casillas].sort((a, b) => Date.parse(a.horaLlamado ?? '') - Date.parse(b.horaLlamado ?? ''))
 }
 
-function esLlamadoNoVisto(previa: CasillaPantalla, nueva: CasillaPantalla, ahoraMs: number) {
-  if (!nueva.codigo || !nueva.horaLlamado) return false
-  if (esElMismoLlamado(previa, nueva)) return false
+/**
+ * Un llamado que el televisor no llego a ver en ESE consultorio. Un
+ * consultorio que no tenia pintado (la primera carga) no anuncia nada: no es
+ * un llamado perdido, es el televisor encendiendose.
+ */
+function esLlamadoNoVisto(pintadas: CasillaPantalla[], nueva: CasillaPantalla, ahoraMs: number) {
+  if (!nueva.codigo || !nueva.horaLlamado || pintadas.length === 0) return false
+  if (pintadas.some((previa) => esElMismoLlamado(previa, nueva))) return false
 
   const antiguedad = ahoraMs - Date.parse(nueva.horaLlamado)
   return antiguedad >= -MS_TOLERANCIA_FUTURO && antiguedad <= MS_LLAMADO_RECIENTE
