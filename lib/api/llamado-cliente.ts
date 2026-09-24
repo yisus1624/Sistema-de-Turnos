@@ -7,7 +7,7 @@
  * error para el funcionario sino un "ponte al dia": se devuelve ese turno real
  * para pintarlo y avisar, en vez de un aviso rojo sobre la pantalla vieja.
  */
-import { ErrorApi, pedir, turnoRealDelConflicto, type OpcionesPedir } from './cliente'
+import { ErrorApi, MS_LIMITE_PETICION, pedir, turnoRealDelConflicto, type OpcionesPedir } from './cliente'
 import type { Turno } from '@/lib/turnos/types'
 
 export type DesenlaceDelLlamado =
@@ -25,6 +25,20 @@ export type DesenlaceDelLlamado =
  * llegara tarde se resuelve como un 409 normal.
  */
 export const ESPERAS_SI_OCUPADO_MS: readonly number[] = [700, 1500, 3000]
+
+/** Variacion aleatoria que se suma a cada espera para no reintentar todos a la vez. */
+const MS_VARIACION_MAXIMA = 300
+
+/**
+ * Lo mas que puede tardar un "Llamar siguiente" con todos sus reintentos: cada
+ * intento agota su limite y cada espera sale con la variacion maxima. La
+ * pantalla no puede soltar el boton antes, o el doctor pulsaria otra vez.
+ */
+export function msPeorCasoDelLlamado(): number {
+  const intentos = ESPERAS_SI_OCUPADO_MS.length + 1
+  const esperas = ESPERAS_SI_OCUPADO_MS.reduce((total, ms) => total + ms + MS_VARIACION_MAXIMA, 0)
+  return intentos * MS_LIMITE_PETICION + esperas
+}
 
 const esperar = (ms: number) => new Promise((resolver) => setTimeout(resolver, ms))
 const estaOcupado = (error: unknown) => error instanceof ErrorApi && error.status === 503
@@ -46,7 +60,7 @@ export async function llamarSiguienteDesde(
       return { tipo: 'llamado', turno }
     } catch (error) {
       if (estaOcupado(error) && intento < esperasSiOcupado.length) {
-        await esperar(esperasSiOcupado[intento] + Math.random() * 300)
+        await esperar(esperasSiOcupado[intento] + Math.random() * MS_VARIACION_MAXIMA)
         continue
       }
       const real = turnoRealDelConflicto(error)

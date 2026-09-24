@@ -26,6 +26,7 @@ import {
   useUltimaPeticion,
 } from '@/lib/hooks'
 import { avisoDePacienteYaLlamado, llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
+import { MS_MAXIMO_POR_ACCION } from '@/lib/consultorio/tiempos'
 import { afectaALaFila } from '@/lib/realtime/canal'
 import { cambioDeDoctor, etiquetaDeRetroceso, resumenDelDia, type CambioDeDoctor } from '@/lib/consultorio/presentacion'
 import type { PlanDeRetroceso } from '@/lib/turnos/reglas-retroceso'
@@ -46,17 +47,6 @@ type Accion = AccionDoctor | null
  * que ya muestra abajo es lo correcto.
  */
 const SIN_LOGIN = { sinRedirigirAlLogin: true } as const
-
-/**
- * Cuanto puede durar como maximo una accion antes de darla por perdida.
- *
- * El refresco automatico se salta mientras el doctor esta ejecutando una
- * accion, para no pisarle la pantalla a media operacion. Si una peticion se
- * queda colgada (la red se fue justo ahi) y nadie suelta esa marca, la pantalla
- * deja de actualizarse para el resto de la jornada. Pasado este tiempo se
- * libera y el refresco continua.
- */
-const MS_MAXIMO_POR_ACCION = 20000
 
 /*
   YA NO RECIBE EL TOKEN, Y NO PUEDE RECIBIRLO.
