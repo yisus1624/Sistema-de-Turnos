@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-const { acotarRangoDelHistorico, DIAS_MAXIMOS_HISTORICO } = await import('@/lib/turnos/rango-historico')
+const { acotarRangoDelHistorico, abarcaMasDeUnDia, DIAS_MAXIMOS_HISTORICO } = await import('@/lib/turnos/rango-historico')
 
 const HOY = '2026-09-22'
 
@@ -43,4 +43,10 @@ test('una fecha y un rango a la vez se rechazan: no se elige uno en silencio', (
     () => acotarRangoDelHistorico({ fecha: '2026-09-01', fechaDesde: '2026-08-01', fechaHasta: '2026-09-22' }, HOY),
     (error) => error.status === 400 && /una fecha o un rango/i.test(error.message),
   )
+})
+
+test('un dia suelto no cuenta como consulta de varios dias; un rango de dos o mas si', () => {
+  assert.equal(abarcaMasDeUnDia({ fecha: HOY }), false)
+  assert.equal(abarcaMasDeUnDia({ fechaDesde: HOY, fechaHasta: HOY }), false)
+  assert.equal(abarcaMasDeUnDia({ fechaDesde: '2026-09-21', fechaHasta: HOY }), true)
 })

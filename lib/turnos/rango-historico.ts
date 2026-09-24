@@ -65,3 +65,8 @@ export function acotarRangoDelHistorico(pedido: RangoHistorico, hoy: string): Ra
   exigirRangoRazonable(fechaDesde, fechaHasta)
   return { fechaDesde, fechaHasta }
 }
+
+/** Un rango de varios dias es una extraccion masiva y se deja en auditoria. */
+export function abarcaMasDeUnDia(rango: RangoHistorico): boolean {
+  return Boolean(rango.fechaDesde && rango.fechaHasta && rango.fechaDesde !== rango.fechaHasta)
+}

@@ -91,6 +91,8 @@ export const EVENTOS = {
 
   CONFIGURACION_ACTUALIZADA: 'CONFIGURACION_ACTUALIZADA',
   SIMULACION_REINICIO_DEL_DIA: 'SIMULACION_REINICIO_DEL_DIA',
+  /** Consulta o exportacion del historico por un rango de varios dias. */
+  HISTORICO_CONSULTADO: 'HISTORICO_CONSULTADO',
 
   // --- Los tres nombres antiguos en minuscula. Ver la nota de arriba. ---
   CITAS_IMPORTADAS: 'citas.importadas',
