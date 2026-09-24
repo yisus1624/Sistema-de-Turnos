@@ -76,6 +76,7 @@ const FORMA_POR_TIPO: Record<MensajeEnVivo['tipo'], (mensaje: Objeto) => boolean
   latido: () => true,
   'turno.llamado': (m) => typeof m.repetido === 'boolean' && esCasilla(m.casilla),
   'modulo.liberado': (m) => esTexto(m.moduloId),
+  'turno.devuelto': (m) => esTexto(m.moduloId) && esTexto(m.puesto) && (m.casilla === null || esCasilla(m.casilla)),
   'fila.cambiada': (m) => esTexto(m.servicioId) && esTextoONulo(m.profesionalId),
   'configuracion.cambiada': () => true,
   'datos.reiniciados': () => true,
@@ -164,7 +165,9 @@ export function afectaALaFila(evento: EventoTurno, fila: Fila): boolean {
 
   // Que un consultorio quede libre solo le importa a ESE consultorio. Antes
   // pasaba a todos: cada "Atendido" provocaba una recarga pesada en los doce.
-  if (evento.tipo === 'modulo.liberado') return esConsultorioDeLaFila(evento.moduloId, fila)
+  if (evento.tipo === 'modulo.liberado' || evento.tipo === 'turno.devuelto') {
+    return esConsultorioDeLaFila(evento.moduloId, fila)
+  }
 
   if (evento.tipo !== 'fila.cambiada') return true
 

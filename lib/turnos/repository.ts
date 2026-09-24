@@ -1,3 +1,4 @@
+import type { PlanDeRetroceso } from './reglas-retroceso'
 import type {
   AccionSobreTurno,
   ActividadCatalogo,
@@ -238,6 +239,27 @@ export interface TurnoRepository {
    */
   marcarAtendido(turnoId: string, cerradoPor?: string): Promise<AccionSobreTurno>
   marcarAusente(turnoId: string, cerradoPor?: string): Promise<AccionSobreTurno>
+  /**
+   * Lo que haria HOY el boton "Retroceder" del doctor (ver
+   * `reglas-retroceso.ts`), o null si no hay nada que retroceder. La pantalla
+   * lo muestra antes de confirmar: "vuelve C-010, Ana Ortega".
+   */
+  planDeRetroceso(profesionalId: string): Promise<PlanDeRetroceso | null>
+  /**
+   * Retrocede al turno anterior en una sola operacion atomica: el paciente
+   * abierto vuelve a la fila de espera (a su mismo puesto) y el anterior, si
+   * ese llamado lo habia cerrado, vuelve a quedar en atencion.
+   *
+   * `visto` es lo que la pantalla mostraba: si el plan real es otro (el doble
+   * clic, o un cambio desde otro equipo), lanza `ConflictoDeTurno` (409) y no
+   * toca nada. Serializado con los llamados del mismo doctor. El televisor se
+   * entera despues, sin campana (evento `turno.devuelto`). Devuelve los dos
+   * turnos ya cambiados.
+   */
+  retrocederTurno(
+    profesionalId: string,
+    visto: { turnoAbiertoId: string | null; restaurarId: string | null },
+  ): Promise<PlanDeRetroceso>
 
   // --- Pantalla de la sala de espera (seccion 10) ---
   /**

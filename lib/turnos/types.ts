@@ -449,6 +449,14 @@ export interface Turno {
    * ver `lib/turnos/privacidad.ts`.
    */
   nombrePaciente?: string | null
+  /**
+   * Documento del paciente, su tipo (CC, TI, RC) y el procedimiento de la cita.
+   * Solo los trae el HISTORICO (reportes del administrador): es lo que hace
+   * falta para saber a quien se atendio. Nunca viajan a la pantalla publica.
+   */
+  documentoPaciente?: string | null
+  tipoDocumento?: string | null
+  procedimiento?: string | null
 }
 
 /**

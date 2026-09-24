@@ -38,6 +38,9 @@ export const secciones: SeccionSistema[] = [
   { href: '/admin/turnos', label: 'Turnos en curso', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
   { href: '/admin/citas', label: 'Citas', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
   { href: '/admin/enlaces', label: 'Enlaces de consultorio', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
+  // Reportes vuelve al menu (pedido del hospital, sep. 2026): el PDF de turnos
+  // por periodo, con su resumen. Historico y estadisticas siguen retirados.
+  { href: '/admin/reportes', label: 'Reportes', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
   { href: '/admin/servicios', label: 'Servicios', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/modulos', label: 'Modulos y ventanillas', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/profesionales', label: 'Profesionales', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
@@ -60,12 +63,11 @@ export const secciones: SeccionSistema[] = [
   // redirige y las APIs que las exigen responden 403. Para devolver cualquiera,
   // basta con volver a listarla aqui.
   //
-  // Historico, estadisticas y reportes: fuera mientras se define de donde van a
-  // venir esos datos. Su codigo sigue en `app/admin/historico`,
-  // `app/admin/estadisticas`, `app/admin/reportes` y `app/operador/historico`.
+  // Historico y estadisticas: fuera mientras se define de donde van a venir
+  // esos datos. Su codigo sigue en `app/admin/historico`,
+  // `app/admin/estadisticas` y `app/operador/historico`.
   //   { href: '/admin/historico', label: 'Historico', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
   //   { href: '/admin/estadisticas', label: 'Estadisticas', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
-  //   { href: '/admin/reportes', label: 'Reportes', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
   //   { href: '/operador/historico', label: 'Historico', grupo: 'Atencion', rol: 'OPERADOR' },
   //
   // Llamado de turnos: EL OPERADOR NO PASA TURNOS. Cada medico llama a sus

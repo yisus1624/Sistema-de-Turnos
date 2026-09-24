@@ -38,6 +38,7 @@
  * la agenda a todo el hospital.
  */
 
+import { Paginacion, usePaginacion } from '@/components/ui/Paginacion'
 import { createElement, useCallback, useEffect, useMemo, useState } from 'react'
 import type { Icon } from '@phosphor-icons/react'
 import {
@@ -164,9 +165,6 @@ function enDoceHoras(hhmm: string) {
   }).format(new Date(Date.UTC(2000, 0, 1, hora, minuto)))
 }
 
-/** Cuantas filas caben antes de paginar. */
-const TAMANOS_DE_PAGINA = [10, 25, 50]
-
 export default function ProfesionalesClient() {
   const [profesionales, setProfesionales] = useState<Profesional[]>([])
   const [servicios, setServicios] = useState<Servicio[]>([])
@@ -208,12 +206,6 @@ export default function ProfesionalesClient() {
    * cualquier dia, trabaje o no.
    */
   const [verSinAgenda, setVerSinAgenda] = useState(false)
-
-  // Paginacion. El catalogo del hospital pasa de sesenta doctores y la tabla
-  // entera de una vez obliga a recorrer la pagina con la rueda buscando un
-  // apellido.
-  const [porPagina, setPorPagina] = useState(TAMANOS_DE_PAGINA[0])
-  const [pagina, setPagina] = useState(1)
 
   const cargar = useCallback(async () => {
     try {
@@ -371,19 +363,24 @@ export default function ProfesionalesClient() {
     nombreModulo,
   ])
 
-  const paginas = Math.max(1, Math.ceil(filtrados.length / porPagina))
-  // La pagina se acota al vuelo en vez de corregirse con un efecto: al filtrar,
-  // un `setPagina` en un efecto pinta primero una tabla vacia y la corrige en
-  // el render siguiente, y ese parpadeo se ve.
-  const paginaActual = Math.min(pagina, paginas)
-  const visibles = filtrados.slice((paginaActual - 1) * porPagina, paginaActual * porPagina)
+  // Paginacion. El catalogo del hospital pasa de sesenta doctores y la tabla
+  // entera de una vez obliga a recorrer la pagina con la rueda buscando un
+  // apellido. Al cambiar el dia o un filtro, vuelve a la primera pagina.
+  const pagina = usePaginacion(filtrados, [
+    fecha,
+    verSinAgenda,
+    servicioFiltro,
+    jornadaFiltro,
+    estadoFiltro,
+    busquedaDiferida,
+  ])
+  const visibles = pagina.visibles
 
   function limpiarFiltros() {
     setBusqueda('')
     setServicioFiltro('')
     setJornadaFiltro('')
     setEstadoFiltro('')
-    setPagina(1)
   }
 
   /**
@@ -561,7 +558,6 @@ export default function ProfesionalesClient() {
               value={busqueda}
               onChange={(e) => {
                 setBusqueda(e.target.value)
-                setPagina(1)
               }}
               placeholder="Buscar por nombre, especialidad o consultorio..."
               aria-label="Buscar profesional"
@@ -595,7 +591,6 @@ export default function ProfesionalesClient() {
               value={servicioFiltro}
               onChange={(e) => {
                 setServicioFiltro(e.target.value)
-                setPagina(1)
               }}
               aria-label="Especialidad"
               className="pl-9"
@@ -614,7 +609,6 @@ export default function ProfesionalesClient() {
               value={jornadaFiltro}
               onChange={(e) => {
                 setJornadaFiltro(e.target.value)
-                setPagina(1)
               }}
               aria-label="Jornada"
             >
@@ -630,7 +624,6 @@ export default function ProfesionalesClient() {
               value={estadoFiltro}
               onChange={(e) => {
                 setEstadoFiltro(e.target.value)
-                setPagina(1)
               }}
               aria-label="Estado"
             >
@@ -677,7 +670,6 @@ export default function ProfesionalesClient() {
               size="sm"
               onClick={() => {
                 setVerSinAgenda((antes) => !antes)
-                setPagina(1)
               }}
               aria-pressed={verSinAgenda}
               title={
@@ -832,7 +824,8 @@ export default function ProfesionalesClient() {
                         {delDia?.desde && delDia.hasta ? (
                           <>
                             <p className="text-sm font-medium tabular-nums text-slate-700">
-                              {enDoceHoras(delDia.desde)} – {enDoceHoras(delDia.hasta)}
+                              <span className="whitespace-nowrap">{enDoceHoras(delDia.desde)}</span> –{' '}
+                              <span className="whitespace-nowrap">{enDoceHoras(delDia.hasta)}</span>
                             </p>
                             <p className="text-xs font-medium text-slate-400">
                               {delDia.citas} {delDia.citas === 1 ? 'cita' : 'citas'}
@@ -876,76 +869,7 @@ export default function ProfesionalesClient() {
                 })}
               </Tabla>
 
-              {/* La paginacion solo aparece cuando hay algo que paginar. */}
-              {filtrados.length > TAMANOS_DE_PAGINA[0] ? (
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
-                  <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
-                    Mostrar
-                    {/*
-                      Aqui va un `select` suelto y no el `Seleccion` de la casa:
-                      ese campo mide 44px de alto, que es lo que pide un
-                      formulario, y en una barra de paginacion se come la fila.
-                      Sus clases base no se pueden sobrescribir sin depender del
-                      orden en que Tailwind emita `h-9` y `h-11`, que es una
-                      forma silenciosa de que el dia de mañana quede al azar.
-                    */}
-                    <select
-                      value={String(porPagina)}
-                      onChange={(e) => {
-                        setPorPagina(Number(e.target.value))
-                        setPagina(1)
-                      }}
-                      aria-label="Registros por pagina"
-                      className="h-9 rounded-xl border border-slate-200 bg-white px-2 text-xs font-semibold tabular-nums text-brand-950 outline-none transition focus:border-acento-400"
-                    >
-                      {TAMANOS_DE_PAGINA.map((tamano) => (
-                        <option key={tamano} value={tamano}>
-                          {tamano}
-                        </option>
-                      ))}
-                    </select>
-                    registros por pagina
-                  </label>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setPagina((p) => Math.max(1, p - 1))}
-                      disabled={paginaActual === 1}
-                      aria-label="Pagina anterior"
-                      className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200/70 text-slate-500 transition-colors duration-[var(--suave)] hover:bg-slate-50 hover:text-acento-600 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <CaretLeft size={14} weight="bold" />
-                    </button>
-
-                    {Array.from({ length: paginas }, (_, i) => i + 1).map((numero) => (
-                      <button
-                        key={numero}
-                        type="button"
-                        onClick={() => setPagina(numero)}
-                        aria-current={numero === paginaActual ? 'page' : undefined}
-                        className={`grid h-9 min-w-9 place-items-center rounded-xl px-2 text-xs font-semibold tabular-nums transition-colors duration-[var(--suave)] ${
-                          numero === paginaActual
-                            ? 'bg-acento-600 text-white'
-                            : 'border border-slate-200/70 text-slate-600 hover:bg-slate-50'
-                        }`}
-                      >
-                        {numero}
-                      </button>
-                    ))}
-
-                    <button
-                      type="button"
-                      onClick={() => setPagina((p) => Math.min(paginas, p + 1))}
-                      disabled={paginaActual === paginas}
-                      aria-label="Pagina siguiente"
-                      className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200/70 text-slate-500 transition-colors duration-[var(--suave)] hover:bg-slate-50 hover:text-acento-600 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <CaretRight size={14} weight="bold" />
-                    </button>
-                  </div>
-                </div>
-              ) : null}
+              <Paginacion {...pagina} />
             </>
           )}
         </CardContent>

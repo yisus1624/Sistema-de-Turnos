@@ -54,6 +54,7 @@ import {
   User,
 } from '@phosphor-icons/react/dist/ssr'
 import type { Icon } from '@phosphor-icons/react'
+import { Paginacion, usePaginacion } from '@/components/ui/Paginacion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -499,6 +500,15 @@ export default function EnlacesClient() {
     soloDelDia,
     errorJornadas,
   ])
+  // Al cambiar el dia o un filtro, vuelve a la primera pagina.
+  const pagina = usePaginacion(visibles, [
+    fecha,
+    busqueda,
+    servicioFiltro,
+    jornadaFiltro,
+    consultorioFiltro,
+    soloDelDia,
+  ])
 
   /** Cuantos doctores trabajan el dia que se esta mirando. */
   const trabajanEseDia = useMemo(
@@ -921,178 +931,182 @@ export default function EnlacesClient() {
               />
             </div>
           ) : (
-            <Tabla columnas={COLUMNAS}>
-              {visibles.map((profesional) => {
-                const acceso = ultimoAccesoDe(profesional.id)
-                const estado = estadoDelAcceso(acceso)
-                const delDia = jornadasDelDia.get(profesional.id)
-                const jornada = delDia?.jornada
-                const consultorio = profesional.moduloId ? nombreModulo(profesional.moduloId) : null
+            <>
+              <Tabla columnas={COLUMNAS}>
+                {pagina.visibles.map((profesional) => {
+                  const acceso = ultimoAccesoDe(profesional.id)
+                  const estado = estadoDelAcceso(acceso)
+                  const delDia = jornadasDelDia.get(profesional.id)
+                  const jornada = delDia?.jornada
+                  const consultorio = profesional.moduloId ? nombreModulo(profesional.moduloId) : null
 
-                return (
-                  <tr
-                    key={profesional.id}
-                    tabIndex={0}
-                    onClick={() => abrirGenerar(profesional)}
-                    onKeyDown={(evento) => {
-                      if (evento.key === 'Enter' || evento.key === ' ') {
-                        evento.preventDefault()
-                        abrirGenerar(profesional)
-                      }
-                    }}
-                    aria-label={`Enlace de ${profesional.nombre}`}
-                    className="cursor-pointer outline-none transition-colors duration-[var(--suave)] ease-[var(--curva)] hover:bg-acento-50/40 focus-visible:bg-acento-50/60"
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <span
-                          className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${colorDeServicio(
-                            profesional.servicioId,
-                          )}`}
-                        >
-                          <User size={18} weight="fill" />
-                        </span>
-                        <div className="min-w-0 max-w-[15rem]">
-                          <p
-                            className="truncate font-semibold tracking-[-0.012em] text-brand-950"
-                            title={profesional.nombre}
+                  return (
+                    <tr
+                      key={profesional.id}
+                      tabIndex={0}
+                      onClick={() => abrirGenerar(profesional)}
+                      onKeyDown={(evento) => {
+                        if (evento.key === 'Enter' || evento.key === ' ') {
+                          evento.preventDefault()
+                          abrirGenerar(profesional)
+                        }
+                      }}
+                      aria-label={`Enlace de ${profesional.nombre}`}
+                      className="cursor-pointer outline-none transition-colors duration-[var(--suave)] ease-[var(--curva)] hover:bg-acento-50/40 focus-visible:bg-acento-50/60"
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${colorDeServicio(
+                              profesional.servicioId,
+                            )}`}
                           >
-                            {profesional.nombre}
-                          </p>
-                          <p className="flex items-center gap-1.5 truncate text-xs font-medium text-slate-400">
-                            <span className="shrink-0 text-slate-300">
-                              {iconoDeServicio(nombreServicio(profesional.servicioId), 13)}
-                            </span>
-                            <span className="truncate">{nombreServicio(profesional.servicioId)}</span>
-                          </p>
+                            <User size={18} weight="fill" />
+                          </span>
+                          <div className="min-w-0 max-w-[15rem]">
+                            <p
+                              className="truncate font-semibold tracking-[-0.012em] text-brand-950"
+                              title={profesional.nombre}
+                            >
+                              {profesional.nombre}
+                            </p>
+                            <p className="flex items-center gap-1.5 truncate text-xs font-medium text-slate-400">
+                              <span className="shrink-0 text-slate-300">
+                                {iconoDeServicio(nombreServicio(profesional.servicioId), 13)}
+                              </span>
+                              <span className="truncate">{nombreServicio(profesional.servicioId)}</span>
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    </td>
+                      </td>
 
-                    <td className="px-4 py-3">
-                      {cargandoJornadas ? (
-                        <span className="text-sm font-semibold text-slate-300">…</span>
-                      ) : errorJornadas ? (
-                        // Un fallo de la consulta no es una respuesta: con el
-                        // mapa vacio, la tabla afirmaba fila por fila que ese
-                        // dia no trabajaba nadie.
-                        <Badge tone="amber">Sin dato</Badge>
-                      ) : jornada ? (
+                      <td className="px-4 py-3">
+                        {cargandoJornadas ? (
+                          <span className="text-sm font-semibold text-slate-300">…</span>
+                        ) : errorJornadas ? (
+                          // Un fallo de la consulta no es una respuesta: con el
+                          // mapa vacio, la tabla afirmaba fila por fila que ese
+                          // dia no trabajaba nadie.
+                          <Badge tone="amber">Sin dato</Badge>
+                        ) : jornada ? (
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.015em] ring-1 ${
+                              estiloJornada[jornada].chip
+                            }`}
+                          >
+                            {iconoDeJornada(jornada, 13)}
+                            {etiquetaJornada[jornada]}
+                          </span>
+                        ) : (
+                          <Badge tone="slate">
+                            {fecha > hoyEnColombia() ? 'Sin agenda' : 'No trabaja'}
+                          </Badge>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {delDia?.desde && delDia.hasta ? (
+                          <>
+                            <p className="text-sm font-medium tabular-nums text-slate-700">
+                              <span className="whitespace-nowrap">{enDoceHoras(delDia.desde)}</span> –{' '}
+                              <span className="whitespace-nowrap">{enDoceHoras(delDia.hasta)}</span>
+                            </p>
+                            <p className="text-xs font-medium text-slate-400">
+                              {delDia.citas} {delDia.citas === 1 ? 'cita' : 'citas'}
+                            </p>
+                          </>
+                        ) : (
+                          // Sin agenda ese dia no hay horas que mostrar, pero si
+                          // lo que SUELE hacer: es lo que deja calcular cuanto
+                          // tiene que durar el enlace de quien entra a cubrir.
+                          <span className="text-xs font-medium text-slate-400">
+                            suele hacer {etiquetaJornada[profesional.jornada].toLowerCase()}
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {consultorio ? (
+                          <span
+                            className="flex max-w-[13rem] items-center gap-1.5 text-slate-600"
+                            title={consultorio}
+                          >
+                            <MapPin size={14} weight="fill" className="shrink-0 text-slate-300" />
+                            <span className="truncate">{consultorio}</span>
+                          </span>
+                        ) : (
+                          <span className="text-sm text-slate-300">Sin asignar</span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
                         <span
-                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.015em] ring-1 ${
-                            estiloJornada[jornada].chip
-                          }`}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.015em] ring-1 ${estiloEstado[estado].chip}`}
                         >
-                          {iconoDeJornada(jornada, 13)}
-                          {etiquetaJornada[jornada]}
+                          <span
+                            aria-hidden="true"
+                            className={`h-1.5 w-1.5 rounded-full ${estiloEstado[estado].punto}`}
+                          />
+                          {etiquetaEstado[estado]}
                         </span>
-                      ) : (
-                        <Badge tone="slate">
-                          {fecha > hoyEnColombia() ? 'Sin agenda' : 'No trabaja'}
-                        </Badge>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3">
-                      {delDia?.desde && delDia.hasta ? (
-                        <>
-                          <p className="text-sm font-medium tabular-nums text-slate-700">
-                            {enDoceHoras(delDia.desde)} – {enDoceHoras(delDia.hasta)}
+                        {acceso && estado === 'vigente' ? (
+                          <p className="mt-1 text-xs font-medium tabular-nums text-slate-400">
+                            {tiempoRestante(acceso.expiraEn)}
                           </p>
-                          <p className="text-xs font-medium text-slate-400">
-                            {delDia.citas} {delDia.citas === 1 ? 'cita' : 'citas'}
-                          </p>
-                        </>
-                      ) : (
-                        // Sin agenda ese dia no hay horas que mostrar, pero si
-                        // lo que SUELE hacer: es lo que deja calcular cuanto
-                        // tiene que durar el enlace de quien entra a cubrir.
-                        <span className="text-xs font-medium text-slate-400">
-                          suele hacer {etiquetaJornada[profesional.jornada].toLowerCase()}
-                        </span>
-                      )}
-                    </td>
+                        ) : null}
+                      </td>
 
-                    <td className="px-4 py-3">
-                      {consultorio ? (
-                        <span
-                          className="flex max-w-[13rem] items-center gap-1.5 text-slate-600"
-                          title={consultorio}
-                        >
-                          <MapPin size={14} weight="fill" className="shrink-0 text-slate-300" />
-                          <span className="truncate">{consultorio}</span>
-                        </span>
-                      ) : (
-                        <span className="text-sm text-slate-300">Sin asignar</span>
-                      )}
-                    </td>
+                      <td className="w-px whitespace-nowrap px-4 py-3">
+                        <div className="flex items-center justify-end gap-2">
+                          {/*
+                            EL OJO SOLO SE ENCIENDE SI HAY ALGO QUE VER.
 
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.015em] ring-1 ${estiloEstado[estado].chip}`}
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={`h-1.5 w-1.5 rounded-full ${estiloEstado[estado].punto}`}
-                        />
-                        {etiquetaEstado[estado]}
-                      </span>
-                      {acceso && estado === 'vigente' ? (
-                        <p className="mt-1 text-xs font-medium tabular-nums text-slate-400">
-                          {tiempoRestante(acceso.expiraEn)}
-                        </p>
-                      ) : null}
-                    </td>
+                            El servidor guarda el hash del token, nunca el enlace:
+                            la unica copia en claro vive en la pestaña que lo
+                            genero. Si el enlace se genero en otro equipo, o se
+                            cerro la pestaña, no hay nada que volver a mostrar y
+                            la unica salida es generar otro —que tumba el que el
+                            doctor este usando—. Por eso el boton va apagado y lo
+                            explica en su titulo: enterarse DESPUES de abrir es
+                            enterarse tarde.
+                          */}
+                          <button
+                            type="button"
+                            disabled={estado !== 'vigente'}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              abrirGenerar(profesional)
+                            }}
+                            title={
+                              estado === 'vigente'
+                                ? 'Ver el enlace vigente y volver a copiarlo, sin generar otro'
+                                : 'Este doctor no tiene un enlace vigente que mostrar'
+                            }
+                            aria-label={`Ver el enlace de ${profesional.nombre}`}
+                            className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200/70 text-slate-500 transition-colors duration-[var(--suave)] ease-[var(--curva)] hover:bg-acento-50 hover:text-acento-600 disabled:cursor-not-allowed disabled:border-slate-200/50 disabled:text-slate-300 disabled:hover:bg-transparent"
+                          >
+                            <Eye size={16} weight="bold" />
+                          </button>
 
-                    <td className="w-px whitespace-nowrap px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        {/*
-                          EL OJO SOLO SE ENCIENDE SI HAY ALGO QUE VER.
-
-                          El servidor guarda el hash del token, nunca el enlace:
-                          la unica copia en claro vive en la pestaña que lo
-                          genero. Si el enlace se genero en otro equipo, o se
-                          cerro la pestaña, no hay nada que volver a mostrar y
-                          la unica salida es generar otro —que tumba el que el
-                          doctor este usando—. Por eso el boton va apagado y lo
-                          explica en su titulo: enterarse DESPUES de abrir es
-                          enterarse tarde.
-                        */}
-                        <button
-                          type="button"
-                          disabled={estado !== 'vigente'}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            abrirGenerar(profesional)
-                          }}
-                          title={
-                            estado === 'vigente'
-                              ? 'Ver el enlace vigente y volver a copiarlo, sin generar otro'
-                              : 'Este doctor no tiene un enlace vigente que mostrar'
-                          }
-                          aria-label={`Ver el enlace de ${profesional.nombre}`}
-                          className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200/70 text-slate-500 transition-colors duration-[var(--suave)] ease-[var(--curva)] hover:bg-acento-50 hover:text-acento-600 disabled:cursor-not-allowed disabled:border-slate-200/50 disabled:text-slate-300 disabled:hover:bg-transparent"
-                        >
-                          <Eye size={16} weight="bold" />
-                        </button>
-
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            abrirGenerar(profesional)
-                          }}
-                        >
-                          <LinkIcon size={16} weight="bold" />
-                          {estado === 'vigente' ? 'Regenerar' : 'Generar enlace'}
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </Tabla>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              abrirGenerar(profesional)
+                            }}
+                          >
+                            <LinkIcon size={16} weight="bold" />
+                            {estado === 'vigente' ? 'Regenerar' : 'Generar enlace'}
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </Tabla>
+              <Paginacion {...pagina} />
+            </>
           )}
         </CardContent>
       </Card>

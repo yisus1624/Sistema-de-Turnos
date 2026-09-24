@@ -153,15 +153,92 @@ function eleccionCon(ctx: Contexto, reparto: Reparto, rango: RangoDeLetra = RANG
   return letra ? { reparto, letra } : null
 }
 
-/** Todas en una pagina: la forma y las columnas que dejan la letra mas grande, o null si ninguna llega al minimo. */
-function todasEnUnaPagina(util: Espacio, ctx: Contexto, filas: number, rango: RangoDeLetra): Eleccion | null {
-  let mejor: Eleccion | null = null
-  for (const forma of FORMAS) {
-    for (let columnas = 1; columnas <= filas; columnas += 1) {
-      const reparto = repartoCon(util, ctx, { forma, columnas, filasPorColumna: Math.ceil(filas / columnas) })
-      const eleccion = eleccionCon(ctx, reparto, rango)
-      if (eleccion && (!mejor || eleccion.letra.turno > mejor.letra.turno)) mejor = eleccion
+/**
+ * Cuanto mas grande tiene que salir la letra para que valga la pena una
+ * columna mas. Sin este margen, la pantalla saltaba de 2 a 3 columnas por un
+ * par de pixeles: en una ventana un poco mas baja (el navegador sin pantalla
+ * completa) el mismo televisor se veia con otro reparto, y la sala veia la
+ * tabla rearmarse al entrar o salir de pantalla completa.
+ */
+const GANANCIA_PARA_OTRA_COLUMNA = 1.15
+
+/**
+ * Filas por columna antes de abrir otra. Con 9 o 10 turnos una sola columna
+ * cabia en pantalla completa pero no en la ventana del navegador (unos 165 px
+ * menos), y la tabla pasaba de 1 a 2 columnas al cambiar entre las dos. Con
+ * el tope, el reparto depende del NUMERO de turnos, no de unos pixeles.
+ */
+const FILAS_POR_COLUMNA = 8
+
+/** Hasta cuantas filas por columna cabe la fila de dos pisos sin apretar la letra. */
+const FILAS_EN_DOS_PISOS = 6
+
+/**
+ * Con varias columnas (9 a `MAXIMO_EN_UNA_PANTALLA` turnos) el reparto depende
+ * del NUMERO de turnos y no de unos pixeles de alto: primero las menos
+ * columnas, luego la forma de siempre, y solo al final se aprieta la letra.
+ * Si no, la tabla se rearmaba (2 o 3 columnas, con o sin columna de medico)
+ * al pasar el navegador de ventana a pantalla completa. La fila de dos pisos
+ * es alta: sirve con pocas filas por columna; con mas, el medico va aparte.
+ */
+function conPocasColumnas(util: Espacio, ctx: Contexto, filas: number, rangos: readonly RangoDeLetra[]): Eleccion | null {
+  for (let columnas = Math.ceil(filas / FILAS_POR_COLUMNA); columnas <= filas; columnas += 1) {
+    const filasPorColumna = Math.ceil(filas / columnas)
+    const preferida: FormaDeFila = filasPorColumna <= FILAS_EN_DOS_PISOS ? 'dos-pisos' : 'una-planta'
+    for (const forma of [preferida, ...FORMAS.filter((f) => f !== preferida)]) {
+      for (const rango of rangos) {
+        const eleccion = eleccionCon(ctx, repartoCon(util, ctx, { forma, columnas, filasPorColumna }), rango)
+        if (eleccion) return eleccion
+      }
     }
+  }
+  return null
+}
+
+/** La letra normal si cabe, y si no, cada vez mas apretada. */
+function primeraQueQuepa(util: Espacio, ctx: Contexto, filas: number, rangos: readonly RangoDeLetra[]): Eleccion | null {
+  for (const rango of rangos) {
+    const eleccion = mejorEnUnaPagina(util, ctx, filas, rango, FORMAS)
+    if (eleccion) return eleccion
+  }
+  return null
+}
+
+/** Entre varias formas, la que deja la letra mas grande. */
+function mejorEnUnaPagina(
+  util: Espacio,
+  ctx: Contexto,
+  filas: number,
+  rango: RangoDeLetra,
+  formas: readonly FormaDeFila[],
+): Eleccion | null {
+  let mejor: Eleccion | null = null
+  for (const forma of formas) {
+    const eleccion = todasEnUnaPagina(util, ctx, filas, rango, forma)
+    if (eleccion && (!mejor || eleccion.letra.turno > mejor.letra.turno)) mejor = eleccion
+  }
+  return mejor
+}
+
+/**
+ * Todas en una pagina, o null si ninguna reja llega al minimo. Se prefieren
+ * POCAS columnas (y nunca mas de `FILAS_POR_COLUMNA` filas en una): una mas
+ * solo si la letra crece de verdad (ver arriba).
+ */
+function todasEnUnaPagina(
+  util: Espacio,
+  ctx: Contexto,
+  filas: number,
+  rango: RangoDeLetra,
+  forma: FormaDeFila,
+): Eleccion | null {
+  let mejor: Eleccion | null = null
+  const minimoDeColumnas = Math.ceil(filas / FILAS_POR_COLUMNA)
+  for (let columnas = minimoDeColumnas; columnas <= filas; columnas += 1) {
+    const reparto = repartoCon(util, ctx, { forma, columnas, filasPorColumna: Math.ceil(filas / columnas) })
+    const mejorDeLaReja = eleccionCon(ctx, reparto, rango)
+    if (!mejorDeLaReja) continue
+    if (!mejor || mejorDeLaReja.letra.turno >= mejor.letra.turno * GANANCIA_PARA_OTRA_COLUMNA) mejor = mejorDeLaReja
   }
   return mejor
 }
@@ -252,11 +329,9 @@ export function planDeCartelera(espacio: Espacio, filas: TextosDeCasilla[], pant
   // Hasta `MAXIMO_EN_UNA_PANTALLA` turnos, todos a la vista: si con la letra
   // normal no caben, se aprieta un poco antes que pasar a una pagina 2.
   const rangos = cantidad <= MAXIMO_EN_UNA_PANTALLA ? rangosEnUnaPantalla(RANGO_CARTELERA) : [RANGO_CARTELERA]
-  let eleccion: Eleccion | null = null
-  for (const rango of rangos) {
-    eleccion = todasEnUnaPagina(util, ctx, cantidad, rango)
-    if (eleccion) break
-  }
-  eleccion ??= paginado(util, ctx)
-  return planDesde(eleccion, ctx, filas)
+  const eleccion =
+    cantidad > FILAS_POR_COLUMNA && cantidad <= MAXIMO_EN_UNA_PANTALLA
+      ? conPocasColumnas(util, ctx, cantidad, rangos)
+      : primeraQueQuepa(util, ctx, cantidad, rangos)
+  return planDesde(eleccion ?? paginado(util, ctx), ctx, filas)
 }

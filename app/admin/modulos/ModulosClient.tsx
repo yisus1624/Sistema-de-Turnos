@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Gear, Plus } from '@phosphor-icons/react/dist/ssr'
+import { Paginacion, usePaginacion } from '@/components/ui/Paginacion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -37,6 +38,7 @@ export default function ModulosClient() {
   const [guardando, setGuardando] = useState(false)
   // Que consultorio esta a punto de apagarse, esperando confirmacion.
   const [aDesactivar, setADesactivar] = useState<Modulo | null>(null)
+  const pagina = usePaginacion(modulos)
   const [desactivando, setDesactivando] = useState(false)
 
   /**
@@ -185,38 +187,41 @@ export default function ModulosClient() {
               />
             </div>
           ) : (
-            <Tabla columnas={COLUMNAS}>
-              {modulos.map((modulo) => (
-                <tr
-                  key={modulo.id}
-                  onClick={() => abrirEdicion(modulo)}
-                  className="cursor-pointer hover:bg-slate-50"
-                >
-                  <td className="px-4 py-3 font-semibold text-brand-950">{modulo.nombre}</td>
-                  <td className="px-4 py-3 text-slate-600">{nombreServicio(modulo.servicioId)}</td>
-                  <td className="px-4 py-3">
-                    <CeldaActividad
-                      actividad={actividad[modulo.id]}
-                      cargando={cargandoActividad}
-                      error={errorActividad}
-                      esFutura={esFutura}
-                    />
-                  </td>
-                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center gap-3">
-                      <Interruptor
-                        activo={modulo.activo}
-                        onChange={(valor) => cambiarEstado(modulo, valor)}
-                        etiqueta={`Activar ${modulo.nombre}`}
+            <>
+              <Tabla columnas={COLUMNAS}>
+                {pagina.visibles.map((modulo) => (
+                  <tr
+                    key={modulo.id}
+                    onClick={() => abrirEdicion(modulo)}
+                    className="cursor-pointer hover:bg-slate-50"
+                  >
+                    <td className="px-4 py-3 font-semibold text-brand-950">{modulo.nombre}</td>
+                    <td className="px-4 py-3 text-slate-600">{nombreServicio(modulo.servicioId)}</td>
+                    <td className="px-4 py-3">
+                      <CeldaActividad
+                        actividad={actividad[modulo.id]}
+                        cargando={cargandoActividad}
+                        error={errorActividad}
+                        esFutura={esFutura}
                       />
-                      <Badge tone={modulo.activo ? 'green' : 'slate'}>
-                        {modulo.activo ? 'Activo' : 'Inactivo'}
-                      </Badge>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </Tabla>
+                    </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-3">
+                        <Interruptor
+                          activo={modulo.activo}
+                          onChange={(valor) => cambiarEstado(modulo, valor)}
+                          etiqueta={`Activar ${modulo.nombre}`}
+                        />
+                        <Badge tone={modulo.activo ? 'green' : 'slate'}>
+                          {modulo.activo ? 'Activo' : 'Inactivo'}
+                        </Badge>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </Tabla>
+              <Paginacion {...pagina} />
+            </>
           )}
         </CardContent>
       </Card>

@@ -141,6 +141,7 @@ function Tabla({ filas, pantalla, resaltes, mensajeSinLlamados }: TablaProps) {
       >
         <div ref={medirEncabezado} className="shrink-0" style={{ backgroundColor: AZUL_PROFUNDO, paddingInline: relleno }}>
           <Columnas plan={plan}>
+            {/* Un encabezado por cada columna de filas. */}
             {Array.from({ length: plan.columnas }, (_, columna) => (
               <EncabezadoDeColumna key={columna} reja={plan} />
             ))}

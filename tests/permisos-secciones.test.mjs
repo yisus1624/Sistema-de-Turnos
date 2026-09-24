@@ -36,7 +36,7 @@ test('a un operador se le puede dar una seccion de administracion', () => {
 })
 
 test('una seccion retirada del catalogo no la ve nadie, ni el administrador', () => {
-  // Historico, estadisticas y reportes salieron del menu (ver rutas.ts). Sus
+  // Historico y estadisticas salieron del menu (ver rutas.ts). Sus
   // pantallas siguen en el repositorio, asi que lo que las mantiene cerradas
   // es justamente no estar en el catalogo.
   assert.equal(puedeVerSeccion('ADMINISTRADOR', null, '/admin/historico'), false)
@@ -44,8 +44,13 @@ test('una seccion retirada del catalogo no la ve nadie, ni el administrador', ()
   // El operador no pasa turnos: eso lo hace cada medico desde su consultorio.
   assert.equal(puedeVerSeccion('OPERADOR', null, '/operador'), false)
   // Ni siquiera nombrandola a mano en la lista del usuario.
-  assert.equal(puedeVerSeccion('OPERADOR', ['/admin/reportes'], '/admin/reportes'), true)
-  assert.equal(primeraRutaPermitida('OPERADOR', ['/admin/reportes']), '/auth/login')
+  assert.equal(puedeVerSeccion('OPERADOR', ['/admin/historico'], '/admin/historico'), true)
+  assert.equal(primeraRutaPermitida('OPERADOR', ['/admin/historico']), '/auth/login')
+})
+
+test('reportes volvio al menu del administrador', () => {
+  assert.equal(puedeVerSeccion('ADMINISTRADOR', null, '/admin/reportes'), true)
+  assert.equal(puedeVerSeccion('OPERADOR', null, '/admin/reportes'), false)
 })
 
 test('la lista vacia deja al usuario sin ninguna seccion', () => {

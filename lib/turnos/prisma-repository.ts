@@ -30,7 +30,8 @@ import { Prisma } from '@prisma/client'
 import { contextoDeTransaccion, prisma } from '@/lib/prisma'
 import { cifrarSiSePuede, descifrar } from '@/lib/seguridad/cifrado'
 import { realtimeHub } from '@/lib/realtime/hub'
-import { ErrorPasajero, errorDeNegocio } from './errores'
+import { ConflictoDeTurno, ErrorPasajero, errorDeNegocio } from './errores'
+import { DEVUELTO_A_LA_FILA, exigirPlanVisto, planDeRetroceso, REABIERTO, type PlanDeRetroceso } from './reglas-retroceso'
 import { decidirCierre, decidirRepeticion, ESTADOS_ABIERTOS, type EstadoDeCierre } from './reglas-cierre'
 import {
   alcanceDelLlamado,
@@ -763,6 +764,96 @@ async function cerrarTurno(turnoId: string, nuevo: EstadoDeCierre, cerradoPor?: 
 
   if (!resultado.yaAplicada) await avisarModuloLiberado(resultado.turno.moduloId, resultado.turno.profesionalId)
   return { turno: aTurno(resultado.turno), yaAplicada: resultado.yaAplicada }
+}
+
+/**
+ * El plan de retroceso de un doctor, leido con `ctx` (dentro o fuera de la
+ * transaccion). Solo pacientes de HOY: ayer ya no se deshace.
+ */
+async function leerPlanDeRetroceso(profesionalId: string, ctx: Ctx): Promise<PlanDeRetroceso | null> {
+  return (await leerFilasDeRetroceso(profesionalId, ctx)).plan
+}
+
+/** Las filas tal como estan en la base, ademas del plan: el aviso al televisor se arma con ellas. */
+async function leerFilasDeRetroceso(profesionalId: string, ctx: Ctx) {
+  const fecha = diaColombia(ahoraISO())
+  const [abierto, ultimoCerrado] = await Promise.all([
+    ctx.turno.findFirst({ where: { profesionalId, fecha, estado: ABIERTOS }, orderBy: { horaLlamado: 'desc' } }),
+    ctx.turno.findFirst({
+      where: { profesionalId, fecha, estado: { in: ['ATENDIDO', 'AUSENTE'] }, cerradoEn: { not: null } },
+      orderBy: { cerradoEn: 'desc' },
+    }),
+  ])
+  const plan = planDeRetroceso(abierto ? aTurno(abierto) : null, ultimoCerrado ? aTurno(ultimoCerrado) : null)
+  const filaDe = (turno: Turno | null | undefined) =>
+    turno ? ([abierto, ultimoCerrado].find((fila) => fila?.id === turno.id) ?? null) : null
+  return { plan, filas: { devolver: filaDe(plan?.devolver), restaurar: filaDe(plan?.restaurar) } }
+}
+
+/**
+ * Aplica el plan dentro de la transaccion. Cada cambio va CONDICIONADO al
+ * estado que se leyo: si otro camino lo cambio en medio (admisiones cerro al
+ * paciente, otro equipo del doctor), no se toca nada y es un 409.
+ */
+async function aplicarRetroceso(
+  plan: PlanDeRetroceso,
+  filas: { devolver: FilaTurno | null; restaurar: FilaTurno | null },
+  tx: Prisma.TransactionClient,
+) {
+  if (plan.devolver) {
+    const hecho = await tx.turno.updateMany({
+      where: { id: plan.devolver.id, estado: ABIERTOS },
+      data: DEVUELTO_A_LA_FILA,
+    })
+    if (hecho.count === 0) throw new ConflictoDeTurno('El paciente en atencion cambio mientras retrocedias. Revisa tu pantalla.')
+  }
+  if (plan.restaurar) {
+    const hecho = await tx.turno.updateMany({
+      where: { id: plan.restaurar.id, estado: plan.restaurar.estado },
+      data: REABIERTO,
+    })
+    if (hecho.count === 0) throw new ConflictoDeTurno('El paciente anterior cambio mientras retrocedias. Revisa tu pantalla.')
+    // Su cita vuelve a "llego y esta en consulta": el cierre ya no vale.
+    if (plan.restaurar.citaId) {
+      await tx.cita.updateMany({ where: { id: plan.restaurar.citaId, estado: 'ATENDIDA' }, data: { estado: 'PRESENTADO' } })
+    }
+  }
+  // Como quedaron, sin volver a leerlas: los cambios condicionados ya
+  // confirmaron que partian de esas filas. Una lectura menos por cada una, y el
+  // aviso al televisor sale antes.
+  return {
+    devuelto: filas.devolver ? { ...filas.devolver, ...DEVUELTO_A_LA_FILA } : null,
+    restaurado: filas.restaurar ? { ...filas.restaurar, ...REABIERTO } : null,
+  }
+}
+
+/**
+ * Avisa del retroceso: el puesto del paciente anterior vuelve a mostrarlo, y el
+ * del que regreso a la fila (`moduloDevuelto`, el que tenia ANTES: al volver a
+ * la fila se le borra) queda libre si era otro. La fila del doctor cambio
+ * (tiene un paciente mas en espera).
+ */
+async function avisarRetroceso(moduloDevuelto: string | null, devuelto: FilaTurno | null, restaurado: FilaTurno | null) {
+  await avisarSinTumbar(async () => {
+    const puestoRestaurado = restaurado?.moduloId ? puestoDe(restaurado.moduloId, restaurado.profesionalId) : null
+    if (restaurado?.moduloId && puestoRestaurado) {
+      realtimeHub.publish({
+        tipo: 'turno.devuelto',
+        moduloId: restaurado.moduloId,
+        puesto: puestoRestaurado,
+        casilla: await casillaDeTurno(restaurado),
+      })
+    }
+    if (devuelto && moduloDevuelto) {
+      const puesto = puestoDe(moduloDevuelto, devuelto.profesionalId)
+      if (puesto !== puestoRestaurado) {
+        realtimeHub.publish({ tipo: 'turno.devuelto', moduloId: moduloDevuelto, puesto, casilla: null })
+      }
+    }
+    if (devuelto) {
+      realtimeHub.publish({ tipo: 'fila.cambiada', servicioId: devuelto.servicioId, profesionalId: devuelto.profesionalId })
+    }
+  })
 }
 
 /**
@@ -1602,6 +1693,31 @@ export class PrismaTurnoRepository implements TurnoRepository {
     return cerrarTurno(turnoId, 'AUSENTE', cerradoPor)
   }
 
+  async planDeRetroceso(profesionalId: string): Promise<PlanDeRetroceso | null> {
+    return leerPlanDeRetroceso(profesionalId, prisma)
+  }
+
+  /**
+   * Retroceder, en una sola transaccion y con el MISMO candado que los llamados
+   * de ese doctor: un "Siguiente" y un "Retroceder" casi juntos (dos equipos,
+   * o un doble clic cruzado) se esperan el uno al otro en vez de mezclarse.
+   */
+  async retrocederTurno(
+    profesionalId: string,
+    visto: { turnoAbiertoId: string | null; restaurarId: string | null },
+  ): Promise<PlanDeRetroceso> {
+    const { plan, devuelto, restaurado } = await enTransaccion(async (tx) => {
+      const candado = candadoDelAlcance({ profesionalId })
+      if (candado) await candadoDeTransaccion(candado, tx)
+      const leido = await leerFilasDeRetroceso(profesionalId, tx)
+      const plan = exigirPlanVisto(leido.plan, visto)
+      return { plan, ...(await aplicarRetroceso(plan, leido.filas, tx)) }
+    })
+
+    await avisarRetroceso(plan.devolver?.moduloId ?? null, devuelto, restaurado)
+    return { devolver: devuelto ? aTurno(devuelto) : null, restaurar: restaurado ? aTurno(restaurado) : null }
+  }
+
   // --- Pantalla de la sala de espera ---
 
   /**
@@ -1851,8 +1967,16 @@ export class PrismaTurnoRepository implements TurnoRepository {
       },
       orderBy: { fechaGeneracion: 'desc' },
       take: filtro.limite,
+      // El documento del paciente vive en la cita: sin el, el reporte decia
+      // que turno se atendio pero no a quien.
+      include: { cita: { select: { documentoPaciente: true, tipoDocumento: true, procedimiento: true } } },
     })
-    return filas.map(aTurno)
+    return filas.map(({ cita, ...fila }) => ({
+      ...aTurno(fila),
+      documentoPaciente: cita?.documentoPaciente ?? null,
+      tipoDocumento: cita?.tipoDocumento ?? null,
+      procedimiento: cita?.procedimiento ?? null,
+    }))
   }
 
   async estadisticas(fecha: string): Promise<EstadisticasDia> {

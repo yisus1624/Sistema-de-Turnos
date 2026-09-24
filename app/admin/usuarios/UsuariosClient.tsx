@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Plus, UsersThree } from '@phosphor-icons/react/dist/ssr'
+import { Paginacion, usePaginacion } from '@/components/ui/Paginacion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -159,6 +160,7 @@ export default function UsuariosClient({
   const seccionesRepartibles = gruposQuePuedeDar.flatMap(({ items }) => items)
 
   const [usuarios, setUsuarios] = useState<Usuario[]>([])
+  const pagina = usePaginacion(usuarios)
   const [cargando, setCargando] = useState(true)
   const [abierto, setAbierto] = useState(false)
   const [editando, setEditando] = useState<Usuario | null>(null)
@@ -278,47 +280,50 @@ export default function UsuariosClient({
               <EmptyState icon={UsersThree} title="Sin usuarios" description="Crea las cuentas de los funcionarios." />
             </div>
           ) : (
-            <Tabla columnas={COLUMNAS}>
-              {usuarios.map((usuario) => {
-                const esYo = usuario.id === usuarioActualId
-                return (
-                  <tr
-                    key={usuario.id}
-                    onClick={() => abrirEdicion(usuario)}
-                    className="cursor-pointer hover:bg-slate-50"
-                  >
-                    <td className="px-4 py-3 font-semibold text-brand-950">
-                      {usuario.nombre}
-                      {esYo ? <span className="ml-2 text-xs font-bold text-slate-400">(tu cuenta)</span> : null}
-                    </td>
-                    <td className="px-4 py-3 font-semibold text-slate-700">{usuario.usuario}</td>
-                    <td className="px-4 py-3">
-                      <Badge tone={usuario.rol === 'ADMINISTRADOR' ? 'blue' : 'slate'}>
-                        {etiquetaRol[usuario.rol]}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Acceso usuario={usuario} />
-                    </td>
-                    <td className="px-4 py-3 text-slate-600">{usuario.area ?? '—'}</td>
-                    <td className="px-4 py-3 text-slate-500">{fechaCorta(usuario.fechaCreacion)}</td>
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center gap-3">
-                        <Interruptor
-                          activo={usuario.activo}
-                          onChange={(valor) => cambiarEstado(usuario, valor)}
-                          etiqueta={`Activar ${usuario.nombre}`}
-                          disabled={esYo}
-                        />
-                        <Badge tone={usuario.activo ? 'green' : 'slate'}>
-                          {usuario.activo ? 'Activo' : 'Inactivo'}
+            <>
+              <Tabla columnas={COLUMNAS}>
+                {pagina.visibles.map((usuario) => {
+                  const esYo = usuario.id === usuarioActualId
+                  return (
+                    <tr
+                      key={usuario.id}
+                      onClick={() => abrirEdicion(usuario)}
+                      className="cursor-pointer hover:bg-slate-50"
+                    >
+                      <td className="px-4 py-3 font-semibold text-brand-950">
+                        {usuario.nombre}
+                        {esYo ? <span className="ml-2 text-xs font-bold text-slate-400">(tu cuenta)</span> : null}
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-slate-700">{usuario.usuario}</td>
+                      <td className="px-4 py-3">
+                        <Badge tone={usuario.rol === 'ADMINISTRADOR' ? 'blue' : 'slate'}>
+                          {etiquetaRol[usuario.rol]}
                         </Badge>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </Tabla>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Acceso usuario={usuario} />
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">{usuario.area ?? '—'}</td>
+                      <td className="px-4 py-3 text-slate-500">{fechaCorta(usuario.fechaCreacion)}</td>
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-3">
+                          <Interruptor
+                            activo={usuario.activo}
+                            onChange={(valor) => cambiarEstado(usuario, valor)}
+                            etiqueta={`Activar ${usuario.nombre}`}
+                            disabled={esYo}
+                          />
+                          <Badge tone={usuario.activo ? 'green' : 'slate'}>
+                            {usuario.activo ? 'Activo' : 'Inactivo'}
+                          </Badge>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </Tabla>
+              <Paginacion {...pagina} />
+            </>
           )}
         </CardContent>
       </Card>

@@ -47,6 +47,7 @@ import type {
   Turno,
 } from './types'
 import { errorDeNegocio } from './errores'
+import { DEVUELTO_A_LA_FILA, exigirPlanVisto, planDeRetroceso, REABIERTO, type PlanDeRetroceso } from './reglas-retroceso'
 import { decidirCierre, decidirRepeticion, estaAbierto, type EstadoDeCierre } from './reglas-cierre'
 import {
   alcanceDelLlamado,
@@ -592,6 +593,26 @@ function ocupanteAjeno(moduloId: string, alcance: FiltroTurnoAbierto): Turno | u
       diaColombia(t.horaLlamado ?? '') === hoy &&
       !perteneceAlAlcance(t, alcance),
   )
+}
+
+/**
+ * El plan de retroceso de un doctor HOY (ver `reglas-retroceso.ts`). Devuelve
+ * los objetos del estado, no copias: `retrocederTurno` los cambia en su sitio.
+ */
+function planDeRetrocesoDe(profesionalId: string): PlanDeRetroceso | null {
+  const hoy = diaColombia(ahoraISO())
+  const abierto = masRecienteLlamado(abiertosDelDia({ profesionalId }, hoy))
+  const ultimoCerrado =
+    estado.turnos
+      .filter(
+        (t) =>
+          t.profesionalId === profesionalId &&
+          (t.estado === 'ATENDIDO' || t.estado === 'AUSENTE') &&
+          t.cerradoEn &&
+          diaColombia(t.fechaGeneracion) === hoy,
+      )
+      .sort((a, b) => Date.parse(b.cerradoEn ?? '') - Date.parse(a.cerradoEn ?? ''))[0] ?? null
+  return planDeRetroceso(abierto, ultimoCerrado)
 }
 
 /** Turnos abiertos de ese dia que cumplen el filtro. */
@@ -1415,6 +1436,42 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     return cerrarTurno(turnoId, 'AUSENTE', cerradoPor)
   }
 
+  async planDeRetroceso(profesionalId: string): Promise<PlanDeRetroceso | null> {
+    return planDeRetrocesoDe(profesionalId)
+  }
+
+  /**
+   * Retroceder. Igual que el llamado, todo va SIN ceder el control (nada de
+   * `await`) hasta el aviso: leer el plan, compararlo con lo que vio la
+   * pantalla y aplicarlo es atomico.
+   */
+  async retrocederTurno(
+    profesionalId: string,
+    visto: { turnoAbiertoId: string | null; restaurarId: string | null },
+  ): Promise<PlanDeRetroceso> {
+    const plan = exigirPlanVisto(planDeRetrocesoDe(profesionalId), visto)
+    const { devolver, restaurar } = plan
+    const moduloDevuelto = devolver?.moduloId ?? null
+
+    if (devolver) Object.assign(devolver, DEVUELTO_A_LA_FILA)
+    if (restaurar) {
+      Object.assign(restaurar, REABIERTO)
+      const cita = estado.citas.find((c) => c.id === restaurar.citaId)
+      if (cita?.estado === 'ATENDIDA') cita.estado = 'PRESENTADO'
+    }
+
+    const puestoRestaurado = restaurar?.moduloId ? puestoDe(restaurar.moduloId, restaurar.profesionalId) : null
+    if (restaurar?.moduloId && puestoRestaurado) {
+      realtimeHub.publish({ tipo: 'turno.devuelto', moduloId: restaurar.moduloId, puesto: puestoRestaurado, casilla: casillaDeTurno(restaurar) })
+    }
+    if (devolver && moduloDevuelto) {
+      const puesto = puestoDe(moduloDevuelto, devolver.profesionalId)
+      if (puesto !== puestoRestaurado) realtimeHub.publish({ tipo: 'turno.devuelto', moduloId: moduloDevuelto, puesto, casilla: null })
+    }
+    if (devolver) realtimeHub.publish({ tipo: 'fila.cambiada', servicioId: devolver.servicioId, profesionalId: devolver.profesionalId ?? null })
+    return plan
+  }
+
   // --- Pantalla de la sala de espera ---
 
   async estadoPantalla(): Promise<EstadoPantalla> {
@@ -1581,6 +1638,16 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       })
       .sort((a, b) => new Date(b.fechaGeneracion).getTime() - new Date(a.fechaGeneracion).getTime())
       .slice(0, filtro.limite)
+      .map((turno) => {
+        const cita = estado.citas.find((c) => c.id === turno.citaId)
+        return {
+          ...turno,
+          documentoPaciente: cita?.documentoPaciente ?? null,
+          // Las citas de ejemplo no traen tipo de documento ni procedimiento.
+          tipoDocumento: null,
+          procedimiento: null,
+        }
+      })
   }
 
   async estadisticas(fecha: string): Promise<EstadisticasDia> {

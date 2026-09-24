@@ -3,40 +3,36 @@
 /**
  * Pantalla del doctor (acceso por enlace temporal, sin usuario ni contrasena).
  *
- * Pensada para usarse rapido entre paciente y paciente: el boton principal es
- * grande porque el doctor la usa de pie o entre dos consultas, no sentado
+ * Pensada para usarse rapido entre paciente y paciente: las acciones son
+ * grandes porque el doctor la usa de pie o entre dos consultas, no sentado
  * revisando un formulario. El nombre completo del paciente SI se muestra
  * aqui (es el medico tratante, no la pantalla publica).
+ *
+ * El doctor NO elige consultorio ni fecha: atiende en el consultorio que trae
+ * asignado en la agenda del hospital, y siempre ve el dia de hoy. Si se
+ * equivoca (llama al siguiente sin querer, o lo marca atendido antes de
+ * tiempo), "Retroceder" lo deshace (ver `lib/turnos/reglas-retroceso.ts`).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  ArrowClockwise,
-  CheckCircle,
-  Info,
-  MapPin,
-  Megaphone,
-  Stethoscope,
-  UserMinus,
-  WarningCircle,
-} from '@phosphor-icons/react/dist/ssr'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
-import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
-import EmptyState from '@/components/ui/EmptyState'
+import { Info, WarningCircle } from '@phosphor-icons/react/dist/ssr'
 import { toast } from '@/components/ui/toast'
-import { Campo, Entrada, Seleccion } from '@/components/admin/Campos'
-import { esRechazoDeAcceso, hoyEnColombia, horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { esRechazoDeAcceso, hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { ResultadoDeCarga } from '@/lib/api/reintento'
 import { useCargaConReintento, useFechaQueSigueAHoy, useRecargaEnVivo, useUltimaPeticion } from '@/lib/hooks'
 import { avisoDePacienteYaLlamado, llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
 import { afectaALaFila } from '@/lib/realtime/canal'
-import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
-import { Isotipo, NOMBRE_INSTITUCION } from '@/components/brand/Marca'
+import { etiquetaDeRetroceso, resumenDelDia } from '@/lib/consultorio/presentacion'
+import type { PlanDeRetroceso } from '@/lib/turnos/reglas-retroceso'
 import { cn } from '@/lib/ui'
-import type { EstadoAgendaItem, ItemAgendaProfesional, Modulo, Profesional, Turno } from '@/lib/turnos/types'
+import type { ItemAgendaProfesional, Modulo, Profesional, Servicio, Turno } from '@/lib/turnos/types'
+import { EncabezadoConsultorio } from './EncabezadoConsultorio'
+import { TarjetaPaciente } from './TarjetaPaciente'
+import { BotonesDeAtencion, type AccionDoctor } from './BotonesDeAtencion'
+import { AgendaDeHoy } from './AgendaDeHoy'
+import { ConfirmarRetroceso } from './ConfirmarRetroceso'
 
-type Accion = 'llamar' | 'repetir' | 'atendido' | 'ausente' | null
+type Accion = AccionDoctor | null
 
 /**
  * Esta pantalla no entra con sesion sino con un enlace temporal, asi que un 401
@@ -57,16 +53,6 @@ const SIN_LOGIN = { sinRedirigirAlLogin: true } as const
  */
 const MS_MAXIMO_POR_ACCION = 20000
 
-/** Como se ve cada estado de la agenda para el doctor: color y texto humano. */
-const ETIQUETA_AGENDA: Record<EstadoAgendaItem, { texto: string; tone: 'blue' | 'green' | 'amber' | 'red' | 'slate' }> = {
-  PROGRAMADA: { texto: 'Aun no ha llegado', tone: 'slate' },
-  EN_ESPERA: { texto: 'En espera', tone: 'blue' },
-  LLAMADO: { texto: 'En atencion', tone: 'amber' },
-  EN_ATENCION: { texto: 'En atencion', tone: 'amber' },
-  ATENDIDA: { texto: 'Atendido', tone: 'green' },
-  AUSENTE: { texto: 'No se presento', tone: 'red' },
-}
-
 type TonoAviso = 'rojo' | 'ambar'
 
 const COLOR_AVISO: Record<TonoAviso, string> = {
@@ -84,7 +70,7 @@ function AvisoAPantallaCompleta({
   descripcion: string
 }) {
   return (
-    <main className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
+    <main className="grid min-h-screen place-items-center bg-[var(--turnos-bg)] px-6 text-center">
       <div className="max-w-md space-y-4">
         <div className={cn('mx-auto grid h-16 w-16 place-items-center rounded-2xl', COLOR_AVISO[tono])}>
           <WarningCircle size={32} weight="fill" />
@@ -93,6 +79,31 @@ function AvisoAPantallaCompleta({
         <p className="text-sm leading-6 text-slate-600">{descripcion}</p>
       </div>
     </main>
+  )
+}
+
+const TONO_AVISO = {
+  rojo: 'border-red-200 bg-red-50 text-red-800',
+  ambar: 'border-amber-200 bg-amber-50 text-amber-800',
+  azul: 'border-acento-100 bg-acento-50 text-acento-900',
+} as const
+
+/** Un aviso dentro de la pantalla, sobre las tarjetas. */
+function Aviso({
+  tono,
+  icono,
+  children,
+}: {
+  tono: keyof typeof TONO_AVISO
+  icono: 'alerta' | 'info'
+  children: React.ReactNode
+}) {
+  const Icono = icono === 'alerta' ? WarningCircle : Info
+  return (
+    <div role="status" className={cn('flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm leading-6', TONO_AVISO[tono])}>
+      <Icono size={20} weight="fill" className="mt-0.5 shrink-0" />
+      <span>{children}</span>
+    </div>
   )
 }
 
@@ -113,28 +124,34 @@ export default function ConsultorioClient() {
   const [sinConexion, setSinConexion] = useState(false)
 
   const [profesional, setProfesional] = useState<Profesional | null>(null)
-  const [modulos, setModulos] = useState<Modulo[]>([])
-  const [moduloId, setModuloId] = useState('')
+  // El consultorio ASIGNADO en la agenda del hospital. No se elige aqui.
+  const [consultorio, setConsultorio] = useState<Modulo | null>(null)
+  const [servicio, setServicio] = useState<Servicio | null>(null)
   const [pendientes, setPendientes] = useState<Turno[]>([])
   const [turnoActual, setTurnoActual] = useState<Turno | null>(null)
   const [agenda, setAgenda] = useState<ItemAgendaProfesional[]>([])
-  // Que dia de la agenda se esta viendo. Por defecto hoy; el doctor puede
-  // revisar otro dia sin que eso afecte a quien puede llamar (eso siempre
-  // sale de los turnos EN_ESPERA de HOY, via `pendientes`).
+  // Lo que haria "Retroceder" ahora mismo, tal como lo calcula el servidor.
+  const [retroceso, setRetroceso] = useState<PlanDeRetroceso | null>(null)
+  const [confirmandoRetroceso, setConfirmandoRetroceso] = useState(false)
+  // Siempre hoy: el doctor no elige dia. Pasa solo al siguiente a medianoche.
   const [fecha, setFecha] = useState(hoyEnColombia())
-  // Si se estaba mirando hoy, pasa solo al dia siguiente a medianoche.
   useFechaQueSigueAHoy(setFecha)
   const [accion, setAccion] = useState<Accion>(null)
   // El refresco automatico lee la accion en curso desde una ref: si dependiera
   // del estado, el intervalo se recrearia en cada clic.
   const accionRef = useRef<Accion>(null)
 
+  // SOLO el consultorio asignado. Sin el no se llama a nadie: caer en otro (el
+  // primero de la lista, como se hizo alguna vez) mandaba a los pacientes a la
+  // puerta de otro doctor y le cerraba al paciente que ese tuviera adentro.
+  const moduloId = consultorio?.id ?? ''
+
   useEffect(() => {
     accionRef.current = accion
   }, [accion])
 
   // Solo cuenta la ultima recarga: el canal en vivo, el final de cada accion y
-  // el cambio de fecha recargan a la vez, y una respuesta vieja que llegara
+  // el cambio de dia recargan a la vez, y una respuesta vieja que llegara
   // tarde pintaria "sin paciente" encima del paciente real.
   const recargas = useUltimaPeticion()
 
@@ -143,27 +160,22 @@ export default function ConsultorioClient() {
     try {
       const data = await pedir<{
         profesional: Profesional
-        modulos: Modulo[]
+        consultorio: Modulo | null
+        servicio: Servicio | null
         pendientes: Turno[]
         turnoActual: Turno | null
         agenda: ItemAgendaProfesional[]
+        retroceso: PlanDeRetroceso | null
       }>(`/api/consultorio?fecha=${fecha}`, { ...SIN_LOGIN, signal: recarga.signal })
       if (!recarga.esVigente()) return 'reemplazada'
 
       setProfesional(data.profesional)
-      setModulos(data.modulos)
+      setConsultorio(data.consultorio)
+      setServicio(data.servicio)
       setPendientes(data.pendientes)
       setTurnoActual(data.turnoActual)
       setAgenda(data.agenda)
-      // El consultorio habitual del doctor queda preseleccionado.
-      //
-      // Y SOLO ESE. Antes, si el doctor no tenia consultorio asignado, se caia
-      // al primero de la lista de su servicio, que es el de OTRO doctor: sin
-      // decir nada, llamaba a sus pacientes a la puerta equivocada y le cerraba
-      // como atendido al paciente que ese colega tuviera adentro. Sin
-      // consultorio asignado no se elige ninguno: el doctor lo escoge a mano y
-      // el servidor comprueba que pueda usarlo.
-      setModuloId((actual) => actual || data.profesional.moduloId || '')
+      setRetroceso(data.retroceso ?? null)
       setTokenInvalido(false)
       setSinConexion(false)
     } catch (error) {
@@ -229,6 +241,10 @@ export default function ConsultorioClient() {
     // puede aterrizar despues y tapar lo que la accion acaba de cambiar.
     recargas.cancelar()
     setAccion(nombre)
+    // El plan de "Retroceder" que se ve ya no vale: esta accion lo cambia. Se
+    // apaga hasta que la recarga de abajo traiga el nuevo, y asi nunca se
+    // ofrece deshacer algo que ya no es lo ultimo que paso.
+    setRetroceso(null)
     // Una accion colgada no puede congelar el refresco: se suelta sola.
     const soltar = setTimeout(() => setAccion(null), MS_MAXIMO_POR_ACCION)
     try {
@@ -243,7 +259,8 @@ export default function ConsultorioClient() {
       // pone al dia, el doctor ve el error sobre el estado viejo, vuelve a
       // pulsar "Llamar siguiente", y el primer paciente queda cerrado como
       // atendido sin haber entrado. Esta recarga tambien recoge los eventos
-      // que llegaron mientras la accion estaba en curso.
+      // que llegaron mientras la accion estaba en curso, y el nuevo plan de
+      // "Retroceder".
       void recargar()
     }
   }
@@ -290,20 +307,67 @@ export default function ConsultorioClient() {
       setTurnoActual(null)
     })
 
-  const programadosHoy = agenda.filter((item) => item.estado === 'PROGRAMADA').length
-  // Al doctor solo le mostramos pacientes confirmados (ya registraron su
-  // llegada en admisiones); los que aun no llegan solo generan el aviso de
-  // arriba, para no llenarle la agenda de citas con las que no puede hacer nada.
-  const agendaConfirmada = agenda.filter((item) => item.estado !== 'PROGRAMADA')
-  const esHoy = fecha === hoyEnColombia()
-  // Sin pacientes en espera no hay a quien llamar: el boton se apaga en vez de
-  // dejar que el doctor lo pulse y reciba un error.
+  /**
+   * Retroceder al turno anterior.
+   *
+   * Se manda EXACTAMENTE lo que el doctor confirmo (quien vuelve a la fila y
+   * quien vuelve a atencion): si el servidor ya esta en otro punto —el doble
+   * clic, o un cambio desde otro equipo— responde 409 sin tocar nada, y la
+   * recarga de `ejecutar` pone la pantalla al dia. Nunca retrocede un paso que
+   * el doctor no vio.
+   */
+  const retroceder = () =>
+    ejecutar('retroceder', async () => {
+      const plan = retroceso
+      if (!plan) return
+      // SIN ESPERA: la pantalla muestra ya al paciente que vuelve (o ninguno),
+      // con los datos que el servidor mismo dio en el plan. Si el servidor lo
+      // rechaza, `ejecutar` avisa y la recarga pinta lo real.
+      setConfirmandoRetroceso(false)
+      setTurnoActual(
+        plan.restaurar
+          ? { ...plan.restaurar, estado: 'LLAMADO', cerradoEn: null, cerradoPor: null, cierreAutomatico: false, horaAtencion: null }
+          : null,
+      )
+      if (plan.devolver) setPendientes((antes) => [plan.devolver as Turno, ...antes.filter((t) => t.id !== plan.devolver?.id)])
+      try {
+        const { restaurado, devuelto } = await pedir<{ restaurado: Turno | null; devuelto: Turno | null }>(
+          '/api/consultorio/retroceder',
+          {
+            method: 'POST',
+            ...SIN_LOGIN,
+            body: JSON.stringify({ turnoAbiertoId: plan.devolver?.id ?? null, restaurarId: plan.restaurar?.id ?? null }),
+          },
+        )
+        // Se pinta ya lo que devolvio el servidor, sin esperar la recarga.
+        setTurnoActual(restaurado)
+        setRetroceso(null)
+        toast.success(
+          'Listo, retrocediste',
+          restaurado
+            ? `${restaurado.codigo} volvio a atencion${devuelto ? ` y ${devuelto.codigo} a la fila de espera` : ''}.`
+            : `${devuelto?.codigo ?? 'El paciente'} volvio a la fila de espera.`,
+        )
+      } finally {
+        setConfirmandoRetroceso(false)
+      }
+    })
+
+  const resumen = resumenDelDia(agenda)
+  // El documento del paciente en atencion sale de su cita en la agenda de hoy.
+  const documentoActual = turnoActual
+    ? (agenda.find((item) => item.turnoId === turnoActual.id)?.documentoPaciente ?? null)
+    : null
+  // Sin consultorio asignado o sin pacientes en espera no hay a quien llamar:
+  // el boton se apaga en vez de dejar que el doctor lo pulse y reciba un error.
   const puedeLlamar = Boolean(moduloId) && pendientes.length > 0
 
   if (cargando) {
     return (
-      <main className="grid min-h-screen place-items-center bg-slate-100 px-6">
-        <p className="text-sm font-bold text-slate-500">Cargando tu consultorio...</p>
+      <main className="grid min-h-screen place-items-center bg-[var(--turnos-bg)] px-6">
+        <p className="animate-pulse text-sm font-semibold text-slate-500 motion-reduce:animate-none">
+          Cargando tu consultorio...
+        </p>
       </main>
     )
   }
@@ -331,198 +395,75 @@ export default function ConsultorioClient() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-6 sm:px-6">
-      <div className="mx-auto max-w-3xl space-y-5">
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Isotipo size={40} />
-            <div className="leading-tight">
-              <p className="text-lg font-semibold tracking-[-0.02em] text-brand-950">{profesional.nombre}</p>
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{NOMBRE_INSTITUCION}</p>
-            </div>
-          </div>
-          {/*
-            El consultorio se puede cambiar: el doctor a veces atiende en otra
-            puerta, y si no tiene uno asignado esta es la unica forma de que
-            pueda trabajar. La lista solo trae los de su servicio, y el
-            servidor vuelve a comprobarlo antes de llamar.
-          */}
-          <div className="flex items-center gap-2">
-            <IndicadorConexion estado={conexion} />
-            <MapPin size={18} weight="bold" className="shrink-0 text-brand-600" />
-            <Seleccion
-              value={moduloId}
-              onChange={(e) => setModuloId(e.target.value)}
-              aria-label="Consultorio desde el que llamas"
-              className="max-w-[14rem]"
-            >
-              <option value="">Elige tu consultorio</option>
-              {modulos.map((modulo) => (
-                <option key={modulo.id} value={modulo.id}>
-                  {modulo.nombre}
-                </option>
-              ))}
-            </Seleccion>
-          </div>
-        </header>
+    <main className="min-h-screen bg-[var(--turnos-bg)]">
+      <EncabezadoConsultorio
+        doctor={profesional.nombre}
+        especialidad={servicio?.nombre ?? null}
+        consultorio={consultorio?.nombre ?? null}
+        conexion={conexion}
+      />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Paciente en atencion</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            {turnoActual ? (
-              <div className="rounded-2xl border-2 border-brand-100 bg-brand-50 p-6 text-center">
-                <p className="text-xs font-bold uppercase tracking-wide text-brand-600">Turno en atencion</p>
-                <p className="mt-1 text-5xl font-semibold tracking-[-0.03em] text-brand-950">
-                  {turnoActual.codigo}
-                </p>
-                {turnoActual.nombrePaciente ? (
-                  <p className="mt-2 text-2xl font-semibold text-slate-800">{turnoActual.nombrePaciente}</p>
-                ) : null}
-                <p className="mt-2 text-sm font-semibold text-brand-700">
-                  Llamado {turnoActual.vecesLlamado} {turnoActual.vecesLlamado === 1 ? 'vez' : 'veces'}
-                  {turnoActual.horaLlamado ? ` · ${horaCorta(turnoActual.horaLlamado)}` : ''}
-                </p>
-              </div>
-            ) : (
-              <EmptyState
-                icon={Stethoscope}
-                title="Sin paciente en atencion"
-                description="Pulsa el boton para llamar al proximo paciente en espera."
-              />
-            )}
+      <div className="mx-auto max-w-6xl space-y-5 px-4 py-5 sm:px-6 sm:py-7">
+        {sinConexion ? (
+          <Aviso tono="ambar" icono="alerta">
+            Sin conexion con el servidor: lo que ves puede estar desactualizado. Se sigue intentando solo y se pone
+            al dia en cuanto vuelva la conexion.
+          </Aviso>
+        ) : null}
 
-            {/*
-              Sin esto, un doctor con citas programadas pero sin nadie EN_ESPERA
-              ve el boton apagado y cree que el sistema esta roto. El aviso
-              explica que falta el paso de admisiones (registrar la llegada).
-            */}
-            {sinConexion ? (
-              <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                <WarningCircle size={20} weight="fill" className="mt-0.5 shrink-0" />
-                <span>
-                  Sin conexion con el servidor: lo que ves puede estar desactualizado. Se sigue
-                  intentando solo y se pone al dia en cuanto vuelva la conexion.
-                </span>
-              </div>
-            ) : null}
+        {!moduloId ? (
+          <Aviso tono="rojo" icono="alerta">
+            No tienes consultorio asignado en la agenda, asi que todavia no puedes llamar pacientes. Pide en admisiones
+            o en sistemas que te lo asignen: es el que ve el paciente en la pantalla de la sala.
+          </Aviso>
+        ) : null}
 
-            {!moduloId ? (
-              <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-                <WarningCircle size={20} weight="fill" className="mt-0.5 shrink-0" />
-                <span>
-                  No tienes consultorio asignado. Elige arriba desde cual estas atendiendo: es el numero
-                  que va a ver el paciente en la pantalla de la sala de espera.
-                </span>
-              </div>
-            ) : null}
+        {/*
+          Sin esto, un doctor con citas programadas pero sin nadie EN_ESPERA
+          ve el boton apagado y cree que el sistema esta roto. El aviso explica
+          que falta el paso de admisiones (registrar la llegada).
+        */}
+        {!turnoActual && pendientes.length === 0 && resumen.sinLlegar > 0 ? (
+          <Aviso tono="azul" icono="info">
+            Tienes {resumen.sinLlegar} {resumen.sinLlegar === 1 ? 'paciente' : 'pacientes'} en agenda para hoy;{' '}
+            {resumen.sinLlegar === 1 ? 'aparecera' : 'apareceran'} para llamar cuando{' '}
+            {resumen.sinLlegar === 1 ? 'registre' : 'registren'} su llegada en admisiones.
+          </Aviso>
+        ) : null}
 
-            {!turnoActual && pendientes.length === 0 && esHoy && programadosHoy > 0 ? (
-              <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                <Info size={20} weight="fill" className="mt-0.5 shrink-0" />
-                <span>
-                  Tienes {programadosHoy} {programadosHoy === 1 ? 'paciente' : 'pacientes'} en agenda para
-                  hoy; {programadosHoy === 1 ? 'aparecera' : 'aparecerán'} para llamar cuando{' '}
-                  {programadosHoy === 1 ? 'registre' : 'registren'} su llegada en admisiones.
-                </span>
-              </div>
-            ) : null}
+        <TarjetaPaciente
+          turno={turnoActual}
+          documento={documentoActual}
+          especialidad={servicio?.nombre ?? null}
+          consultorio={consultorio?.nombre ?? null}
+          enEspera={pendientes.length}
+          etiquetaRetroceso={etiquetaDeRetroceso(retroceso)}
+          retrocediendo={accion === 'retroceder'}
+          ocupado={accion !== null}
+          alRetroceder={() => setConfirmandoRetroceso(true)}
+        />
 
-            <Button
-              onClick={llamarSiguiente}
-              loading={accion === 'llamar'}
-              disabled={!puedeLlamar}
-              className="h-16 w-full text-lg"
-            >
-              <Megaphone size={22} weight="bold" />
-              Siguiente paciente
-            </Button>
+        <BotonesDeAtencion
+          accion={accion}
+          hayPaciente={Boolean(turnoActual)}
+          puedeLlamar={puedeLlamar}
+          enEspera={pendientes.length}
+          alLlamar={llamarSiguiente}
+          alAtender={() => cerrarTurno('atendido')}
+          alRepetir={repetirLlamado}
+          alAusente={() => cerrarTurno('ausente')}
+        />
 
-            <div className="flex flex-wrap gap-3">
-              <Button
-                onClick={repetirLlamado}
-                loading={accion === 'repetir'}
-                variant="secondary"
-                disabled={!turnoActual}
-              >
-                <ArrowClockwise size={18} weight="bold" />
-                Repetir llamado
-              </Button>
-              <Button
-                onClick={() => cerrarTurno('atendido')}
-                loading={accion === 'atendido'}
-                variant="dark"
-                disabled={!turnoActual}
-              >
-                <CheckCircle size={18} weight="bold" />
-                Atendido
-              </Button>
-              <Button
-                onClick={() => cerrarTurno('ausente')}
-                loading={accion === 'ausente'}
-                variant="danger"
-                disabled={!turnoActual}
-              >
-                <UserMinus size={18} weight="bold" />
-                No se presento
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-end justify-between gap-4">
-              <CardTitle>Agenda del dia ({agendaConfirmada.length})</CardTitle>
-              <Campo etiqueta="Fecha" className="max-w-[10rem]">
-                <Entrada type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-              </Campo>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {/*
-              Solo pacientes CONFIRMADOS (ya registraron llegada en admisiones).
-              Los que aun no llegan (PROGRAMADA) no aportan nada aqui: ya se
-              avisa arriba cuantos faltan por confirmar.
-            */}
-            {agendaConfirmada.length === 0 ? (
-              <p className="text-sm text-slate-500">
-                {agenda.length > 0
-                  ? 'Aun no hay pacientes confirmados para este dia.'
-                  : 'No tienes citas programadas para este dia.'}
-              </p>
-            ) : (
-              <ol className="space-y-2">
-                {agendaConfirmada.map((item) => {
-                  // Un turno que se cerro solo (al pasar al siguiente sin
-                  // cerrar al anterior) se veia igual que uno atendido de
-                  // verdad. Se marca aparte para que el doctor pueda notarlo.
-                  const etiqueta =
-                    item.estado === 'ATENDIDA' && item.cierreAutomatico
-                      ? { texto: 'Cerrado al pasar al siguiente', tone: 'slate' as const }
-                      : ETIQUETA_AGENDA[item.estado]
-                  return (
-                    <li
-                      key={item.citaId}
-                      className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-100 bg-white px-4 py-3 text-sm shadow-sm"
-                    >
-                      <span className="shrink-0 rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500">
-                        {horaCorta(item.horaCita)}
-                      </span>
-                      {item.codigo ? (
-                        <span className="shrink-0 font-semibold text-brand-950">{item.codigo}</span>
-                      ) : null}
-                      <span className="min-w-0 flex-1 truncate font-semibold text-slate-700">{item.nombrePaciente}</span>
-                      <Badge tone={etiqueta.tone}>{etiqueta.texto}</Badge>
-                    </li>
-                  )
-                })}
-              </ol>
-            )}
-          </CardContent>
-        </Card>
+        <AgendaDeHoy agenda={agenda} resumen={resumen} turnoActualId={turnoActual?.id ?? null} />
       </div>
+
+      <ConfirmarRetroceso
+        plan={retroceso}
+        abierto={confirmandoRetroceso}
+        cargando={accion === 'retroceder'}
+        alCerrar={() => setConfirmandoRetroceso(false)}
+        alConfirmar={retroceder}
+      />
     </main>
   )
 }

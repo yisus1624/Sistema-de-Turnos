@@ -127,10 +127,31 @@ export function TablaSkeleton({ columnas, filas = 6 }: { columnas: string[]; fil
 }
 
 /** Tabla con scroll horizontal y cabecera consistente. */
+/**
+ * Cuando empezar a mostrar cada fila como una tarjeta, segun cuantas columnas
+ * tenga la tabla (ver `.tabla-adaptable` en globals.css). Con mas columnas,
+ * antes: una tabla de ocho no cabe en el ancho donde una de cuatro si.
+ */
+function anchoParaApilar(columnas: number): 'angosta' | 'media' | 'ancha' {
+  if (columnas <= 4) return 'angosta'
+  if (columnas <= 6) return 'media'
+  return 'ancha'
+}
+
+/**
+ * La tabla de administracion. Se ve COMPLETA en cualquier pantalla, sin
+ * barra de desplazamiento lateral: en una ancha, las celdas parten el texto y
+ * se aprietan; cuando ya no caben, cada fila pasa a ser una tarjeta con la
+ * etiqueta de cada dato a la izquierda. Las etiquetas salen de `columnas`
+ * (variables CSS), asi ninguna tabla tiene que repetirlas en sus celdas.
+ */
 export function Tabla({ columnas, children }: { columnas: string[]; children: React.ReactNode }) {
+  const etiquetas = Object.fromEntries(
+    columnas.map((columna, i) => [`--etiqueta-${i + 1}`, JSON.stringify(columna)]),
+  ) as React.CSSProperties
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px] text-left text-sm">
+    <div className="tabla-adaptable" data-apilar={anchoParaApilar(columnas.length)} style={etiquetas}>
+      <table className="w-full text-left text-sm">
         <thead>
           <tr className="border-b border-slate-200">
             {columnas.map((columna) => (

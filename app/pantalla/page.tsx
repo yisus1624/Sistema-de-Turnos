@@ -220,7 +220,7 @@ export default function PantallaPublicaPage() {
   const [casillas, setCasillas] = useState<CasillaPantalla[]>([])
   // Los llamados recientes, cada uno con su reloj: varios pueden quedar
   // resaltados a la vez (ver `useResaltes`).
-  const { resaltes, resaltar } = useResaltes()
+  const { resaltes, resaltar, apagar } = useResaltes()
 
   // Un unico reloj para los dos diseños (ver `useAhora`). La cuadricula lo
   // pinta con su propio `Reloj` abajo; la cartelera lo recibe ya formateado.
@@ -480,8 +480,21 @@ export default function PantallaPublicaPage() {
       const clave = evento.puesto ?? evento.moduloId
       contar(clave)
       aplicarCasillas((previas) => liberarPuesto(previas, clave))
+      return
     }
-  }, [aplicarCasillas, anunciar, resaltar, cargarEstado])
+
+    // El doctor retrocedio al turno anterior: su puesto vuelve a mostrar al
+    // paciente de antes (o queda libre), EN SILENCIO y sin marca de "NUEVO".
+    // No es un llamado: es deshacer uno que no debio pasar.
+    if (evento.tipo === 'turno.devuelto') {
+      contar(evento.puesto)
+      apagar(evento.puesto)
+      const { casilla } = evento
+      aplicarCasillas((previas) =>
+        casilla ? colocarLlamado(previas, casilla) : liberarPuesto(previas, evento.puesto),
+      )
+    }
+  }, [aplicarCasillas, anunciar, resaltar, apagar, cargarEstado])
 
   /**
    * El canal de eventos, el MISMO que vigila el resto del sistema.

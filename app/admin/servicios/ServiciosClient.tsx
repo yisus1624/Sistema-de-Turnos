@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Plus, Stack, Trash } from '@phosphor-icons/react/dist/ssr'
+import { Paginacion, usePaginacion } from '@/components/ui/Paginacion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -45,6 +46,7 @@ export default function ServiciosClient() {
   const [formulario, setFormulario] = useState<Formulario>(FORMULARIO_VACIO)
   const [guardando, setGuardando] = useState(false)
   const [aEliminar, setAEliminar] = useState<Servicio | null>(null)
+  const pagina = usePaginacion(servicios)
   const [eliminando, setEliminando] = useState(false)
 
   /**
@@ -182,49 +184,52 @@ export default function ServiciosClient() {
               />
             </div>
           ) : (
-            <Tabla columnas={COLUMNAS}>
-              {servicios.map((servicio) => (
-                <tr
-                  key={servicio.id}
-                  onClick={() => abrirEdicion(servicio)}
-                  className="cursor-pointer hover:bg-slate-50"
-                >
-                  <td className="px-4 py-3 font-semibold text-brand-950">{servicio.nombre}</td>
-                  <td className="px-4 py-3">
-                    <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-semibold text-slate-700">
-                      {servicio.prefijo}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{etiquetaModo[servicio.modoFila]}</td>
-                  <td className="px-4 py-3">
-                    <CeldaActividad
-                      actividad={actividad[servicio.id]}
-                      cargando={cargandoActividad}
-                      error={errorActividad}
-                      esFutura={esFutura}
-                    />
-                  </td>
-                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center gap-3">
-                      <Interruptor
-                        activo={servicio.activo}
-                        onChange={(valor) => cambiarEstado(servicio, valor)}
-                        etiqueta={`Activar ${servicio.nombre}`}
+            <>
+              <Tabla columnas={COLUMNAS}>
+                {pagina.visibles.map((servicio) => (
+                  <tr
+                    key={servicio.id}
+                    onClick={() => abrirEdicion(servicio)}
+                    className="cursor-pointer hover:bg-slate-50"
+                  >
+                    <td className="px-4 py-3 font-semibold text-brand-950">{servicio.nombre}</td>
+                    <td className="px-4 py-3">
+                      <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-semibold text-slate-700">
+                        {servicio.prefijo}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{etiquetaModo[servicio.modoFila]}</td>
+                    <td className="px-4 py-3">
+                      <CeldaActividad
+                        actividad={actividad[servicio.id]}
+                        cargando={cargandoActividad}
+                        error={errorActividad}
+                        esFutura={esFutura}
                       />
-                      <Badge tone={servicio.activo ? 'green' : 'slate'}>
-                        {servicio.activo ? 'Activo' : 'Inactivo'}
-                      </Badge>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                    <Button size="sm" variant="ghost" onClick={() => setAEliminar(servicio)}>
-                      <Trash size={16} />
-                      Eliminar
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </Tabla>
+                    </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-3">
+                        <Interruptor
+                          activo={servicio.activo}
+                          onChange={(valor) => cambiarEstado(servicio, valor)}
+                          etiqueta={`Activar ${servicio.nombre}`}
+                        />
+                        <Badge tone={servicio.activo ? 'green' : 'slate'}>
+                          {servicio.activo ? 'Activo' : 'Inactivo'}
+                        </Badge>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                      <Button size="sm" variant="ghost" onClick={() => setAEliminar(servicio)}>
+                        <Trash size={16} />
+                        Eliminar
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </Tabla>
+              <Paginacion {...pagina} />
+            </>
           )}
         </CardContent>
       </Card>

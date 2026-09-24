@@ -8,7 +8,7 @@ export default function Pagina() {
     <RoleShell
       rol="ADMINISTRADOR" seccion="/admin/reportes"
       title="Reportes"
-      description="Filtra los turnos por rango de fechas y descarga el reporte en PDF."
+      description="Elige un periodo, revisa el resumen y descarga el reporte en PDF para el hospital."
     >
       <ReportesClient />
     </RoleShell>

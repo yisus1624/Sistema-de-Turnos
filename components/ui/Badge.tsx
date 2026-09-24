@@ -33,7 +33,7 @@ export function Badge({ tone = 'slate', className, children }: { tone?: BadgeTon
      */
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.015em] ring-1',
+        'inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold tracking-[0.015em] ring-1',
         tones[tone],
         className,
       )}

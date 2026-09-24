@@ -434,3 +434,27 @@ test('en un TV 1080p, 12 turnos se ven con la letra normal y 15 apenas mas apret
   alMenos(con15.turno, 0.038 * 1080, 'turno con 15')
   alMenos(con15.consultorio, 0.023 * 1080, 'consultorio con 15')
 })
+
+// En ventana (el navegador sin pantalla completa, unos 165 px menos de alto) el
+// mismo TV salia con 3 columnas y en pantalla completa con 2: la tabla se
+// rearmaba al entrar o salir de pantalla completa. Una columna mas solo si la
+// letra crece de verdad.
+test('en ventana y en pantalla completa el televisor reparte igual', () => {
+  const tv = PANTALLAS['1920x1080']
+  const ventana = { pantalla: { ancho: 1920, alto: 915 }, ancha: { ancho: tv.ancha.ancho, alto: tv.ancha.alto - 165 } }
+  for (const n of [8, 10, 12, 15]) {
+    const completa = planDeCartelera(tv.ancha, casillas(n), tv.pantalla)
+    const enVentana = planDeCartelera(ventana.ancha, casillas(n), ventana.pantalla)
+    assert.equal(enVentana.columnas, completa.columnas, `con ${n}`)
+  }
+})
+
+test('en ventana y en pantalla completa la fila tiene la misma forma', () => {
+  const tv = PANTALLAS['1920x1080']
+  const ventana = { pantalla: { ancho: 1920, alto: 915 }, ancha: { ancho: tv.ancha.ancho, alto: tv.ancha.alto - 165 } }
+  for (const n of [4, 8, 10, 12, 15]) {
+    const completa = planDeCartelera(tv.ancha, casillas(n), tv.pantalla)
+    const enVentana = planDeCartelera(ventana.ancha, casillas(n), ventana.pantalla)
+    assert.equal(enVentana.forma, completa.forma, `con ${n}`)
+  }
+})

@@ -7,7 +7,8 @@
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { NOMBRE_INSTITUCION } from '@/components/brand/Marca'
-import type { EstadoTurno, Turno } from '@/lib/turnos/types'
+import type { EstadoTurno } from '@/lib/turnos/types'
+import type { FilaReporte } from './filas'
 
 const RUTA_LOGO = '/img/logo-hospital.png'
 
@@ -57,10 +58,12 @@ async function cargarLogo(): Promise<string | null> {
   }
 }
 
-export type FilaReporte = {
-  turno: Turno
-  servicioNombre: string
-  moduloNombre: string
+export type { FilaReporte }
+
+function fechaCorta(fecha: string) {
+  return new Intl.DateTimeFormat('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' }).format(
+    new Date(`${fecha}T12:00:00Z`),
+  )
 }
 
 export async function generarReportePdf(params: {
@@ -113,18 +116,26 @@ export async function generarReportePdf(params: {
   autoTable(doc, {
     startY: 96,
     margin: { left: margen, right: margen },
-    head: [['Turno', 'Servicio', 'Modulo', 'Generado', 'Llamado', 'Cierre', 'Llamadas', 'Estado']],
-    body: filas.map(({ turno, servicioNombre, moduloNombre }) => [
-      turno.codigo,
-      servicioNombre,
-      moduloNombre,
-      horaCorta(turno.fechaGeneracion),
-      horaCorta(turno.horaLlamado),
-      horaCorta(turno.horaAtencion),
-      String(turno.vecesLlamado),
-      etiquetaEstado[turno.estado],
+    // El PACIENTE primero: es lo que se busca en el reporte. El turno al final,
+    // como referencia.
+    head: [['Fecha', 'Paciente', 'Documento', 'Medico', 'Servicio', 'Consultorio', 'Procedimiento', 'Cita', 'Llegada', 'Llamado', 'Atencion', 'Estado', 'Turno']],
+    body: filas.map((fila) => [
+      fechaCorta(fila.fecha),
+      fila.paciente,
+      fila.documento,
+      fila.medico,
+      fila.servicio,
+      fila.consultorio,
+      fila.procedimiento,
+      horaCorta(fila.turno.horaCita),
+      horaCorta(fila.turno.fechaGeneracion),
+      horaCorta(fila.turno.horaPrimerLlamado ?? fila.turno.horaLlamado),
+      horaCorta(fila.turno.horaAtencion),
+      etiquetaEstado[fila.turno.estado],
+      fila.turno.codigo,
     ]),
-    styles: { fontSize: 9, cellPadding: 6 },
+    styles: { fontSize: 7.5, cellPadding: 4, overflow: 'linebreak' },
+    columnStyles: { 1: { cellWidth: 110, fontStyle: 'bold' }, 3: { cellWidth: 95 }, 6: { cellWidth: 90 } },
     headStyles: { fillColor: [15, 23, 42], textColor: 255 },
     alternateRowStyles: { fillColor: [248, 250, 252] },
   })

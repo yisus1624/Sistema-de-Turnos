@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { ClockCounterClockwise } from '@phosphor-icons/react/dist/ssr'
+import { Paginacion, usePaginacion } from '@/components/ui/Paginacion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
@@ -84,6 +85,7 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
   useEffect(() => {
     buscar(filtrosDiferidos)
   }, [buscar, filtrosDiferidos])
+  const pagina = usePaginacion(turnos, [filtrosDiferidos])
 
   return (
     <div className="space-y-5">
@@ -180,7 +182,10 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
               />
             </div>
           ) : (
-            <TablaDeTurnos turnos={turnos} servicios={servicios} modulos={modulos} />
+            <>
+              <TablaDeTurnos turnos={pagina.visibles} servicios={servicios} modulos={modulos} />
+              <Paginacion {...pagina} />
+            </>
           )}
         </CardContent>
       </Card>

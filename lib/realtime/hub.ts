@@ -27,6 +27,13 @@ export type EventoTurno =
   /** El consultorio quedo libre: la pantalla apaga esa casilla. */
   | { tipo: 'modulo.liberado'; moduloId: string; puesto?: string }
   /**
+   * El doctor retrocedio al turno anterior (ver `reglas-retroceso.ts`): ese
+   * puesto vuelve a mostrar a `casilla` —el paciente anterior, otra vez en
+   * atencion— o queda libre si es null. SIN campana ni resalte: no es un
+   * llamado nuevo, es deshacer uno que no debio pasar.
+   */
+  | { tipo: 'turno.devuelto'; moduloId: string; puesto: string; casilla: CasillaPantalla | null }
+  /**
    * Cambio la fila de espera (una llegada registrada en admisiones, un turno
    * nuevo de ventanilla): quien atiende esa fila recarga sus pendientes.
    *

@@ -20,7 +20,7 @@ import {
 } from '@/lib/api/reintento'
 import { fechaTrasCambioDeDia } from '@/lib/api/cambio-de-dia'
 import { hoyEnColombia, pedir } from '@/lib/api/cliente'
-import type { Modulo, Servicio } from '@/lib/turnos/types'
+import type { Modulo, Profesional, Servicio } from '@/lib/turnos/types'
 
 /**
  * Devuelve `valor`, pero solo despues de `ms` sin que vuelva a cambiar.
@@ -442,16 +442,21 @@ export function useFechaQueSigueAHoy(setFecha: (cambiar: (actual: string) => str
 export function useCatalogosDeTurnos() {
   const [servicios, setServicios] = useState<Servicio[]>([])
   const [modulos, setModulos] = useState<Modulo[]>([])
+  // Para poner nombre al medico de cada turno (reportes).
+  const [profesionales, setProfesionales] = useState<Profesional[]>([])
   const [fallo, setFallo] = useState(false)
 
   const cargar = useCallback(async () => {
     try {
-      const [s, m] = await Promise.all([
+      const [s, m, p] = await Promise.all([
         pedir<{ servicios: Servicio[] }>('/api/turnos/servicios'),
         pedir<{ modulos: Modulo[] }>('/api/turnos/modulos'),
+        // Con los inactivos: un turno viejo puede ser de un medico ya dado de baja.
+        pedir<{ profesionales: Profesional[] }>('/api/turnos/profesionales?todos=1'),
       ])
       setServicios(s.servicios)
       setModulos(m.modulos)
+      setProfesionales(p.profesionales)
       setFallo(false)
     } catch (error) {
       setFallo(true)
@@ -464,5 +469,5 @@ export function useCatalogosDeTurnos() {
     void recargar()
   }, [recargar])
 
-  return { servicios, modulos, fallo }
+  return { servicios, modulos, profesionales, fallo }
 }

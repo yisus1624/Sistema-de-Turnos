@@ -43,12 +43,12 @@ export function TablaDeTurnos({ turnos, servicios, modulos }: { turnos: Turno[];
     <Tabla columnas={COLUMNAS_DE_TURNOS}>
       {turnos.map((turno) => (
         <tr key={turno.id} className="hover:bg-slate-50">
-          <td className="px-4 py-3 font-semibold text-brand-950">{turno.codigo}</td>
+          <td className="whitespace-nowrap px-4 py-3 font-semibold text-brand-950">{turno.codigo}</td>
           <td className="px-4 py-3 text-slate-600">{nombreEnCatalogo(servicios, turno.servicioId)}</td>
           <td className="px-4 py-3 text-slate-600">{nombreDeModulo(modulos, turno.moduloId)}</td>
-          <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.fechaGeneracion)}</td>
-          <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.horaLlamado)}</td>
-          <td className="px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.horaAtencion)}</td>
+          <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.fechaGeneracion)}</td>
+          <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.horaLlamado)}</td>
+          <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{horaCorta(turno.horaAtencion)}</td>
           <td className="px-4 py-3 tabular-nums text-slate-600">{turno.vecesLlamado}</td>
           <td className="px-4 py-3">
             <Badge tone={ETIQUETA_ESTADO_TURNO[turno.estado].tono}>{ETIQUETA_ESTADO_TURNO[turno.estado].texto}</Badge>

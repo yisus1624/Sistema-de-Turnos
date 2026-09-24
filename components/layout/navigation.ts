@@ -1,6 +1,7 @@
 import type { Icon } from '@phosphor-icons/react'
 import {
   CalendarPlus,
+  FileText,
   Flask,
   Key,
   Gear,
@@ -37,6 +38,7 @@ const iconos: Record<string, Icon> = {
   '/admin/turnos': Ticket,
   '/admin/citas': CalendarPlus,
   '/admin/enlaces': Key,
+  '/admin/reportes': FileText,
 
   '/admin/servicios': Stack,
   '/admin/modulos': Gear,

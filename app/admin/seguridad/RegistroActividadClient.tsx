@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Broom, CalendarBlank, ShieldCheck } from '@phosphor-icons/react/dist/ssr'
 import PurgaDatosModal from '@/components/seguridad/PurgaDatosModal'
+import { Paginacion, usePaginacion } from '@/components/ui/Paginacion'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -48,6 +49,7 @@ const ETIQUETAS: Record<string, string> = {
   TURNO_REPETIDO: 'Llamado repetido',
   TURNO_ATENDIDO: 'Turno cerrado como atendido',
   TURNO_AUSENTE: 'Paciente dado por ausente',
+  TURNO_RETROCEDIDO: 'Retroceso al turno anterior',
   CONFIGURACION_ACTUALIZADA: 'Configuracion del sistema',
   SIMULACION_REINICIO_DEL_DIA: 'Reinicio del dia (simulacion)',
   // Estos tres se guardan en minusculas porque nacieron despues. El nombre
@@ -126,6 +128,8 @@ export default function RegistroActividadClient({ esAdministrador }: { esAdminis
   }, [cargar])
 
   const visibles = eventos
+  // Hasta 500 eventos por consulta: de a una pagina, no una tabla sin fin.
+  const pagina = usePaginacion(visibles, [fecha, tipo, soloFallidos])
 
   return (
     <>
@@ -203,7 +207,7 @@ export default function RegistroActividadClient({ esAdministrador }: { esAdminis
               llamo, a que hora, cuantas veces y quien lo cerro.
             </p>
             <Tabla columnas={COLUMNAS}>
-              {visibles.map((evento, i) => (
+              {pagina.visibles.map((evento, i) => (
                 <tr key={`${evento.fecha}-${i}`} className="border-b border-slate-100 last:border-0">
                   <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-slate-600">
                     {cuando(evento.fecha)}
@@ -234,6 +238,7 @@ export default function RegistroActividadClient({ esAdministrador }: { esAdminis
                 </tr>
               ))}
             </Tabla>
+            <Paginacion {...pagina} />
           </>
         )}
       </CardContent>

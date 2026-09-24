@@ -18,7 +18,11 @@ type Temporizadores = Map<string, ReturnType<typeof setTimeout>>
  * Son temporizadores por fila y no un reloj que late cada segundo: la tabla
  * solo se vuelve a pintar cuando un resalte empieza o se apaga.
  */
-export function useResaltes(): { resaltes: Resaltes; resaltar: (clave: string) => void } {
+export function useResaltes(): {
+  resaltes: Resaltes
+  resaltar: (clave: string) => void
+  apagar: (clave: string) => void
+} {
   const [resaltes, setResaltes] = useState<Resaltes>(SIN_RESALTES)
   const deResalte = useRef<Temporizadores>(new Map())
   const deNuevo = useRef<Temporizadores>(new Map())
@@ -60,6 +64,24 @@ export function useResaltes(): { resaltes: Resaltes; resaltar: (clave: string) =
     [programar],
   )
 
+  /**
+   * Apaga ya el resalte y el "NUEVO" de una fila. Es para el llamado que el
+   * doctor deshizo: la fila vuelve a mostrar al paciente anterior, y dejarla
+   * marcada como recien llamada seria anunciar un llamado que no existe.
+   */
+  const apagar = useCallback(
+    (clave: string) => {
+      for (const temporizadores of [deResalte.current, deNuevo.current]) {
+        const previo = temporizadores.get(clave)
+        if (previo) clearTimeout(previo)
+        temporizadores.delete(clave)
+      }
+      quitar('resaltados', clave)
+      quitar('nuevos', clave)
+    },
+    [quitar],
+  )
+
   useEffect(() => {
     const resalte = deResalte.current
     const nuevo = deNuevo.current
@@ -70,5 +92,5 @@ export function useResaltes(): { resaltes: Resaltes; resaltar: (clave: string) =
     }
   }, [])
 
-  return { resaltes, resaltar }
+  return { resaltes, resaltar, apagar }
 }

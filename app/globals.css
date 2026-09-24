@@ -117,10 +117,10 @@
   }
 
   /*
-   * Table cells never wrap. Wrapped values (periods, amounts, attendance counts) made
-   * rows ragged and hard to scan; every table already lives inside a horizontally
-   * scrollable container, so overflow is handled by scrolling instead of by breaking
-   * lines. Stacked content still stacks: nowrap only prevents breaks inside a text run.
+   * Table cells don't wrap by default: short values (hours, codes, counts) read
+   * worse broken in two. The admin tables (`.tabla-adaptable`, see below) DO let
+   * names and long text wrap, because they must fit the screen without any
+   * sideways scrolling.
    */
   th,
   td {
@@ -401,4 +401,111 @@
   height: 14px;
   pointer-events: none;
   background: linear-gradient(to bottom, rgba(10, 38, 52, 0.05), transparent);
+}
+
+/*
+ * Tablas de administracion que caben siempre (ver `Tabla` en
+ * components/admin/Campos.tsx). Se mide el ancho de la TABLA, no el de la
+ * ventana: con el menu abierto o cerrado cabe distinto.
+ */
+.tabla-adaptable {
+  container-type: inline-size;
+}
+.tabla-adaptable td:not(.whitespace-nowrap) {
+  /* Nombres y textos largos parten en los espacios; horas y pastillas no
+     (con `whitespace-nowrap` en la celda o en su propio elemento). */
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.tabla-adaptable td::before {
+  display: none;
+}
+.tabla-adaptable td:nth-child(1)::before { content: var(--etiqueta-1, ''); }
+.tabla-adaptable td:nth-child(2)::before { content: var(--etiqueta-2, ''); }
+.tabla-adaptable td:nth-child(3)::before { content: var(--etiqueta-3, ''); }
+.tabla-adaptable td:nth-child(4)::before { content: var(--etiqueta-4, ''); }
+.tabla-adaptable td:nth-child(5)::before { content: var(--etiqueta-5, ''); }
+.tabla-adaptable td:nth-child(6)::before { content: var(--etiqueta-6, ''); }
+.tabla-adaptable td:nth-child(7)::before { content: var(--etiqueta-7, ''); }
+.tabla-adaptable td:nth-child(8)::before { content: var(--etiqueta-8, ''); }
+.tabla-adaptable td:nth-child(9)::before { content: var(--etiqueta-9, ''); }
+.tabla-adaptable td:nth-child(10)::before { content: var(--etiqueta-10, ''); }
+
+/* Antes de apilar, menos relleno: le gana espacio al texto. */
+@container (max-width: 1100px) {
+  .tabla-adaptable th,
+  .tabla-adaptable td {
+    padding-left: 0.625rem;
+    padding-right: 0.625rem;
+  }
+}
+
+/*
+ * Cada fila como tarjeta: la cabecera se oculta (cada celda ya dice que es)
+ * y cada celda lleva su etiqueta a la izquierda. El umbral depende
+ * de cuantas columnas tiene la tabla (`data-apilar`).
+ */
+@container (max-width: 520px) {
+  .tabla-adaptable[data-apilar='angosta'] thead { display: none; }
+  .tabla-adaptable[data-apilar='angosta'] :is(table, tbody, tr, td) { display: block; width: 100%; }
+  .tabla-adaptable[data-apilar='angosta'] tr { padding: 0.625rem 0; }
+  .tabla-adaptable[data-apilar='angosta'] td { position: relative; min-height: 1.75rem; padding: 0.3rem 1rem 0.3rem 8.5rem; }
+  .tabla-adaptable[data-apilar='angosta'] td::before { display: block; }
+}
+@container (max-width: 760px) {
+  .tabla-adaptable[data-apilar='media'] thead { display: none; }
+  .tabla-adaptable[data-apilar='media'] :is(table, tbody, tr, td) { display: block; width: 100%; }
+  .tabla-adaptable[data-apilar='media'] tr { padding: 0.625rem 0; }
+  .tabla-adaptable[data-apilar='media'] td { position: relative; min-height: 1.75rem; padding: 0.3rem 1rem 0.3rem 8.5rem; }
+  .tabla-adaptable[data-apilar='media'] td::before { display: block; }
+}
+@container (max-width: 940px) {
+  .tabla-adaptable[data-apilar='ancha'] thead { display: none; }
+  .tabla-adaptable[data-apilar='ancha'] :is(table, tbody, tr, td) { display: block; width: 100%; }
+  .tabla-adaptable[data-apilar='ancha'] tr { padding: 0.625rem 0; }
+  .tabla-adaptable[data-apilar='ancha'] td { position: relative; min-height: 1.75rem; padding: 0.3rem 1rem 0.3rem 8.5rem; }
+  .tabla-adaptable[data-apilar='ancha'] td::before { display: block; }
+}
+.tabla-adaptable td::before {
+  position: absolute;
+  left: 1rem;
+  top: 0.45rem;
+  width: 7rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgb(100 116 139);
+}
+
+/* En un telefono, la etiqueta va ENCIMA del dato: al lado le robaba la mitad del ancho. */
+@container (max-width: 480px) {
+  .tabla-adaptable td {
+    padding-left: 1rem !important;
+  }
+  .tabla-adaptable td::before {
+    position: static;
+    width: auto;
+    margin-bottom: 0.15rem;
+  }
+}
+
+/*
+ * La tarjeta del paciente en la pantalla del doctor entra al cambiar de
+ * paciente: un leve deslizamiento que dice "esto cambio" sin distraer. Con
+ * movimiento reducido queda en el fundido (ver la regla general de arriba).
+ */
+@keyframes consultorio-aparece {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.consultorio-aparece {
+  animation: consultorio-aparece 280ms var(--curva) both;
 }
