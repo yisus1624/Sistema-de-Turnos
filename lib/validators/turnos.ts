@@ -8,6 +8,10 @@
  * repetir sin el solo suena una vez de mas, no cierra a nadie.
  */
 import { z } from 'zod'
+import { instalarMensajesEnEspanol } from '@/lib/validacion/mensajes-zod'
+
+// Toda ruta de la API pasa por aqui: los mensajes de Zod sin texto propio salen en español.
+instalarMensajesEnEspanol()
 
 /** Largo maximo de un id (los de la base son cuid, de 25 caracteres). */
 const LARGO_MAXIMO_ID = 64

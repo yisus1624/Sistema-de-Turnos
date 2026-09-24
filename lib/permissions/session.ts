@@ -1,6 +1,10 @@
 import { auth } from '@/lib/auth'
 import { puedeVerSeccion } from '@/lib/permissions/rutas'
 import type { RolUsuario } from '@/lib/usuarios/types'
+import { instalarMensajesEnEspanol } from '@/lib/validacion/mensajes-zod'
+
+// Toda ruta de la API pasa por aqui: los mensajes de Zod sin texto propio salen en español.
+instalarMensajesEnEspanol()
 
 export async function requireSession() {
   const session = await auth()
