@@ -128,6 +128,8 @@ export type ManejoDeCanal = {
   alConectar: () => void
   alPerderse: () => void
   alCambiarLosDatos: (evento: EventoTurno) => void
+  /** Volvio la red o el primer plano: recargar ya, sin esperar a que el canal reabra. */
+  alVolver?: () => void
 }
 
 /**
@@ -222,6 +224,7 @@ export function crearCanalEnVivo(manejo: ManejoDeCanal) {
    */
   const alVolverLaRed = () => {
     intentosFallidos = 0
+    manejo.alVolver?.()
     reconectar()
   }
   const alVolverAPrimerPlano = () => {
@@ -262,6 +265,7 @@ function engancharRecargaEnVivo(
       ultimo.current.alConectar?.()
     },
     alPerderse: () => avisarConexion('reconectando'),
+    alVolver: resincronizar,
     alCambiarLosDatos: (evento) => {
       ultimo.current.alEvento?.(evento)
       if (leInteresa(evento)) agrupador.rearmar()
