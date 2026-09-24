@@ -6,6 +6,24 @@ import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { camposCambiados } from '@/lib/seguridad/cambios'
 import { fichaLegible, fichaLegiblePorId } from '@/lib/turnos/rastro-profesional'
+import { revocarAccesosVigentesDe } from '@/lib/turnos/revocacion-accesos'
+import type { Profesional } from '@/lib/turnos/types'
+
+type Firma = { usuarioId: string; usuarioNombre: string | null; ip: string | null }
+
+/** Igual que el boton de revocar: cada enlace cortado queda con su evento. */
+async function revocarEnlacesDelDadoDeBaja(profesional: Profesional, firma: Firma) {
+  const revocados = await revocarAccesosVigentesDe(turnoRepository, profesional.id, new Date())
+  for (const acceso of revocados) {
+    await registrarEvento({
+      tipo: EVENTOS.ACCESO_PROFESIONAL_REVOCADO,
+      exito: true,
+      ...firma,
+      identificador: profesional.nombre,
+      detalle: { profesional: profesional.nombre, accesoId: acceso.id, expiraEn: acceso.expiraEn, motivo: 'profesional_desactivado' },
+    })
+  }
+}
 
 const cambioSchema = z.object({
   nombre: z.string().trim().min(3, 'Ingresa el nombre del profesional.').max(80).optional(),
@@ -50,6 +68,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       ip,
       detalle: { cambios: camposCambiados(antes, despues) },
     })
+
+    if (parsed.data.activo === false) {
+      await revocarEnlacesDelDadoDeBaja(profesional, {
+        usuarioId: session.user.id,
+        usuarioNombre: session.user.name ?? null,
+        ip,
+      })
+    }
 
     return NextResponse.json({ profesional })
   } catch (error) {
