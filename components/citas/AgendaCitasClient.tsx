@@ -59,6 +59,8 @@ import CargarReporteCitas from './CargarReporteCitas'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import { celdaDeAgenda, instanteDeFranja, solicitudDeCita, type CeldaDeAgenda } from '@/lib/citas/cita-a-mano'
 import { useFechaQueSigueAHoy, useValorConRetraso } from '@/lib/hooks'
+import { diaVecino, fechaLarga } from '@/lib/api/dia-elegido'
+import { esFechaValida } from '@/lib/turnos/tiempo'
 import type {
   BloqueHorario,
   CitaEnHorario,
@@ -77,17 +79,6 @@ function fechaYHora(iso: string) {
     minute: '2-digit',
     timeZone: 'America/Bogota',
   }).format(new Date(iso))
-}
-
-/** "14 de abril de 2025" — el dia escrito, que es como se dice en voz alta. */
-function fechaLarga(fecha: string) {
-  return new Intl.DateTimeFormat('es-CO', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'America/Bogota',
-  }).format(new Date(`${fecha}T12:00:00-05:00`))
 }
 
 /** Como se ve cada estado dentro de la agenda. */
@@ -410,19 +401,9 @@ export default function AgendaCitasClient() {
   // cada render la haria repintarse entera sin que nada haya cambiado.
   const mostrarSinCitas = useCallback(() => setVerSinCitas(true), [])
 
-  /**
-   * Un dia adelante o atras.
-   *
-   * Se calcula sobre la fecha en texto y a mediodia UTC, no con `new Date()`
-   * del navegador: partiendo de medianoche, un equipo configurado en otra zona
-   * saltaria dos dias o ninguno al sumar uno.
-   */
+  /** Un dia adelante o atras (ver `diaVecino`: nunca lanza con una fecha invalida). */
   const moverDia = useCallback((dias: number) => {
-    setFecha((actual) => {
-      const dia = new Date(`${actual}T12:00:00Z`)
-      dia.setUTCDate(dia.getUTCDate() + dias)
-      return dia.toISOString().slice(0, 10)
-    })
+    setFecha((actual) => diaVecino(actual, dias))
   }, [])
 
   async function agendar(evento: React.FormEvent) {
@@ -599,7 +580,11 @@ export default function AgendaCitasClient() {
             <input
               type="date"
               value={fecha}
-              onChange={(e) => setFecha(e.target.value)}
+              // Vacio mientras se corrige con Retroceso, o con año de cinco
+              // cifras: se ignora y queda la ultima fecha buena.
+              onChange={(e) => {
+                if (esFechaValida(e.target.value)) setFecha(e.target.value)
+              }}
               aria-label="Dia de la agenda"
               className="w-[8.5rem] border-0 bg-transparent p-0 text-sm font-semibold tabular-nums text-brand-950 outline-none"
             />

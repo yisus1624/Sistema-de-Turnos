@@ -3,6 +3,7 @@
  * periodos rapidos del filtro. Puro, para poder probarlo.
  */
 import type { EstadoTurno, Turno } from '@/lib/turnos/types'
+import { esFechaValida } from '@/lib/turnos/tiempo'
 
 export interface ResumenDeTurnos {
   total: number
@@ -66,8 +67,13 @@ export function rangoDePeriodo(periodo: Exclude<Periodo, 'personalizado'>, hoy: 
   return { desde: `${hoy.slice(0, 8)}01`, hasta: hoy }
 }
 
-/** "22 sep 2026" o "1 – 22 sep 2026": el periodo en palabras, para el titulo de los resultados. */
+/**
+ * "22 sep 2026" o "1 – 22 sep 2026": el periodo en palabras, para el titulo de
+ * los resultados. '' si alguna fecha no es valida: con el selector a medio
+ * corregir, formatearla lanzaba en pleno render y tumbaba Reportes.
+ */
 export function periodoEnPalabras(desde: string, hasta: string): string {
+  if (!esFechaValida(desde) || !esFechaValida(hasta)) return ''
   const formato = (fecha: string, opciones: Intl.DateTimeFormatOptions) =>
     new Intl.DateTimeFormat('es-CO', { ...opciones, timeZone: 'UTC' }).format(new Date(`${fecha}T12:00:00Z`))
   if (desde === hasta) return formato(desde, { day: 'numeric', month: 'short', year: 'numeric' })

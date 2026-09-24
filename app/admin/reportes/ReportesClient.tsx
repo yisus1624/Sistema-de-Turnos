@@ -39,6 +39,7 @@ import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import { useCatalogosDeTurnos, useUltimaPeticion, useValorConRetraso } from '@/lib/hooks'
 import { generarReportePdf } from '@/lib/reportes/pdf'
 import { periodoEnPalabras, rangoDePeriodo, resumirTurnos, type Periodo } from '@/lib/reportes/resumen'
+import { esFechaValida } from '@/lib/turnos/tiempo'
 import type { EstadoTurno, Turno } from '@/lib/turnos/types'
 import { cn } from '@/lib/ui'
 
@@ -148,6 +149,16 @@ export default function ReportesClient() {
     setFiltros((f) => ({ ...f, fechaDesde: desde, fechaHasta: hasta }))
   }
 
+  /**
+   * Solo entra al estado una fecha que existe. Mientras se corrige con
+   * Retroceso el selector queda vacio (o con un año de cinco cifras): se
+   * ignora y el campo conserva la ultima fecha buena, en vez de tumbar la
+   * pantalla al escribir el periodo.
+   */
+  function cambiarFecha(campo: 'fechaDesde' | 'fechaHasta', valor: string) {
+    if (esFechaValida(valor)) setFiltros((f) => ({ ...f, [campo]: valor }))
+  }
+
   async function descargar() {
     if (turnos.length === 0 || !filtrosDeLaTabla) {
       toast.error('Nada para descargar', 'No hay turnos en el periodo seleccionado.')
@@ -193,7 +204,7 @@ export default function ReportesClient() {
                     type="date"
                     value={filtros.fechaDesde}
                     max={filtros.fechaHasta}
-                    onChange={(e) => setFiltros((f) => ({ ...f, fechaDesde: e.target.value }))}
+                    onChange={(e) => cambiarFecha('fechaDesde', e.target.value)}
                   />
                 </Campo>
                 <Campo etiqueta="Hasta">
@@ -201,7 +212,7 @@ export default function ReportesClient() {
                     type="date"
                     value={filtros.fechaHasta}
                     min={filtros.fechaDesde}
-                    onChange={(e) => setFiltros((f) => ({ ...f, fechaHasta: e.target.value }))}
+                    onChange={(e) => cambiarFecha('fechaHasta', e.target.value)}
                   />
                 </Campo>
               </div>
