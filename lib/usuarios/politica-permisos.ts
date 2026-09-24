@@ -112,6 +112,12 @@ export function revisarCambio(actor: Actor, objetivo: Usuario, cambio: CambioPed
     return { motivo: 'No puedes quitarte a ti mismo el acceso de administrador.', estado: 400 }
   }
 
+  // Cambiar la clave propia exige la actual: sin eso, una sesion olvidada
+  // abierta basta para apropiarse de la cuenta.
+  if (esYo && cambio.password !== undefined) {
+    return { motivo: 'Tu propia contrasena se cambia desde Mi cuenta, con la contrasena actual.', estado: 403 }
+  }
+
   const rolResultante = cambio.rol ?? objetivo.rol
   const seccionesResultantes = cambio.secciones !== undefined ? cambio.secciones : objetivo.secciones
 

@@ -198,3 +198,13 @@ test('una lista vacia se trata igual que no tener lista, no como no tener acceso
   // que normalizan la lista vacia a null.
   assert.deepEqual([...alcanceDe('OPERADOR', [])], [...alcanceDe('OPERADOR', null)])
 })
+
+test('la contrasena propia no se cambia desde la administracion de usuarios: exige la actual en Mi cuenta', () => {
+  const yo = { ...ADMIN, id: 'u-admin' }
+  const rechazo = revisarCambio(ADMIN, cuenta({ id: yo.id, rol: 'ADMINISTRADOR', secciones: null }), {
+    password: 'nuevaclave123',
+  })
+
+  assert.equal(rechazo?.estado, 403)
+  assert.match(rechazo.motivo, /Mi cuenta/)
+})
