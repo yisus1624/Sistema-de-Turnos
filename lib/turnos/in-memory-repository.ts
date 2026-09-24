@@ -47,6 +47,7 @@ import type {
   Turno,
 } from './types'
 import { errorDeNegocio } from './errores'
+import { mismoDocumento, normalizarDocumento } from './documento'
 import { DEVUELTO_A_LA_FILA, exigirPlanVisto, planDeRetroceso, REABIERTO, type PlanDeRetroceso } from './reglas-retroceso'
 import { decidirCierre, decidirRepeticion, estaAbierto, type EstadoDeCierre } from './reglas-cierre'
 import {
@@ -813,7 +814,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     if (!profesional) errorDeNegocio('El profesional indicado no existe.')
     if (!profesional.activo) errorDeNegocio('El profesional esta inactivo.')
 
-    const documento = datos.documentoPaciente.trim()
+    const documento = normalizarDocumento(datos.documentoPaciente)
     const nombre = datos.nombrePaciente.trim()
     if (!documento) errorDeNegocio('Ingresa el documento del paciente.')
     if (!nombre) errorDeNegocio('Ingresa el nombre del paciente.')
@@ -1163,14 +1164,14 @@ export class InMemoryTurnoRepository implements TurnoRepository {
    * sea lo que de verdad se puede atender.
    */
   async buscarCitasPorDocumento(documento: string, fecha?: string): Promise<Cita[]> {
-    const buscado = documento.trim()
+    const buscado = normalizarDocumento(documento)
     if (!buscado) return []
 
     const dia = fecha ?? diaColombia(ahoraISO())
     return estado.citas
       .filter(
         (c) =>
-          c.documentoPaciente === buscado &&
+          mismoDocumento(c.documentoPaciente, buscado) &&
           c.estado !== 'CANCELADA' &&
           diaColombia(c.horaCita) === dia,
       )
@@ -1187,14 +1188,14 @@ export class InMemoryTurnoRepository implements TurnoRepository {
    * "su cita es el jueves a las 9"; no traen boton, porque no son de hoy.
    */
   async otrasCitasDelPaciente(documento: string, fecha?: string): Promise<Cita[]> {
-    const buscado = documento.trim()
+    const buscado = normalizarDocumento(documento)
     if (!buscado) return []
 
     const dia = fecha ?? diaColombia(ahoraISO())
     return estado.citas
       .filter(
         (c) =>
-          c.documentoPaciente === buscado &&
+          mismoDocumento(c.documentoPaciente, buscado) &&
           c.estado === 'PROGRAMADA' &&
           // Solo las que ESTAN POR VENIR. Una cita pasada que se quedo en
           // PROGRAMADA es una inasistencia vieja: decirle al paciente "su cita

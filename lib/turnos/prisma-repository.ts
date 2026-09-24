@@ -47,6 +47,7 @@ import { reunirActividad } from './actividad'
 import { modulosVisiblesEnPantalla, puestoDe } from './casillas'
 import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
 import { esConflictoPasajero, mensajeDeChoque } from './choques-unicos'
+import { mismoDocumento, normalizarDocumento } from './documento'
 import { CONFIGURACION_INICIAL } from './configuracion-inicial'
 import { esDisenoPantalla } from './types'
 import { CONFIGURACION_YA_CAMBIADA, exigirConfiguracionAlDia } from './configuracion-version'
@@ -992,6 +993,19 @@ function hashToken(token: string) {
 // ---------------------------------------------------------------------------
 
 /** Dias enteros de `desde` a `hasta`, los dos AAAA-MM-DD. */
+/**
+ * Ids de las citas de ese documento, comparando los DOS lados normalizados.
+ *
+ * Las citas hechas a mano antes de normalizar se guardaron tal cual se
+ * tecleo ("1.067.890.123") y no se reescriben: se encuentran igual porque la
+ * comparacion normaliza tambien lo guardado. Solo viajan id y documento de las
+ * citas que ya pasan los demas filtros (las de un dia, o las por venir).
+ */
+async function idsDelDocumento(documento: string, where: Prisma.CitaWhereInput): Promise<string[]> {
+  const candidatas = await prisma.cita.findMany({ where, select: { id: true, documentoPaciente: true } })
+  return candidatas.filter((cita) => mismoDocumento(cita.documentoPaciente, documento)).map((cita) => cita.id)
+}
+
 function diasEntre(desde: string, hasta: string): number {
   return Math.round((Date.parse(`${hasta}T00:00:00Z`) - Date.parse(`${desde}T00:00:00Z`)) / 86_400_000)
 }
@@ -1060,7 +1074,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
     const profesional = await exigirProfesional(datos.profesionalId)
     if (!profesional.activo) errorDeNegocio('El profesional esta inactivo.')
 
-    const documento = datos.documentoPaciente.trim()
+    const documento = normalizarDocumento(datos.documentoPaciente)
     const nombre = datos.nombrePaciente.trim()
     if (!documento) errorDeNegocio('Ingresa el documento del paciente.')
     if (!nombre) errorDeNegocio('Ingresa el nombre del paciente.')
@@ -1426,15 +1440,14 @@ export class PrismaTurnoRepository implements TurnoRepository {
    * de un dia que no es el suyo y le quemaria la cita.
    */
   async buscarCitasPorDocumento(documento: string, fecha?: string): Promise<Cita[]> {
-    const buscado = documento.trim()
+    const buscado = normalizarDocumento(documento)
     if (!buscado) return []
 
+    const ids = await idsDelDocumento(buscado, { estado: { not: 'CANCELADA' }, fecha: fecha ?? diaColombia(ahoraISO()) })
+    if (ids.length === 0) return []
+
     const filas = await prisma.cita.findMany({
-      where: {
-        documentoPaciente: buscado,
-        estado: { not: 'CANCELADA' },
-        fecha: fecha ?? diaColombia(ahoraISO()),
-      },
+      where: { id: { in: ids } },
       orderBy: { horaCita: 'asc' },
       include: { turnos: { select: { codigo: true }, orderBy: { fechaGeneracion: 'desc' }, take: 1 } },
     })
@@ -1452,15 +1465,14 @@ export class PrismaTurnoRepository implements TurnoRepository {
    * existe.
    */
   async otrasCitasDelPaciente(documento: string, fecha?: string): Promise<Cita[]> {
-    const buscado = documento.trim()
+    const buscado = normalizarDocumento(documento)
     if (!buscado) return []
 
+    const ids = await idsDelDocumento(buscado, { estado: 'PROGRAMADA', fecha: { gt: fecha ?? diaColombia(ahoraISO()) } })
+    if (ids.length === 0) return []
+
     const filas = await prisma.cita.findMany({
-      where: {
-        documentoPaciente: buscado,
-        estado: 'PROGRAMADA',
-        fecha: { gt: fecha ?? diaColombia(ahoraISO()) },
-      },
+      where: { id: { in: ids } },
       orderBy: { horaCita: 'asc' },
     })
     return filas.map(aCita)

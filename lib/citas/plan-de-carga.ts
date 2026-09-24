@@ -15,15 +15,22 @@
  * siendo trabajo de `importar-reporte.ts`, que es el unico que habla con la
  * base.
  */
+import { normalizarDocumento } from '@/lib/turnos/documento'
 
-/** Como se identifica una cita entre la agenda del hospital y la nuestra. */
+/**
+ * Como se identifica una cita entre la agenda del hospital y la nuestra.
+ *
+ * El documento va normalizado: las citas guardadas antes con otro formato
+ * ("1.067.890.123") no se reescriben, y sin esto la carga no las reconoceria y
+ * duplicaria al paciente.
+ */
 export function claveDeCita(
   fecha: string,
   documento: string,
   profesionalId: string,
   horaCitaIso: string,
 ) {
-  return `${fecha}|${documento}|${profesionalId}|${horaCitaIso}`
+  return `${fecha}|${normalizarDocumento(documento)}|${profesionalId}|${horaCitaIso}`
 }
 
 /** Los campos de una cita que la carga puede corregir. */

@@ -26,6 +26,7 @@
  * nombre, hora, profesional, consultorio y procedimiento.
  */
 import { esFechaValida, instanteDeFranja } from '@/lib/turnos/tiempo'
+import { normalizarDocumento } from '@/lib/turnos/documento'
 
 /** Una cita del reporte, ya interpretada. */
 export interface FilaReporte {
@@ -241,10 +242,10 @@ export function interpretarFila(fila: number, crudo: CamposCrudos): FilaReporte 
   const hora = normalizarHora(crudo.hora)
   if (!hora) return { fila, motivo: `Hora no reconocida: "${texto(crudo.hora)}".` }
 
-  // Solo digitos: el reporte a veces trae el documento con puntos o espacios, y
-  // admisiones busca escribiendo el numero pelado. Si no coinciden caracter a
-  // caracter, el paciente esta en el sistema y aun asi "no aparece".
-  const documento = texto(crudo.documento).replace(/[^0-9A-Za-z]/g, '')
+  // Normalizado igual que al buscar: el reporte a veces trae el documento con
+  // puntos o espacios, y si no coinciden, el paciente esta en el sistema y aun
+  // asi "no aparece".
+  const documento = normalizarDocumento(texto(crudo.documento))
   if (!documento) return { fila, motivo: 'La fila no trae documento del paciente.' }
 
   const nombrePaciente = texto(crudo.nombrePaciente)
