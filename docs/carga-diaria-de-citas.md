@@ -56,7 +56,9 @@ resumen.
 
 Los nombres se pueden cambiar despues sin romper nada. El sistema empareja por
 una clave interna, no por el nombre que se ve, asi que renombrar
-`CONS 01- CONSULTA EXTERNA` a `Consultorio 1` es seguro.
+`CONS 01- CONSULTA EXTERNA` a `Consultorio 1` es seguro. Lo mismo vale para los
+dos servicios, *Consulta externa* y *Odontologia*: cambiarles mayusculas,
+tildes o el nombre entero no hace que la carga siguiente falle ni los duplique.
 
 **Le pone a cada doctor la jornada que dicen sus horas.** El reporte no trae una
 columna de jornada, asi que la carga la deduce de las citas del dia: quien solo

@@ -39,7 +39,8 @@ import { claveDelChoque } from '@/lib/turnos/choques-unicos'
 import { claveDeCita, decidirFila } from './plan-de-carga'
 import { recalcularJornadas } from './jornadas'
 import type { AjusteDeJornada } from '@/lib/turnos/types'
-import { leerReporteDelHospital, type ErrorFila, type FilaReporte } from './reporte-hospital'
+import { leerReporteDelHospital, type ErrorFila, type FilaReporte, type ServicioDerivado } from './reporte-hospital'
+import { decidirServicio } from './servicio-del-reporte'
 
 export interface ResumenCarga {
   cargaId: string
@@ -173,7 +174,7 @@ export async function importarReporteDeCitas(params: {
 // ---------------------------------------------------------------------------
 
 interface Catalogo {
-  /** clave del servicio (su nombre) -> id */
+  /** clave del servicio del reporte -> id */
   servicios: Map<string, string>
   /** claveExterna del consultorio -> id */
   consultorios: Map<string, string>
@@ -211,21 +212,7 @@ async function asegurarCatalogo(filas: FilaReporte[]): Promise<Catalogo> {
   }
 
   // --- Servicios ---
-  const serviciosDelArchivo = new Map(filas.map((f) => [f.servicio.nombre, f.servicio]))
-  for (const [nombre, servicio] of serviciosDelArchivo) {
-    const existente = await prisma.servicio.findUnique({ where: { nombre } })
-    if (existente) {
-      catalogo.servicios.set(nombre, existente.id)
-      continue
-    }
-
-    // Si el prefijo ya lo usa otro servicio se busca el siguiente libre: el
-    // codigo del turno tiene que ser unico en la sala de espera, y fallar la
-    // carga entera por una letra ocupada seria desproporcionado.
-    const creado = await crearServicioConPrefijoLibre(nombre, servicio.prefijo)
-    catalogo.servicios.set(nombre, creado.id)
-    catalogo.serviciosNuevos.push(nombre)
-  }
+  await asegurarServicios(filas, catalogo)
 
   // --- Consultorios ---
   //
@@ -237,7 +224,7 @@ async function asegurarCatalogo(filas: FilaReporte[]): Promise<Catalogo> {
     if (!fila.consultorio || consultoriosDelArchivo.has(fila.consultorio.clave)) continue
     consultoriosDelArchivo.set(fila.consultorio.clave, {
       nombre: fila.consultorio.nombre,
-      servicioId: catalogo.servicios.get(fila.servicio.nombre)!,
+      servicioId: catalogo.servicios.get(fila.servicio.clave)!,
     })
   }
 
@@ -272,7 +259,7 @@ async function asegurarCatalogo(filas: FilaReporte[]): Promise<Catalogo> {
     if (profesionalesDelArchivo.has(fila.profesional.clave)) continue
     profesionalesDelArchivo.set(fila.profesional.clave, {
       nombre: fila.profesional.nombre,
-      servicioId: catalogo.servicios.get(fila.servicio.nombre)!,
+      servicioId: catalogo.servicios.get(fila.servicio.clave)!,
       moduloId: fila.consultorio ? (catalogo.consultorios.get(fila.consultorio.clave) ?? null) : null,
     })
   }
@@ -321,6 +308,68 @@ async function asegurarCatalogo(filas: FilaReporte[]): Promise<Catalogo> {
   return catalogo
 }
 
+/** Cada servicio del archivo, con el suyo del catalogo. */
+async function asegurarServicios(filas: FilaReporte[], catalogo: Catalogo) {
+  const serviciosDelArchivo = new Map(filas.map((f) => [f.servicio.clave, f.servicio]))
+  for (const [clave, servicio] of serviciosDelArchivo) {
+    const resuelto = await servicioDelReporte(servicio)
+    catalogo.servicios.set(clave, resuelto.id)
+    if (resuelto.creadoComo) catalogo.serviciosNuevos.push(resuelto.creadoComo)
+  }
+}
+
+interface ServicioResuelto {
+  id: string
+  /** Con que nombre se creo, si hubo que crearlo. */
+  creadoComo: string | null
+}
+
+/**
+ * El servicio del catalogo que le toca a uno del reporte (la regla esta en
+ * `servicio-del-reporte.ts`): se empareja por `claveExterna`, se le pone la
+ * clave al de antes que se llame igual, y solo se crea si de verdad no existe.
+ *
+ * Si otra carga simultanea se adelanta —crea el mismo servicio o le pone la
+ * clave a otro—, el indice unico rechaza la segunda escritura y se mira una
+ * vez mas: esa segunda vuelta encuentra lo que la otra dejo hecho.
+ */
+async function servicioDelReporte(servicio: ServicioDerivado): Promise<ServicioResuelto> {
+  try {
+    return await resolverServicio(servicio)
+  } catch (error) {
+    if (claveDelChoque(error) === null) throw error
+    return resolverServicio(servicio)
+  }
+}
+
+async function resolverServicio(servicio: ServicioDerivado): Promise<ServicioResuelto> {
+  const existentes = await prisma.servicio.findMany({
+    select: { id: true, nombre: true, prefijo: true, activo: true, claveExterna: true },
+    orderBy: { id: 'asc' },
+  })
+  const decision = decidirServicio(servicio, existentes)
+  if (decision.accion === 'crear') return crearServicioDelReporte(servicio)
+
+  if (decision.accion === 'adoptar') {
+    // Condicionado a que siga sin clave. Si otra carga se la puso a la vez es
+    // la misma: un servicio solo puede quedarse con la clave de su nombre.
+    await prisma.servicio.updateMany({
+      where: { id: decision.id, claveExterna: null },
+      data: { claveExterna: servicio.clave },
+    })
+  }
+  return { id: decision.id, creadoComo: null }
+}
+
+async function crearServicioDelReporte(servicio: ServicioDerivado): Promise<ServicioResuelto> {
+  // El nombre puede tenerlo un servicio que ya es de la OTRA clave (el
+  // administrador se lo puso). Como con consultorios y doctores, se crea con un
+  // sufijo y el administrador lo renombra despues, en vez de tumbar la carga.
+  const nombre = await nombreDeServicioLibre(servicio.nombre)
+  const creado = await crearServicioConPrefijoLibre({ ...servicio, nombre })
+  return { id: creado.id, creadoComo: nombre }
+}
+
 /**
  * Crea el servicio de la carga con la primera letra que quede libre.
  *
@@ -329,13 +378,20 @@ async function asegurarCatalogo(filas: FilaReporte[]): Promise<Catalogo> {
  * dando de alta un servicio a mano, y los dos servicios acababan con la misma
  * letra compartiendo la numeracion del dia (Odontologia sacando O-001 y luego
  * O-003 porque el otro se llevo el O-002). Ahora la letra la adjudica el indice
- * unico de la base: si la rechaza, se prueba la siguiente.
+ * unico de la base: si la rechaza, se prueba la siguiente. Fallar la carga
+ * entera por una letra ocupada seria desproporcionado.
  */
-async function crearServicioConPrefijoLibre(nombre: string, deseado: string) {
-  for (const prefijo of await prefijosLibres(deseado)) {
+async function crearServicioConPrefijoLibre(servicio: ServicioDerivado) {
+  for (const prefijo of await prefijosLibres(servicio.prefijo)) {
     try {
       return await prisma.servicio.create({
-        data: { nombre, prefijo, modoFila: 'POR_PROFESIONAL', activo: true },
+        data: {
+          nombre: servicio.nombre,
+          prefijo,
+          claveExterna: servicio.clave,
+          modoFila: 'POR_PROFESIONAL',
+          activo: true,
+        },
       })
     } catch (error) {
       // Solo el choque de prefijo se reintenta con otra letra. Cualquier otro
@@ -382,6 +438,15 @@ async function nombreLibre(
   // Cincuenta variantes ocupadas no es un caso real; si pasara, es preferible
   // un nombre feo pero unico a tumbar la carga del dia entera.
   return `${deseado} (importado ${Date.now()})`
+}
+
+function nombreDeServicioLibre(deseado: string) {
+  return nombreLibre(deseado, (nombre) =>
+    prisma.servicio.findFirst({
+      where: { nombre: { equals: nombre, mode: 'insensitive' } },
+      select: { id: true },
+    }),
+  )
 }
 
 function nombreDeModuloLibre(deseado: string) {
@@ -465,7 +530,7 @@ async function aplicarCitas(filas: FilaReporte[], catalogo: Catalogo, cargaId: s
 
   for (const fila of filas) {
     const profesionalId = catalogo.profesionales.get(fila.profesional.clave)
-    const servicioId = catalogo.servicios.get(fila.servicio.nombre)
+    const servicioId = catalogo.servicios.get(fila.servicio.clave)
     if (!profesionalId || !servicioId) {
       resultado.errores.push({ fila: fila.fila, motivo: 'No se pudo resolver el doctor o el servicio.' })
       continue

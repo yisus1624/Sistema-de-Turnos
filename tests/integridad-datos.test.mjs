@@ -56,11 +56,11 @@ test('los avisos estan en español y sin codigos de estado crudos', () => {
 // Traduccion del rechazo del indice unico
 // ---------------------------------------------------------------------------
 
-function choqueDeUnico(objetivo) {
+function choqueDeUnico(objetivo, modelName = 'Servicio') {
   return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
     code: 'P2002',
     clientVersion: '6.0.0',
-    meta: objetivo === undefined ? {} : { target: objetivo },
+    meta: objetivo === undefined ? {} : { modelName, target: objetivo },
   })
 }
 
@@ -69,10 +69,20 @@ test('el choque de un indice unico se identifica por la columna que lo provoco',
 })
 
 test('el choque de un indice con nombre propio se identifica por ese nombre', () => {
-  // Los indices escritos a mano en la migracion (el del cupo manual, el del
-  // nombre normalizado) llegan como una cadena con el nombre del indice, no
-  // como lista de columnas.
-  assert.equal(claveDelChoque(choqueDeUnico('citas_cupo_manual_unico')), 'citas_cupo_manual_unico')
+  // Con Prisma 6 y PostgreSQL 16 el error NO trae el nombre del indice: trae
+  // sus columnas o su expresion, y el modelo (comprobado contra la base).
+  assert.equal(
+    claveDelChoque(choqueDeUnico(['fecha', 'profesionalId', 'horaCita'], 'Cita')),
+    'citas_cupo_manual_unico',
+  )
+  assert.equal(
+    claveDelChoque(choqueDeUnico(['fecha', 'documentoPaciente', 'profesionalId', 'horaCita'], 'Cita')),
+    'citaDelDia',
+  )
+  assert.equal(
+    claveDelChoque(choqueDeUnico(['lower(TRIM(BOTH FROM nombre))'], 'Servicio')),
+    'servicios_nombre_normalizado_unico',
+  )
 })
 
 test('lo que no es un choque de unicidad no se confunde con uno', () => {
