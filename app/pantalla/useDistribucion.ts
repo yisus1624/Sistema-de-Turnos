@@ -42,6 +42,8 @@ const MS_POR_PAGINA = 10_000
 export interface LlamadoEnPagina {
   clave: string
   pagina: number
+  /** Cuantos llamados van (ver `Resaltes.contador`): el mismo puesto dos veces tambien salta. */
+  vez?: number
 }
 
 /**
@@ -52,6 +54,7 @@ export function usePaginaRotativa(paginas: number, llamado: LlamadoEnPagina | nu
   const [estado, setEstado] = useState<EstadoDePagina>({ pagina: 0, cambioEn: Number.POSITIVE_INFINITY })
   const claveLlamado = llamado?.clave ?? null
   const paginaLlamado = llamado?.pagina ?? 0
+  const vezLlamado = llamado?.vez ?? 0
 
   // Llego un llamado: a su pagina, en el acto.
   useEffect(() => {
@@ -64,7 +67,7 @@ export function usePaginaRotativa(paginas: number, llamado: LlamadoEnPagina | nu
         llamado: { pagina: paginaLlamado, retenerMs: MS_RESALTE },
       }),
     )
-  }, [claveLlamado, paginaLlamado, paginas])
+  }, [claveLlamado, paginaLlamado, vezLlamado, paginas])
 
   // La rotacion: espera hasta `cambioEn` (o la primera cuenta, si recien hay
   // varias paginas) y pasa a la siguiente.

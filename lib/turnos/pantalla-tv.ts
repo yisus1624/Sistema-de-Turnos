@@ -25,13 +25,18 @@ export const MS_NUEVO = 60000
 export interface Resaltes {
   /** El ultimo llamado: la rotacion de paginas salta a su pagina. */
   ultimo: string | null
+  /**
+   * Sube con cada llamado, aunque sea del mismo puesto: un segundo llamado del
+   * consultorio de siempre tambien tiene que saltar a su pagina.
+   */
+  contador?: number
   /** Filas que se pintan de azul y destellan. */
   resaltados: ReadonlySet<string>
   /** Filas que llevan la etiqueta "NUEVO". */
   nuevos: ReadonlySet<string>
 }
 
-export const SIN_RESALTES: Resaltes = { ultimo: null, resaltados: new Set(), nuevos: new Set() }
+export const SIN_RESALTES: Resaltes = { ultimo: null, contador: 0, resaltados: new Set(), nuevos: new Set() }
 
 export type AvisoDeSonido = 'tocar_para_activar' | null
 

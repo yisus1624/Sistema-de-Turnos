@@ -119,7 +119,7 @@ function Tabla({ filas, pantalla, resaltes, mensajeSinLlamados }: TablaProps) {
   const indiceResaltado = filas.findIndex((casilla) => claveDeCasilla(casilla) === resaltado)
   const numero = usePaginaRotativa(
     plan.paginas,
-    resaltado && indiceResaltado >= 0 ? { clave: resaltado, pagina: Math.floor(indiceResaltado / plan.porPagina) } : null,
+    resaltado && indiceResaltado >= 0 ? { clave: resaltado, pagina: Math.floor(indiceResaltado / plan.porPagina), vez: resaltes.contador } : null,
   )
   const visibles = filas.slice(numero * plan.porPagina, (numero + 1) * plan.porPagina)
   // Sin medir aun, el plan saldria de un espacio supuesto: mejor un instante en blanco que filas mal
