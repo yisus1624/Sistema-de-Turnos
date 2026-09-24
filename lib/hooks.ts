@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import {
   MS_SILENCIO_MAXIMO,
@@ -22,6 +22,7 @@ import {
 import { fechaTrasCambioDeDia } from '@/lib/api/cambio-de-dia'
 import { hoyEnColombia, pedir } from '@/lib/api/cliente'
 import type { Modulo, Profesional, Servicio } from '@/lib/turnos/types'
+import { conRespaldo, type NombreDeCatalogo } from '@/lib/turnos/nombres-de-respaldo'
 
 /**
  * Devuelve `valor`, pero solo despues de `ms` sin que vuelva a cambiar.
@@ -489,5 +490,30 @@ export function useCatalogosDeTurnos() {
     void recargar()
   }, [recargar])
 
-  return { servicios, modulos, profesionales, fallo }
+  const respaldo = useNombresDeRespaldo()
+  const nombres = useMemo(
+    () => ({
+      servicios: conRespaldo(servicios, respaldo.servicios),
+      modulos: conRespaldo(modulos, respaldo.modulos),
+      profesionales: conRespaldo(profesionales, respaldo.profesionales),
+    }),
+    [servicios, modulos, profesionales, respaldo],
+  )
+
+  return { servicios, modulos, profesionales, nombres, fallo }
+}
+
+type NombresDeRespaldo = Record<'servicios' | 'modulos' | 'profesionales', NombreDeCatalogo[]>
+const SIN_RESPALDO: NombresDeRespaldo = { servicios: [], modulos: [], profesionales: [] }
+
+/**
+ * Nombres de servicios, consultorios y medicos ya desactivados, para que un
+ * turno viejo no salga con "—". Si no se pueden traer se sigue como antes.
+ */
+export function useNombresDeRespaldo(): NombresDeRespaldo {
+  const [respaldo, setRespaldo] = useState<NombresDeRespaldo>(SIN_RESPALDO)
+  useEffect(() => {
+    pedir<NombresDeRespaldo>('/api/turnos/catalogo/nombres').then(setRespaldo, () => undefined)
+  }, [])
+  return respaldo
 }

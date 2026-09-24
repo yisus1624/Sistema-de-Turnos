@@ -76,7 +76,7 @@ export default function ReportesClient() {
   })
   const [turnos, setTurnos] = useState<Turno[]>([])
   // Con reintento, y con aviso si todavia no se pudieron cargar (ver el hook).
-  const { servicios, modulos, profesionales, fallo: falloCatalogos } = useCatalogosDeTurnos()
+  const { servicios, modulos, nombres, fallo: falloCatalogos } = useCatalogosDeTurnos()
   const [buscando, setBuscando] = useState(true)
   const [generando, setGenerando] = useState(false)
   // El servidor devuelve como mucho un techo de filas. Si hay mas, el reporte
@@ -93,8 +93,8 @@ export default function ReportesClient() {
   // Cada turno ya con paciente, documento, medico y consultorio: lo mismo en la
   // tabla y en el PDF.
   const filas = useMemo(
-    () => turnos.map((turno) => filaDeReporte(turno, { servicios, modulos, profesionales })),
-    [turnos, servicios, modulos, profesionales],
+    () => turnos.map((turno) => filaDeReporte(turno, nombres)),
+    [turnos, nombres],
   )
 
   // La ultima consulta gana: la respuesta lenta de un filtro anterior no puede

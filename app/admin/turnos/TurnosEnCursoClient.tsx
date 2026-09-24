@@ -41,7 +41,8 @@ import EmptyState from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Loader'
 import { hoyEnColombia, horaCorta, pedir } from '@/lib/api/cliente'
 import type { ResultadoDeCarga } from '@/lib/api/reintento'
-import { useCargaConReintento, useLimitador, useRecargaEnVivo, useUltimaPeticion } from '@/lib/hooks'
+import { useCargaConReintento, useLimitador, useNombresDeRespaldo, useRecargaEnVivo, useUltimaPeticion } from '@/lib/hooks'
+import { conRespaldo } from '@/lib/turnos/nombres-de-respaldo'
 import { cambiaLosCatalogos } from '@/lib/realtime/canal'
 import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import { iconoDeServicio } from '@/components/ui/iconos-servicio'
@@ -243,10 +244,12 @@ export default function TurnosEnCursoClient() {
   })
 
   const resumen = contar(turnos)
+  const respaldo = useNombresDeRespaldo()
 
   /** Nombre del consultorio de un turno, con el respaldo del doctor. */
   const nombreDeModulo = useMemo(() => {
-    const porModulo = new Map(modulos.map((modulo) => [modulo.id, modulo.nombre]))
+    // Con el respaldo, un turno de un consultorio ya desactivado no queda sin nombre.
+    const porModulo = new Map(conRespaldo(modulos, respaldo.modulos).map((modulo) => [modulo.id, modulo.nombre]))
     // Las casillas mandan sobre el catalogo: si el doctor se cambio hoy de
     // consultorio, lo cierto es lo que esta sonando en la sala de espera.
     for (const casilla of casillas) porModulo.set(casilla.moduloId, casilla.moduloNombre)
@@ -259,7 +262,7 @@ export default function TurnosEnCursoClient() {
       const id = turno.moduloId ?? (turno.profesionalId ? habitualDelProfesional.get(turno.profesionalId) : null)
       return id ? porModulo.get(id) ?? null : null
     }
-  }, [modulos, casillas, profesionales])
+  }, [modulos, respaldo, casillas, profesionales])
 
   /**
    * Los servicios que hoy estan funcionando, con su cola dentro.
