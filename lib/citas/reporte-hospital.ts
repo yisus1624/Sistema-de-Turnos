@@ -553,7 +553,7 @@ function soloUnError(motivo: string): ReporteLeido {
  */
 export async function leerReporteDelHospital(datos: Uint8Array): Promise<ReporteLeido> {
   if (esZip(datos) && datos.length > MAXIMO_BYTES_XLSX) return soloUnError(MOTIVO_XLSX_GRANDE)
-  if (esZip(datos)) return leerXlsx(datos)
+  if (esZip(datos)) return leerConMotivo(() => leerXlsx(datos), MOTIVO_XLSX_DANADO)
 
   if (esExcelBinario(datos)) {
     return {
@@ -571,7 +571,24 @@ export async function leerReporteDelHospital(datos: Uint8Array): Promise<Reporte
 
   // El resto se trata como texto: el XML del servidor de informes.
   const contenido = new TextDecoder('utf-8').decode(datos).replace(/^\uFEFF/, '')
-  return leerReporteXml(contenido)
+  return leerConMotivo(async () => leerReporteXml(contenido), MOTIVO_XML_DANADO)
+}
+
+const MOTIVO_XLSX_DANADO =
+  'El archivo de Excel esta dañado o no se puede abrir. Vuelve a exportar el Reporte de citas asignadas e intentalo de nuevo.'
+const MOTIVO_XML_DANADO =
+  'El archivo XML esta dañado (trae caracteres que no se pueden leer). Vuelve a exportar el Reporte de citas asignadas e intentalo de nuevo.'
+
+/**
+ * Un archivo malformado es un error del archivo, no del sistema: se explica
+ * como tal (la ruta lo devuelve como 400) en vez de reventar con un 500.
+ */
+async function leerConMotivo(leer: () => Promise<ReporteLeido>, motivo: string): Promise<ReporteLeido> {
+  try {
+    return await leer()
+  } catch {
+    return soloUnError(motivo)
+  }
 }
 
 /**
