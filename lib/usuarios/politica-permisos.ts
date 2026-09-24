@@ -112,6 +112,12 @@ export function revisarCambio(actor: Actor, objetivo: Usuario, cambio: CambioPed
     return { motivo: 'No puedes quitarte a ti mismo el acceso de administrador.', estado: 400 }
   }
 
+  // Cambiar la clave propia exige la actual: sin eso, una sesion olvidada
+  // abierta basta para apropiarse de la cuenta.
+  if (esYo && cambio.password !== undefined) {
+    return { motivo: 'Tu propia contrasena se cambia desde Mi cuenta, con la contrasena actual.', estado: 403 }
+  }
+
   const rolResultante = cambio.rol ?? objetivo.rol
   const seccionesResultantes = cambio.secciones !== undefined ? cambio.secciones : objetivo.secciones
 
@@ -190,4 +196,29 @@ function revisarQueTengaDondeEntrar(rol: RolUsuario, secciones: string[] | null 
     return { motivo: 'Selecciona al menos una seccion para el operador.', estado: 400 as const }
   }
   return null
+}
+
+function esAdministradorActivo(usuario: Usuario): boolean {
+  return usuario.rol === 'ADMINISTRADOR' && usuario.activo
+}
+
+function leQuitaLaAdministracion(cambio: CambioPedido): boolean {
+  return cambio.activo === false || cambio.rol === 'OPERADOR'
+}
+
+/**
+ * Si el cambio deja al sistema sin ningun administrador activo.
+ *
+ * Aparte de `revisarCambio` porque necesita las demas cuentas, no solo la
+ * tocada: sin administrador nadie puede volver a repartir accesos.
+ */
+export function revisarQueQuedeUnAdministrador(
+  objetivo: Usuario,
+  cambio: CambioPedido,
+  usuarios: Usuario[],
+): Rechazo | null {
+  if (!esAdministradorActivo(objetivo) || !leQuitaLaAdministracion(cambio)) return null
+  const quedan = usuarios.filter((usuario) => usuario.id !== objetivo.id && esAdministradorActivo(usuario))
+  if (quedan.length > 0) return null
+  return { motivo: 'Es el ultimo administrador activo: nombra otro antes de quitarle el acceso.', estado: 400 }
 }

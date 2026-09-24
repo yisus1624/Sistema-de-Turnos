@@ -115,6 +115,11 @@ export function superaFallos(accion: string, identificador: string, limite: numb
   return Boolean(vigente && vigente.conteo >= limite)
 }
 
+/** Cuantos fallos lleva la clave en su ventana vigente. NO cuenta nada. */
+export function fallosVigentes(accion: string, identificador: string): number {
+  return ventanaVigente(claveDe(accion, identificador), Date.now())?.conteo ?? 0
+}
+
 /** Cuenta un fallo. */
 export function apuntarFallo(accion: string, identificador: string, ventanaMs: number) {
   sumar(claveDe(accion, identificador), ventanaMs, Date.now())

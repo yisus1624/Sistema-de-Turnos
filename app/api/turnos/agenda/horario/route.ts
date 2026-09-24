@@ -15,6 +15,8 @@ const FECHA = /^\d{4}-\d{2}-\d{2}$/
 
 export async function GET(request: Request) {
   try {
+    // `/admin/pruebas` solo aqui, que es lectura: la simulacion lee el horario
+    // del dia. Las rutas que CAMBIAN la agenda no la aceptan.
     await requireSeccion('/admin/citas', '/operador/agenda', '/admin/pruebas')
 
     const { searchParams } = new URL(request.url)

@@ -5,7 +5,7 @@ import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 
-const SECCIONES_AGENDA = ['/admin/citas', '/operador/agenda', '/admin/pruebas'] as const
+const SECCIONES_AGENDA = ['/admin/citas', '/operador/agenda'] as const
 
 /**
  * Reprograma la cita: la mueve de hora, y si hace falta de doctor.
@@ -42,7 +42,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       exito: true,
       usuarioId: session.user.id,
       usuarioNombre: session.user.name ?? null,
-      identificador: cita.documentoPaciente,
+      identificador: cita.id,
       detalle: {
         citaId: cita.id,
         horaAnterior: cita.horaCitaOriginal,
@@ -80,7 +80,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
       exito: true,
       usuarioId: session.user.id,
       usuarioNombre: session.user.name ?? null,
-      identificador: cita.documentoPaciente,
+      identificador: cita.id,
       detalle: { citaId: cita.id, horaCita: cita.horaCita, motivo: cita.motivoCancelacion },
     })
 

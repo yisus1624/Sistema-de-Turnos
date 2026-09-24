@@ -11,7 +11,7 @@ const bodySchema = z.object({ citaId: idSchema })
 
 export async function POST(request: Request) {
   try {
-    const session = await requireSeccion('/operador/admisiones', '/admin/citas', '/admin/pruebas')
+    const session = await requireSeccion('/operador/admisiones', '/admin/citas')
 
     const body = await request.json().catch(() => null)
     const parsed = bodySchema.safeParse(body)

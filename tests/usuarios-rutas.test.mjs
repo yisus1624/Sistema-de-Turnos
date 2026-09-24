@@ -28,6 +28,20 @@ mock.module('next/headers', {
   namedExports: { headers: async () => new Headers() },
 })
 
+// El registro de seguridad escribe en la base con Prisma y el repositorio en
+// memoria no lo cubre: cada alta, cambio o rechazo de estas pruebas apuntaba un
+// evento en la base de DATABASE_URL. Se conserva lo demas del modulo; solo los
+// eventos no salen del proceso. Ver `autorizacion-rutas.test.mjs`.
+const registroReal = await import('@/lib/seguridad/registro')
+mock.module('@/lib/seguridad/registro', {
+  namedExports: {
+    ...registroReal,
+    registrarEvento: async () => {},
+    listarEventos: async () => [],
+    tiposDeEvento: async () => [],
+  },
+})
+
 const rutaLista = await import('@/app/api/usuarios/route')
 const rutaUno = await import('@/app/api/usuarios/[id]/route')
 

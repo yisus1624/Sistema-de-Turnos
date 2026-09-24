@@ -55,6 +55,7 @@ export function useResaltes(): {
     (clave: string) => {
       setResaltes((actual) => ({
         ultimo: clave,
+        contador: (actual.contador ?? 0) + 1,
         resaltados: new Set(actual.resaltados).add(clave),
         nuevos: new Set(actual.nuevos).add(clave),
       }))

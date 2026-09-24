@@ -8,6 +8,10 @@
  * repetir sin el solo suena una vez de mas, no cierra a nadie.
  */
 import { z } from 'zod'
+import { instalarMensajesEnEspanol } from '@/lib/validacion/mensajes-zod'
+
+// Toda ruta de la API pasa por aqui: los mensajes de Zod sin texto propio salen en español.
+instalarMensajesEnEspanol()
 
 /** Largo maximo de un id (los de la base son cuid, de 25 caracteres). */
 const LARGO_MAXIMO_ID = 64
@@ -40,6 +44,15 @@ export function idDeTurnoValido(id: string): string {
   if (!leido.success) throw Object.assign(new Error('El turno indicado no existe.'), { status: 404 })
   return leido.data
 }
+
+/**
+ * El profesional que MUESTRA la pantalla del consultorio (ver
+ * `exigirMismoProfesional`). Opcional a proposito: las pestañas abiertas con el
+ * codigo de antes no lo mandan y tienen que seguir funcionando hasta que
+ * recarguen. El valor se compara tal cual con el de la cookie, asi que no hace
+ * falta acotarlo: cualquier otra cosa simplemente no coincide.
+ */
+export const profesionalVistoSchema = z.object({ profesionalId: z.unknown() })
 
 /** Cuerpo de "Repetir": el conteo que tenia la pantalla. Ver `decidirRepeticion`. */
 export const repetirSchema = z

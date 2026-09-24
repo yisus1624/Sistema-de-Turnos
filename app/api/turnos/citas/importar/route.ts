@@ -39,7 +39,14 @@ export async function POST(request: Request) {
     const { ip } = await contextoPeticion()
     frenarConsultaPesada('importar', { usuarioId: session.user.id, ip })
 
-    const formulario = await request.formData()
+    // Una peticion que no es multipart hacia lanzar a formData(): era un 500.
+    const formulario = await request.formData().catch(() => null)
+    if (!formulario) {
+      return NextResponse.json(
+        { error: 'No llego ningun archivo. Adjunta el reporte de citas desde el formulario de carga.' },
+        { status: 400 },
+      )
+    }
     const archivo = formulario.get('archivo')
 
     if (!(archivo instanceof File)) {

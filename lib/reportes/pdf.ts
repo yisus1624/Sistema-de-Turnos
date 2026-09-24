@@ -41,20 +41,42 @@ function fechaLarga(fecha: string) {
 
 let logoCache: string | null = null
 
+/**
+ * El logo como data URL, o null si no se pudo traer una imagen PNG.
+ *
+ * Un fallo (404 que devuelve HTML, archivo que no es PNG) NO se guarda: antes
+ * quedaba en cache y `addImage` lanzaba en cada intento, sin ningun PDF en toda
+ * la sesion.
+ */
 async function cargarLogo(): Promise<string | null> {
   if (logoCache) return logoCache
   try {
     const respuesta = await fetch(RUTA_LOGO)
+    if (!respuesta.ok) return null
     const blob = await respuesta.blob()
-    logoCache = await new Promise<string>((resolve, reject) => {
-      const lector = new FileReader()
-      lector.onload = () => resolve(lector.result as string)
-      lector.onerror = reject
-      lector.readAsDataURL(blob)
-    })
+    if (blob.type !== 'image/png') return null
+    logoCache = await leerComoDataUrl(blob)
     return logoCache
   } catch {
     return null
+  }
+}
+
+function leerComoDataUrl(blob: Blob): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const lector = new FileReader()
+    lector.onload = () => (typeof lector.result === 'string' ? resolve(lector.result) : reject(new Error('Logo ilegible')))
+    lector.onerror = reject
+    lector.readAsDataURL(blob)
+  })
+}
+
+/** Un logo danado deja el PDF sin logo, nunca sin PDF: se olvida para reintentar. */
+function ponerLogo(doc: jsPDF, logo: string, margen: number) {
+  try {
+    doc.addImage(logo, 'PNG', margen, 24, 44, 44)
+  } catch {
+    logoCache = null
   }
 }
 
@@ -83,9 +105,7 @@ export async function generarReportePdf(params: {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
   const margen = 40
 
-  if (logo) {
-    doc.addImage(logo, 'PNG', margen, 24, 44, 44)
-  }
+  if (logo) ponerLogo(doc, logo, margen)
 
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(14)

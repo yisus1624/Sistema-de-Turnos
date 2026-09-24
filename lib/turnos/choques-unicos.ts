@@ -31,8 +31,25 @@ export function claveDelChoque(error: unknown): string | null {
 
   const objetivo = error.meta?.target
   if (typeof objetivo === 'string') return objetivo
-  if (Array.isArray(objetivo) && typeof objetivo[0] === 'string') return objetivo[0]
-  return null
+  if (!Array.isArray(objetivo) || objetivo.length === 0) return null
+  const columnas = objetivo.join(',')
+  return INDICES_POR_COLUMNAS[`${String(error.meta?.modelName)}:${columnas}`] ?? columnas
+}
+
+/**
+ * Los indices de varias columnas o de expresion, por lo que Prisma informa.
+ *
+ * Prisma 6 con PostgreSQL NO da el nombre del indice: pone en `meta.target` sus
+ * columnas (o la expresion) y el modelo en `meta.modelName` (comprobado contra
+ * PostgreSQL 16). Sin esta tabla el cupo manual salia como 'fecha' y el nombre
+ * normalizado como la expresion cruda, y los dos acababan en un 500.
+ */
+const INDICES_POR_COLUMNAS: Record<string, string> = {
+  'Cita:fecha,profesionalId,horaCita': 'citas_cupo_manual_unico',
+  'Cita:fecha,documentoPaciente,profesionalId,horaCita': 'citaDelDia',
+  'Modulo:lower(TRIM(BOTH FROM nombre))': 'modulos_nombre_normalizado_unico',
+  'Servicio:lower(TRIM(BOTH FROM nombre))': 'servicios_nombre_normalizado_unico',
+  'Profesional:lower(TRIM(BOTH FROM nombre))': 'profesionales_nombre_normalizado_unico',
 }
 
 /**

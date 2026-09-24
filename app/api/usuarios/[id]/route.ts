@@ -6,7 +6,7 @@ import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { registrarApuntes, type Firma } from '@/lib/seguridad/apuntar'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { secciones as catalogoSecciones } from '@/lib/permissions/rutas'
-import { revisarCambio } from '@/lib/usuarios/politica-permisos'
+import { revisarCambio, revisarQueQuedeUnAdministrador } from '@/lib/usuarios/politica-permisos'
 import { apunteDeRenombradoFallido, apuntesDeEdicion } from '@/lib/usuarios/auditoria'
 import type { Usuario } from '@/lib/usuarios/types'
 
@@ -55,7 +55,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     // tomarla en la misma peticion se saltaba la comprobacion. Ademas hace
     // falta su estado actual para el registro (el antes y el despues) y para
     // decidir si el actor puede tocarla.
-    const objetivo = (await usuarioRepository.listar()).find((usuario) => usuario.id === id)
+    const usuarios = await usuarioRepository.listar()
+    const objetivo = usuarios.find((usuario) => usuario.id === id)
     if (!objetivo) {
       return NextResponse.json({ error: 'El usuario indicado no existe.' }, { status: 404 })
     }
@@ -67,7 +68,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       secciones: session.user.secciones,
     }
 
-    const rechazo = revisarCambio(actor, objetivo, parsed.data)
+    const rechazo =
+      revisarCambio(actor, objetivo, parsed.data) ?? revisarQueQuedeUnAdministrador(objetivo, parsed.data, usuarios)
     if (rechazo) {
       // Un intento de tocar una cuenta que no se puede tocar es justo lo que
       // hay que poder revisar despues, asi que se apunta como fallido.

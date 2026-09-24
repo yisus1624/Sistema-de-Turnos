@@ -57,3 +57,23 @@ export function cifrarContrasenaAlSembrar(password: string): string {
 export function contrasenaCoincide(password: string, hash: string): Promise<boolean> {
   return bcrypt.compare(password, hash)
 }
+
+let hashFicticio: Promise<string> | undefined
+
+/** Un hash con el mismo coste que los reales, de una contrasena que nadie conoce. */
+function hashDeRelleno(): Promise<string> {
+  hashFicticio ??= cifrarContrasena(crypto.randomUUID())
+  return hashFicticio
+}
+
+/**
+ * Compara SIEMPRE contra un hash, exista la cuenta o no.
+ *
+ * Si la cuenta no existe o esta inactiva (`hash` en null) se compara contra un
+ * hash de relleno y se responde que no: responder sin pasar por bcrypt tardaba
+ * ~250 ms menos y delataba que usuarios existen.
+ */
+export async function contrasenaCoincideSinDelatar(password: string, hash: string | null): Promise<boolean> {
+  const coincide = await contrasenaCoincide(password, hash ?? (await hashDeRelleno()))
+  return hash !== null && coincide
+}

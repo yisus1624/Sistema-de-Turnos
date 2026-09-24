@@ -66,7 +66,7 @@ export default function Cuadricula({
   const paginaResaltada = plan.paginas.findIndex((p) => indiceResaltado >= p.desde && indiceResaltado < p.hasta)
   const numero = usePaginaRotativa(
     plan.paginas.length,
-    resaltado && paginaResaltada >= 0 ? { clave: resaltado, pagina: paginaResaltada } : null,
+    resaltado && paginaResaltada >= 0 ? { clave: resaltado, pagina: paginaResaltada, vez: resaltes.contador } : null,
   )
   const pagina = plan.paginas[numero]
   const deLaPagina = ordenadas.slice(pagina.desde, pagina.hasta)

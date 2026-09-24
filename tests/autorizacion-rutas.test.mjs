@@ -50,6 +50,22 @@ mock.module(comoUrl('node_modules/next/headers.js'), {
   },
 })
 
+// El registro de seguridad escribe en la base con Prisma, y los repositorios en
+// memoria no lo cubren. Sin sustituirlo, cada rechazo del consultorio (sin
+// cookie, token malformado) insertaba un evento en la base de DATABASE_URL:
+// "accesos fallidos" de mentira en la bitacora de produccion, y minutos de
+// espera por evento cuando no hay red. Lo demas (limitador, contexto de la
+// peticion) sigue siendo el real; solo los eventos no salen del proceso.
+const registroReal = await import(comoUrl('lib/seguridad/registro.ts'))
+mock.module(comoUrl('lib/seguridad/registro.ts'), {
+  namedExports: {
+    ...registroReal,
+    registrarEvento: async () => {},
+    listarEventos: async () => [],
+    tiposDeEvento: async () => [],
+  },
+})
+
 // Las pruebas nunca tocan la base de datos real. Ver el modulo.
 await import('./repositorios-en-memoria.mjs')
 

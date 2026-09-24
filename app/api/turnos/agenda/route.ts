@@ -11,14 +11,17 @@ import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
+import { diaColombia } from '@/lib/turnos/tiempo'
 
 export async function GET(request: Request) {
   try {
-    await requireSeccion('/admin/citas', '/operador/agenda', '/admin/pruebas')
+    await requireSeccion('/admin/citas', '/operador/agenda')
 
     const { searchParams } = new URL(request.url)
+    // Sin fecha, hoy: sin ella el repositorio devolvia la historia completa
+    // de citas, con documento y nombre de cada paciente.
     const citas = await turnoRepository.listarCitas({
-      fecha: searchParams.get('fecha') ?? undefined,
+      fecha: searchParams.get('fecha') || diaColombia(new Date()),
       profesionalId: searchParams.get('profesionalId') ?? undefined,
     })
     return NextResponse.json({ citas })
@@ -36,7 +39,7 @@ const citaSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const session = await requireSeccion('/admin/citas', '/operador/agenda', '/admin/pruebas')
+    const session = await requireSeccion('/admin/citas', '/operador/agenda')
 
     const body = await request.json().catch(() => null)
     const parsed = citaSchema.safeParse(body)
@@ -51,7 +54,7 @@ export async function POST(request: Request) {
       exito: true,
       usuarioId: session.user.id,
       usuarioNombre: session.user.name ?? null,
-      identificador: cita.documentoPaciente,
+      identificador: cita.id,
       detalle: { citaId: cita.id, horaCita: cita.horaCita, profesionalId: cita.profesionalId },
     })
 

@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { apiError, requireSeccion, tieneSeccion } from '@/lib/permissions/session'
-import { contextoPeticion } from '@/lib/seguridad/registro'
+import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
+import { EVENTOS } from '@/lib/seguridad/eventos'
 import { conFrenoDeConsultaPesada } from '@/lib/seguridad/freno-consultas'
-import { acotarRangoDelHistorico, MAXIMO_FILAS_HISTORICO } from '@/lib/turnos/rango-historico'
+import { abarcaMasDeUnDia, acotarRangoDelHistorico, MAXIMO_FILAS_HISTORICO } from '@/lib/turnos/rango-historico'
 import { diaColombia } from '@/lib/turnos/tiempo'
 import { ESTADOS_TURNO } from '@/lib/turnos/types'
 
@@ -32,6 +33,14 @@ function filtrosDe(searchParams: URLSearchParams) {
     codigo: leer('codigo'),
     estado: leer('estado'),
   })
+}
+
+function fechasPedidas(searchParams: URLSearchParams) {
+  return {
+    fecha: searchParams.get('fecha') || undefined,
+    fechaDesde: searchParams.get('fechaDesde') || undefined,
+    fechaHasta: searchParams.get('fechaHasta') || undefined,
+  }
 }
 
 export async function GET(request: Request) {
@@ -68,12 +77,11 @@ export async function GET(request: Request) {
     const funcionarioId = veTodo ? filtros.data.funcionarioId : session.user.id
 
     // Sin fechas, hoy; un rango, como mucho un trimestre (ver `rango-historico`).
+    // El monitor en vivo solo necesita el dia: quien entra unicamente por
+    // '/admin/turnos' no puede usarlo para sacar meses de turnos.
+    const soloHoy = veTodo && !tieneSeccion(session, '/admin/historico', '/admin/reportes')
     const rango = acotarRangoDelHistorico(
-      {
-        fecha: searchParams.get('fecha') || undefined,
-        fechaDesde: searchParams.get('fechaDesde') || undefined,
-        fechaHasta: searchParams.get('fechaHasta') || undefined,
-      },
+      soloHoy ? {} : fechasPedidas(searchParams),
       diaColombia(new Date()),
     )
 
@@ -92,7 +100,20 @@ export async function GET(request: Request) {
     )
 
     const truncado = filas.length > MAXIMO_FILAS_HISTORICO
-    return NextResponse.json({ turnos: filas.slice(0, MAXIMO_FILAS_HISTORICO), truncado })
+    const devueltas = filas.slice(0, MAXIMO_FILAS_HISTORICO)
+    // Las exportaciones se arman con esta misma respuesta: dejar rastro aqui
+    // cubre la consulta y la descarga de varios dias.
+    if (abarcaMasDeUnDia(rango)) {
+      await registrarEvento({
+        tipo: EVENTOS.HISTORICO_CONSULTADO,
+        exito: true,
+        usuarioId: session.user.id,
+        usuarioNombre: session.user.name ?? null,
+        ip,
+        detalle: { ...rango, estado, servicioId, moduloId, codigo, funcionarioId, filas: devueltas.length, truncado },
+      })
+    }
+    return NextResponse.json({ turnos: devueltas, truncado })
   } catch (error) {
     return apiError(error)
   }

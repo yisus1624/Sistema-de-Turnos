@@ -18,6 +18,7 @@ import {
   apuntarFalloDeIngreso,
   frenoDeIngreso,
   olvidarFallosDeIngreso,
+  retardoDeIngresoMs,
   type FrenoDeIngreso,
 } from '@/lib/seguridad/limite-ingreso'
 import { loginSchema } from '@/lib/validators/auth'
@@ -56,6 +57,19 @@ const LARGO_USUARIO_ANOTADO = 40
 
 /** Jornada larga en ventanilla: la sesion dura un dia habil completo. */
 const duracionSesionSegundos = 12 * 60 * 60
+
+/**
+ * Un token sin marca es de antes de existir la version de credenciales: se
+ * respeta para no cerrar a todo el personal el dia del despliegue.
+ */
+function esperarRetardoDeIngreso(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise((resolver) => setTimeout(resolver, ms))
+}
+
+function credencialesCambiaron(delToken: unknown, actual: number | undefined) {
+  return typeof delToken === 'number' && delToken !== (actual ?? 0)
+}
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   secret: process.env.NEXTAUTH_SECRET,
@@ -121,6 +135,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           throw new IngresoEnEspera(freno)
         }
 
+        // Sin IP de fiar no se bloquea la cuenta: se la frena con espera creciente.
+        await esperarRetardoDeIngreso(retardoDeIngresoMs(usuario, ip))
+
         let encontrado
         try {
           encontrado = await usuarioRepository.verificarCredenciales(usuario, password)
@@ -167,13 +184,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           rol: encontrado.rol,
           area: encontrado.area,
           secciones: encontrado.secciones ?? null,
+          versionCredenciales: encontrado.versionCredenciales ?? 0,
         }
       },
     }),
   ],
   callbacks: {
     async jwt({ token, user }) {
-      if (user) token.sub = user.id
+      if (user) {
+        token.sub = user.id
+        token.versionCredenciales = user.versionCredenciales
+      }
 
       if (token.sub) {
         // Revalidar en cada peticion: si el administrador desactiva la cuenta,
@@ -202,6 +223,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
 
         if (!actual) return null
+        if (credencialesCambiaron(token.versionCredenciales, actual.versionCredenciales)) return null
 
         token.name = actual.nombre
         token.usuario = actual.usuario

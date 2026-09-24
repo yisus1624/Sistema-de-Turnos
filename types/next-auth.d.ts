@@ -18,6 +18,7 @@ declare module 'next-auth' {
     rol: RolUsuario
     area: string | null
     secciones?: string[] | null
+    versionCredenciales?: number
   }
 }
 
@@ -27,5 +28,7 @@ declare module 'next-auth/jwt' {
     rol: RolUsuario
     area: string | null
     secciones?: string[] | null
+    /** Ausente en tokens emitidos antes de existir la marca: siguen validos. */
+    versionCredenciales?: number
   }
 }

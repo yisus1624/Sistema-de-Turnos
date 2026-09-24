@@ -41,7 +41,7 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
   })
   const [turnos, setTurnos] = useState<Turno[]>([])
   // Con reintento, y con aviso si todavia no se pudieron cargar (ver el hook).
-  const { servicios, modulos, fallo: falloCatalogos } = useCatalogosDeTurnos()
+  const { servicios, modulos, nombres, fallo: falloCatalogos } = useCatalogosDeTurnos()
   const [buscando, setBuscando] = useState(true)
   // Si el servidor recorto el resultado: aviso FIJO, no un toast que se va.
   const [truncado, setTruncado] = useState(false)
@@ -183,7 +183,7 @@ export default function HistoricoTurnos({ completo }: { completo: boolean }) {
             </div>
           ) : (
             <>
-              <TablaDeTurnos turnos={pagina.visibles} servicios={servicios} modulos={modulos} />
+              <TablaDeTurnos turnos={pagina.visibles} servicios={nombres.servicios} modulos={nombres.modulos} />
               <Paginacion {...pagina} />
             </>
           )}

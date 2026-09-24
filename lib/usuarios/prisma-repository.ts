@@ -13,7 +13,7 @@
  * (`lib/hospital/README.md`); cuando lo haga se escribe el adaptador y la UI
  * no cambia, porque las tres implementaciones cumplen el mismo contrato.
  */
-import { cifrarContrasena, contrasenaCoincide } from './contrasenas'
+import { cifrarContrasena, contrasenaCoincide, contrasenaCoincideSinDelatar } from './contrasenas'
 import { prisma } from '@/lib/prisma'
 import { errorDeNegocio } from '@/lib/turnos/errores'
 import type { UsuarioRepository } from './repository'
@@ -27,6 +27,7 @@ type FilaUsuario = {
   area: string | null
   activo: boolean
   secciones: string[]
+  versionCredenciales: number
   fechaCreacion: Date
 }
 
@@ -54,6 +55,7 @@ function aUsuario(fila: FilaUsuario): Usuario {
     activo: fila.activo,
     fechaCreacion: fila.fechaCreacion.toISOString(),
     secciones: fila.secciones.length > 0 ? fila.secciones : null,
+    versionCredenciales: fila.versionCredenciales,
   }
 }
 
@@ -65,15 +67,16 @@ const CAMPOS_PUBLICOS = {
   area: true,
   activo: true,
   secciones: true,
+  versionCredenciales: true,
   fechaCreacion: true,
 } as const
 
 export class PrismaUsuarioRepository implements UsuarioRepository {
   async verificarCredenciales(usuario: string, password: string): Promise<Usuario | null> {
     const registro = await prisma.usuario.findUnique({ where: { usuario: normalizarUsuario(usuario) } })
-    if (!registro || !registro.activo) return null
-    if (!(await contrasenaCoincide(password, registro.passwordHash))) return null
-    return aUsuario(registro)
+    const vigente = registro?.activo ? registro : null
+    if (!(await contrasenaCoincideSinDelatar(password, vigente?.passwordHash ?? null))) return null
+    return vigente ? aUsuario(vigente) : null
   }
 
   async buscarPorId(id: string): Promise<Usuario | null> {
@@ -132,6 +135,7 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
       area?: string | null
       activo?: boolean
       passwordHash?: string
+      versionCredenciales?: { increment: number }
       secciones?: string[]
     } = {}
 
@@ -148,7 +152,10 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
     if (datos.rol !== undefined) cambios.rol = datos.rol
     if (datos.area !== undefined) cambios.area = datos.area ?? null
     if (datos.activo !== undefined) cambios.activo = datos.activo
-    if (datos.password) cambios.passwordHash = await cifrarContrasena(datos.password)
+    if (datos.password) {
+      cambios.passwordHash = await cifrarContrasena(datos.password)
+      cambios.versionCredenciales = { increment: 1 }
+    }
     if (datos.secciones !== undefined) cambios.secciones = datos.secciones ?? []
 
     // Un administrador siempre ve todo; el campo solo aplica a OPERADOR.

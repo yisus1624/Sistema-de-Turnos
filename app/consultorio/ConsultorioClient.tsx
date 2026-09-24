@@ -15,22 +15,34 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Info, WarningCircle } from '@phosphor-icons/react/dist/ssr'
 import { toast } from '@/components/ui/toast'
 import { esRechazoDeAcceso, hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { ResultadoDeCarga } from '@/lib/api/reintento'
-import { useCargaConReintento, useFechaQueSigueAHoy, useRecargaEnVivo, useUltimaPeticion } from '@/lib/hooks'
+import {
+  useCargaConReintento,
+  useComprobacionPeriodica,
+  useFechaQueSigueAHoy,
+  useRecargaEnVivo,
+  useUltimaPeticion,
+} from '@/lib/hooks'
 import { avisoDePacienteYaLlamado, llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
+import { MS_MAXIMO_POR_ACCION } from '@/lib/consultorio/tiempos'
 import { afectaALaFila } from '@/lib/realtime/canal'
-import { etiquetaDeRetroceso, resumenDelDia } from '@/lib/consultorio/presentacion'
+import {
+  cambioDeDoctor,
+  etiquetaDeRetroceso,
+  minutosParaVencer,
+  resumenDelDia,
+  type CambioDeDoctor,
+} from '@/lib/consultorio/presentacion'
 import type { PlanDeRetroceso } from '@/lib/turnos/reglas-retroceso'
-import { cn } from '@/lib/ui'
 import type { ItemAgendaProfesional, Modulo, Profesional, Servicio, Turno } from '@/lib/turnos/types'
 import { EncabezadoConsultorio } from './EncabezadoConsultorio'
 import { TarjetaPaciente } from './TarjetaPaciente'
 import { BotonesDeAtencion, type AccionDoctor } from './BotonesDeAtencion'
 import { AgendaDeHoy } from './AgendaDeHoy'
 import { ConfirmarRetroceso } from './ConfirmarRetroceso'
+import { Aviso, AvisoAPantallaCompleta, AvisoDeCambioDeDoctor, ComprobarDeNuevo } from './AvisosConsultorio'
 
 type Accion = AccionDoctor | null
 
@@ -41,71 +53,6 @@ type Accion = AccionDoctor | null
  * que ya muestra abajo es lo correcto.
  */
 const SIN_LOGIN = { sinRedirigirAlLogin: true } as const
-
-/**
- * Cuanto puede durar como maximo una accion antes de darla por perdida.
- *
- * El refresco automatico se salta mientras el doctor esta ejecutando una
- * accion, para no pisarle la pantalla a media operacion. Si una peticion se
- * queda colgada (la red se fue justo ahi) y nadie suelta esa marca, la pantalla
- * deja de actualizarse para el resto de la jornada. Pasado este tiempo se
- * libera y el refresco continua.
- */
-const MS_MAXIMO_POR_ACCION = 20000
-
-type TonoAviso = 'rojo' | 'ambar'
-
-const COLOR_AVISO: Record<TonoAviso, string> = {
-  rojo: 'bg-red-50 text-red-600',
-  ambar: 'bg-amber-50 text-amber-600',
-}
-
-function AvisoAPantallaCompleta({
-  tono,
-  titulo,
-  descripcion,
-}: {
-  tono: TonoAviso
-  titulo: string
-  descripcion: string
-}) {
-  return (
-    <main className="grid min-h-screen place-items-center bg-[var(--turnos-bg)] px-6 text-center">
-      <div className="max-w-md space-y-4">
-        <div className={cn('mx-auto grid h-16 w-16 place-items-center rounded-2xl', COLOR_AVISO[tono])}>
-          <WarningCircle size={32} weight="fill" />
-        </div>
-        <h1 className="text-xl font-semibold tracking-[-0.02em] text-brand-950">{titulo}</h1>
-        <p className="text-sm leading-6 text-slate-600">{descripcion}</p>
-      </div>
-    </main>
-  )
-}
-
-const TONO_AVISO = {
-  rojo: 'border-red-200 bg-red-50 text-red-800',
-  ambar: 'border-amber-200 bg-amber-50 text-amber-800',
-  azul: 'border-acento-100 bg-acento-50 text-acento-900',
-} as const
-
-/** Un aviso dentro de la pantalla, sobre las tarjetas. */
-function Aviso({
-  tono,
-  icono,
-  children,
-}: {
-  tono: keyof typeof TONO_AVISO
-  icono: 'alerta' | 'info'
-  children: React.ReactNode
-}) {
-  const Icono = icono === 'alerta' ? WarningCircle : Info
-  return (
-    <div role="status" className={cn('flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm leading-6', TONO_AVISO[tono])}>
-      <Icono size={20} weight="fill" className="mt-0.5 shrink-0" />
-      <span>{children}</span>
-    </div>
-  )
-}
 
 /*
   YA NO RECIBE EL TOKEN, Y NO PUEDE RECIBIRLO.
@@ -124,6 +71,10 @@ export default function ConsultorioClient() {
   const [sinConexion, setSinConexion] = useState(false)
 
   const [profesional, setProfesional] = useState<Profesional | null>(null)
+  // El doctor que esta pantalla ya mostraba, para darse cuenta si al recargar
+  // es otro (ver `cambioDeDoctor`); y el cambio, hasta que se lea el aviso.
+  const profesionalVisto = useRef<Profesional | null>(null)
+  const [doctorCambiado, setDoctorCambiado] = useState<CambioDeDoctor | null>(null)
   // El consultorio ASIGNADO en la agenda del hospital. No se elige aqui.
   const [consultorio, setConsultorio] = useState<Modulo | null>(null)
   const [servicio, setServicio] = useState<Servicio | null>(null)
@@ -133,6 +84,8 @@ export default function ConsultorioClient() {
   // Lo que haria "Retroceder" ahora mismo, tal como lo calcula el servidor.
   const [retroceso, setRetroceso] = useState<PlanDeRetroceso | null>(null)
   const [confirmandoRetroceso, setConfirmandoRetroceso] = useState(false)
+  // Minutos que le quedan al enlace, solo cuando ya toca avisar.
+  const [minutosDelEnlace, setMinutosDelEnlace] = useState<number | null>(null)
   // Siempre hoy: el doctor no elige dia. Pasa solo al siguiente a medianoche.
   const [fecha, setFecha] = useState(hoyEnColombia())
   useFechaQueSigueAHoy(setFecha)
@@ -166,8 +119,18 @@ export default function ConsultorioClient() {
         turnoActual: Turno | null
         agenda: ItemAgendaProfesional[]
         retroceso: PlanDeRetroceso | null
+        expiraEn?: string | null
       }>(`/api/consultorio?fecha=${fecha}`, { ...SIN_LOGIN, signal: recarga.signal })
       if (!recarga.esVigente()) return 'reemplazada'
+
+      // Otro doctor en la cookie (se abrio su enlace en este navegador): la
+      // pantalla se reinicia con lo suyo y se tapa con el aviso hasta leerlo.
+      const cambio = cambioDeDoctor(profesionalVisto.current, data.profesional)
+      profesionalVisto.current = data.profesional
+      if (cambio) {
+        setDoctorCambiado(cambio)
+        setConfirmandoRetroceso(false)
+      }
 
       setProfesional(data.profesional)
       setConsultorio(data.consultorio)
@@ -176,6 +139,7 @@ export default function ConsultorioClient() {
       setTurnoActual(data.turnoActual)
       setAgenda(data.agenda)
       setRetroceso(data.retroceso ?? null)
+      setMinutosDelEnlace(minutosParaVencer(data.expiraEn, Date.now()))
       setTokenInvalido(false)
       setSinConexion(false)
     } catch (error) {
@@ -187,7 +151,8 @@ export default function ConsultorioClient() {
       if (esRechazoDeAcceso(error)) setTokenInvalido(true)
       else setSinConexion(true)
       // Se relanza para que `useCargaConReintento` decida si reintentar: un
-      // fallo pasajero se reintenta solo; un enlace vencido, no.
+      // fallo pasajero se reintenta solo y enseguida; un rechazo no se martilla,
+      // lo vuelve a comprobar `useComprobacionPeriodica`, mas espaciado.
       throw error
     } finally {
       if (recarga.esVigente()) setCargando(false)
@@ -205,6 +170,25 @@ export default function ConsultorioClient() {
   useEffect(() => {
     void recargar()
   }, [cargarEstado, recargar])
+
+  /*
+    EL ENLACE RECHAZADO NO ES UN FINAL. Un 401 o un 403 tambien llegan por un
+    freno pasajero del servidor o por un intermediario (nginx, un WAF), y antes
+    la pantalla se quedaba en rojo, sin canal en vivo y sin volver a intentarlo,
+    hasta que alguien pulsara F5: todos los consultorios caidos por un rato de
+    rechazo. Ahora lo sigue comprobando sola; un enlace revocado de verdad sigue
+    rechazado y el aviso se queda.
+  */
+  useComprobacionPeriodica(tokenInvalido, recargar)
+  const [comprobando, setComprobando] = useState(false)
+  const comprobarAhora = async () => {
+    setComprobando(true)
+    try {
+      await recargar()
+    } finally {
+      setComprobando(false)
+    }
+  }
 
   const refrescarSiNoHayAccion = useCallback(() => {
     // No mientras el doctor esta ejecutando una accion: pisarle el estado a
@@ -265,14 +249,22 @@ export default function ConsultorioClient() {
     }
   }
 
+  // A QUIEN muestra esta pantalla. Viaja en cada accion: si en este navegador
+  // se abrio el enlace de otro doctor, la cookie ya es de ese otro y el
+  // servidor responde 409 sin tocar nada (ver `exigirMismoProfesional`).
+  const profesionalId = profesional?.id
+
   // Se manda el paciente que el doctor VE abierto: si el servidor ya habia
   // llamado a otro (se perdio la respuesta), no llama a nadie mas ni cierra a
   // ese paciente por detras; devuelve el real y la pantalla se pone al dia.
+  // El consultorio ya lo pone el servidor (el asignado); `moduloId` se sigue
+  // mandando solo para que un servidor de la version anterior, si se vuelve
+  // atras un despliegue, no rechace el llamado.
   const llamarSiguiente = () =>
     ejecutar('llamar', async () => {
       const desenlace = await llamarSiguienteDesde(
         '/api/consultorio/llamar-siguiente',
-        { moduloId },
+        { moduloId, profesionalId },
         { ...SIN_LOGIN, turnoVisto: turnoActual },
       )
       setTurnoActual(desenlace.turno)
@@ -290,7 +282,7 @@ export default function ConsultorioClient() {
       if (!turnoActual) return
       const { turno } = await pedir<{ turno: Turno }>(`/api/consultorio/turnos/${turnoActual.id}/repetir`, {
         method: 'POST', ...SIN_LOGIN,
-        body: JSON.stringify({ vecesLlamadoVisto: turnoActual.vecesLlamado }),
+        body: JSON.stringify({ vecesLlamadoVisto: turnoActual.vecesLlamado, profesionalId }),
       })
       setTurnoActual(turno)
       toast.info('Llamado repetido', turno.nombrePaciente ?? turno.codigo)
@@ -299,7 +291,11 @@ export default function ConsultorioClient() {
   const cerrarTurno = (tipo: 'atendido' | 'ausente') =>
     ejecutar(tipo, async () => {
       if (!turnoActual) return
-      await pedir(`/api/consultorio/turnos/${turnoActual.id}/${tipo}`, { method: 'POST', ...SIN_LOGIN })
+      await pedir(`/api/consultorio/turnos/${turnoActual.id}/${tipo}`, {
+        method: 'POST',
+        ...SIN_LOGIN,
+        body: JSON.stringify({ profesionalId }),
+      })
       toast[tipo === 'atendido' ? 'success' : 'warning'](
         tipo === 'atendido' ? 'Atencion finalizada' : 'Paciente ausente',
         turnoActual.nombrePaciente ?? turnoActual.codigo,
@@ -336,7 +332,11 @@ export default function ConsultorioClient() {
           {
             method: 'POST',
             ...SIN_LOGIN,
-            body: JSON.stringify({ turnoAbiertoId: plan.devolver?.id ?? null, restaurarId: plan.restaurar?.id ?? null }),
+            body: JSON.stringify({
+              turnoAbiertoId: plan.devolver?.id ?? null,
+              restaurarId: plan.restaurar?.id ?? null,
+              profesionalId,
+            }),
           },
         )
         // Se pinta ya lo que devolvio el servidor, sin esperar la recarga.
@@ -377,9 +377,15 @@ export default function ConsultorioClient() {
       <AvisoAPantallaCompleta
         tono="rojo"
         titulo="Este enlace ya no es valido"
-        descripcion="Puede que haya vencido o que se haya generado uno nuevo. Pide un enlace nuevo a la oficina de sistemas del hospital."
-      />
+        descripcion="Puede que haya vencido o que se haya generado uno nuevo. Si es asi, pide un enlace nuevo a la oficina de sistemas del hospital."
+      >
+        <ComprobarDeNuevo comprobando={comprobando} alComprobar={() => void comprobarAhora()} />
+      </AvisoAPantallaCompleta>
     )
+  }
+
+  if (doctorCambiado) {
+    return <AvisoDeCambioDeDoctor cambio={doctorCambiado} alContinuar={() => setDoctorCambiado(null)} />
   }
 
   // Sin datos y sin rechazo del servidor: el enlace sirve, lo que fallo fue la
@@ -408,6 +414,13 @@ export default function ConsultorioClient() {
           <Aviso tono="ambar" icono="alerta">
             Sin conexion con el servidor: lo que ves puede estar desactualizado. Se sigue intentando solo y se pone
             al dia en cuanto vuelva la conexion.
+          </Aviso>
+        ) : null}
+
+        {minutosDelEnlace !== null ? (
+          <Aviso tono="ambar" icono="alerta">
+            Tu enlace de acceso vence en {minutosDelEnlace} {minutosDelEnlace === 1 ? 'minuto' : 'minutos'}. Pide a
+            sistemas o a admisiones uno nuevo para no quedarte sin pantalla a media consulta.
           </Aviso>
         ) : null}
 

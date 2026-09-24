@@ -53,12 +53,16 @@ import { Badge } from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import ConfirmModal from '@/components/ui/ConfirmModal'
 import { Skeleton } from '@/components/ui/Loader'
+import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Seleccion } from '@/components/admin/Campos'
 import CargarReporteCitas from './CargarReporteCitas'
 import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
 import { celdaDeAgenda, instanteDeFranja, solicitudDeCita, type CeldaDeAgenda } from '@/lib/citas/cita-a-mano'
-import { useFechaQueSigueAHoy, useValorConRetraso } from '@/lib/hooks'
+import { useCargaConReintento, useFechaQueSigueAHoy, useRecargaEnVivo, useValorConRetraso } from '@/lib/hooks'
+import type { ResultadoDeCarga } from '@/lib/api/reintento'
+import { diaVecino, fechaLarga } from '@/lib/api/dia-elegido'
+import { esFechaValida } from '@/lib/turnos/tiempo'
 import type {
   BloqueHorario,
   CitaEnHorario,
@@ -77,17 +81,6 @@ function fechaYHora(iso: string) {
     minute: '2-digit',
     timeZone: 'America/Bogota',
   }).format(new Date(iso))
-}
-
-/** "14 de abril de 2025" — el dia escrito, que es como se dice en voz alta. */
-function fechaLarga(fecha: string) {
-  return new Intl.DateTimeFormat('es-CO', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'America/Bogota',
-  }).format(new Date(`${fecha}T12:00:00-05:00`))
 }
 
 /** Como se ve cada estado dentro de la agenda. */
@@ -270,19 +263,25 @@ export default function AgendaCitasClient() {
    */
   const diaPedidoRef = useRef('')
 
-  const cargar = useCallback(async (dia: string) => {
+  const [falloLaCarga, setFalloLaCarga] = useState(false)
+
+  const cargar = useCallback(async (dia: string): Promise<ResultadoDeCarga> => {
+    // Las recargas en vivo del mismo dia no tapan la parrilla con el esqueleto.
+    if (diaPedidoRef.current !== dia) setCargando(true)
     diaPedidoRef.current = dia
-    setCargando(true)
     try {
       const { horario: datos } = await pedir<{ horario: HorarioDia }>(
         `/api/turnos/agenda/horario?fecha=${dia}`,
       )
-      if (diaPedidoRef.current !== dia) return
+      if (diaPedidoRef.current !== dia) return 'reemplazada'
       setHorario(datos)
+      setFalloLaCarga(false)
     } catch (error) {
-      if (diaPedidoRef.current !== dia) return
-      toast.error('No se pudo cargar el horario', mensajeDeError(error))
-      setHorario(null)
+      if (diaPedidoRef.current !== dia) return 'reemplazada'
+      // Un fallo en una recarga en vivo no borra lo que ya se veia de ESE dia.
+      setHorario((previo) => (previo?.fecha === dia ? previo : null))
+      setFalloLaCarga(true)
+      throw error
     } finally {
       // Solo la consulta vigente apaga el indicador: si lo apagara una que
       // llego tarde, la pantalla diria "listo" con la siguiente aun en camino.
@@ -290,9 +289,13 @@ export default function AgendaCitasClient() {
     }
   }, [])
 
+  const cargarDiaElegido = useCallback(() => cargar(fecha), [cargar, fecha])
+  const recargarAgenda = useCargaConReintento(cargarDiaElegido)
+  useRecargaEnVivo(() => void recargarAgenda())
+
   useEffect(() => {
-    cargar(fecha)
-  }, [cargar, fecha])
+    void recargarAgenda()
+  }, [recargarAgenda, fecha])
 
   /**
    * Al cambiar de dia se vuelve a la jornada que toca por la hora.
@@ -410,19 +413,9 @@ export default function AgendaCitasClient() {
   // cada render la haria repintarse entera sin que nada haya cambiado.
   const mostrarSinCitas = useCallback(() => setVerSinCitas(true), [])
 
-  /**
-   * Un dia adelante o atras.
-   *
-   * Se calcula sobre la fecha en texto y a mediodia UTC, no con `new Date()`
-   * del navegador: partiendo de medianoche, un equipo configurado en otra zona
-   * saltaria dos dias o ninguno al sumar uno.
-   */
+  /** Un dia adelante o atras (ver `diaVecino`: nunca lanza con una fecha invalida). */
   const moverDia = useCallback((dias: number) => {
-    setFecha((actual) => {
-      const dia = new Date(`${actual}T12:00:00Z`)
-      dia.setUTCDate(dia.getUTCDate() + dias)
-      return dia.toISOString().slice(0, 10)
-    })
+    setFecha((actual) => diaVecino(actual, dias))
   }, [])
 
   async function agendar(evento: React.FormEvent) {
@@ -437,7 +430,7 @@ export default function AgendaCitasClient() {
       })
       toast.success('Cita agendada', `${nombre} a las ${celda.hora} con ${celda.profesionalNombre}.`)
       setCelda(null)
-      await cargar(fecha)
+      await recargarAgenda()
     } catch (error) {
       toast.error('No se pudo agendar', mensajeDeError(error))
     } finally {
@@ -461,7 +454,7 @@ export default function AgendaCitasClient() {
       setACancelar(null)
       setMotivoCancelar('')
       setDetalle(null)
-      await cargar(fecha)
+      await recargarAgenda()
     } catch (error) {
       toast.error('No se pudo cancelar', mensajeDeError(error))
     } finally {
@@ -574,7 +567,7 @@ export default function AgendaCitasClient() {
       )
       setAReprogramar(null)
       setDetalle(null)
-      await cargar(fecha)
+      await recargarAgenda()
     } catch (error) {
       toast.error('No se pudo reprogramar', mensajeDeError(error))
     } finally {
@@ -599,7 +592,11 @@ export default function AgendaCitasClient() {
             <input
               type="date"
               value={fecha}
-              onChange={(e) => setFecha(e.target.value)}
+              // Vacio mientras se corrige con Retroceso, o con año de cinco
+              // cifras: se ignora y queda la ultima fecha buena.
+              onChange={(e) => {
+                if (esFechaValida(e.target.value)) setFecha(e.target.value)
+              }}
               aria-label="Dia de la agenda"
               className="w-[8.5rem] border-0 bg-transparent p-0 text-sm font-semibold tabular-nums text-brand-950 outline-none"
             />
@@ -637,7 +634,7 @@ export default function AgendaCitasClient() {
             El boton vive junto al selector de fecha porque es lo primero que
             se hace al abrir, antes de mirar la agenda.
           */}
-          <CargarReporteCitas alTerminar={() => cargar(fecha)} />
+          <CargarReporteCitas alTerminar={() => recargarAgenda()} />
 
           {/*
             El filtro solo aparece cuando de verdad hace falta. Con cuatro
@@ -764,7 +761,22 @@ export default function AgendaCitasClient() {
             ))}
           </div>
         </div>
-      ) : !horario ? null : (
+      ) : !horario ? (
+        falloLaCarga ? (
+          <Card>
+            <EmptyState
+              icon={Warning}
+              title="No se pudo cargar el horario"
+              description="Revisa la conexion. Se sigue intentando solo; tambien puedes reintentar ahora."
+              action={
+                <Button variant="secondary" onClick={() => void recargarAgenda()}>
+                  Reintentar
+                </Button>
+              }
+            />
+          </Card>
+        ) : null
+      ) : (
         <div className="space-y-5">
           {esPasado ? (
             <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">

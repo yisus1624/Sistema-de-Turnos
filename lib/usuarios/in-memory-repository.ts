@@ -15,7 +15,7 @@
  *   TURNOS_ADMIN_USUARIO / TURNOS_ADMIN_PASSWORD
  *   TURNOS_OPERADOR_USUARIO / TURNOS_OPERADOR_PASSWORD
  */
-import { cifrarContrasena, cifrarContrasenaAlSembrar, contrasenaCoincide } from './contrasenas'
+import { cifrarContrasena, cifrarContrasenaAlSembrar, contrasenaCoincide, contrasenaCoincideSinDelatar } from './contrasenas'
 import { errorDeNegocio } from '@/lib/turnos/errores'
 import type { UsuarioRepository } from './repository'
 import type { DatosUsuario, RolUsuario, Usuario } from './types'
@@ -128,9 +128,9 @@ function buscarRegistro(id: string): RegistroUsuario {
 export class InMemoryUsuarioRepository implements UsuarioRepository {
   async verificarCredenciales(usuario: string, password: string): Promise<Usuario | null> {
     const registro = usuarios.find((u) => u.usuario === normalizarUsuario(usuario))
-    if (!registro || !registro.activo) return null
-    if (!(await contrasenaCoincide(password, registro.passwordHash))) return null
-    return sinPassword(registro)
+    const vigente = registro?.activo ? registro : null
+    if (!(await contrasenaCoincideSinDelatar(password, vigente?.passwordHash ?? null))) return null
+    return vigente ? sinPassword(vigente) : null
   }
 
   async buscarPorId(id: string): Promise<Usuario | null> {
@@ -174,7 +174,10 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
     if (datos.rol !== undefined) registro.rol = datos.rol
     if (datos.area !== undefined) registro.area = datos.area ?? null
     if (datos.activo !== undefined) registro.activo = datos.activo
-    if (datos.password) registro.passwordHash = await cifrarContrasena(datos.password)
+    if (datos.password) {
+      registro.passwordHash = await cifrarContrasena(datos.password)
+      registro.versionCredenciales = (registro.versionCredenciales ?? 0) + 1
+    }
     if (datos.secciones !== undefined) registro.secciones = normalizarSecciones(datos.secciones)
     // Un administrador siempre ve todo; el campo solo aplica a OPERADOR.
     if (registro.rol === 'ADMINISTRADOR') registro.secciones = null

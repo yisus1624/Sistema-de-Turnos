@@ -46,7 +46,9 @@ import { ordenAtencion, resumir, type PuestoEnLaFila } from './estadisticas'
 import { reunirActividad } from './actividad'
 import { modulosVisiblesEnPantalla, puestoDe } from './casillas'
 import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
+import { motivoQueImpideDesactivarModulo } from './reglas-catalogo'
 import { esConflictoPasajero, mensajeDeChoque } from './choques-unicos'
+import { mismoDocumento, normalizarDocumento } from './documento'
 import { CONFIGURACION_INICIAL } from './configuracion-inicial'
 import { esDisenoPantalla } from './types'
 import { CONFIGURACION_YA_CAMBIADA, exigirConfiguracionAlDia } from './configuracion-version'
@@ -361,7 +363,12 @@ async function conCupoRespaldado<T>(
   escribir: () => Promise<T>,
 ): Promise<T> {
   return conUnicidadRespaldada(
-    { [INDICE_CUPO_MANUAL]: cupoOcupado(nombreProfesional, horaCita) },
+    {
+      [INDICE_CUPO_MANUAL]: cupoOcupado(nombreProfesional, horaCita),
+      // El unico (dia, documento, doctor, hora) incluye las canceladas: volver
+      // a dar ese cupo al mismo paciente respondia 500.
+      citaDelDia: `Este paciente ya tiene registrada una cita con ${nombreProfesional} a las ${horaColombia(horaCita)} de ese dia (aunque este cancelada, se conserva en el historial). Elige otra hora.`,
+    },
     escribir,
   )
 }
@@ -493,8 +500,10 @@ const ABIERTOS = { in: [...ESTADOS_ABIERTOS] }
  * otro sin enterarse ninguno de los dos.
  *
  *   1. El modulo tiene que estar activo.
- *   2. Un doctor, solo en un consultorio de su servicio (o sin asignar); una
- *      ventanilla, solo filas compartidas y un modulo compatible.
+ *   2. Un doctor, en cualquier consultorio (un salon puede tener doctores de
+ *      varios servicios); CUAL es no lo elige la pantalla: la ruta del
+ *      consultorio pasa el asignado al doctor (`consultorioDelProfesional`).
+ *      Una ventanilla, solo filas compartidas y un modulo compatible.
  *   3. No puede haber OTRA persona atendiendo ahi en este momento (409).
  */
 async function validarModuloParaLlamar(modulo: FilaModulo, quien: SolicitudDeLlamado, ctx: Ctx) {
@@ -992,6 +1001,19 @@ function hashToken(token: string) {
 // ---------------------------------------------------------------------------
 
 /** Dias enteros de `desde` a `hasta`, los dos AAAA-MM-DD. */
+/**
+ * Ids de las citas de ese documento, comparando los DOS lados normalizados.
+ *
+ * Las citas hechas a mano antes de normalizar se guardaron tal cual se
+ * tecleo ("1.067.890.123") y no se reescriben: se encuentran igual porque la
+ * comparacion normaliza tambien lo guardado. Solo viajan id y documento de las
+ * citas que ya pasan los demas filtros (las de un dia, o las por venir).
+ */
+async function idsDelDocumento(documento: string, where: Prisma.CitaWhereInput): Promise<string[]> {
+  const candidatas = await prisma.cita.findMany({ where, select: { id: true, documentoPaciente: true } })
+  return candidatas.filter((cita) => mismoDocumento(cita.documentoPaciente, documento)).map((cita) => cita.id)
+}
+
 function diasEntre(desde: string, hasta: string): number {
   return Math.round((Date.parse(`${hasta}T00:00:00Z`) - Date.parse(`${desde}T00:00:00Z`)) / 86_400_000)
 }
@@ -1060,7 +1082,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
     const profesional = await exigirProfesional(datos.profesionalId)
     if (!profesional.activo) errorDeNegocio('El profesional esta inactivo.')
 
-    const documento = datos.documentoPaciente.trim()
+    const documento = normalizarDocumento(datos.documentoPaciente)
     const nombre = datos.nombrePaciente.trim()
     if (!documento) errorDeNegocio('Ingresa el documento del paciente.')
     if (!nombre) errorDeNegocio('Ingresa el nombre del paciente.')
@@ -1426,15 +1448,14 @@ export class PrismaTurnoRepository implements TurnoRepository {
    * de un dia que no es el suyo y le quemaria la cita.
    */
   async buscarCitasPorDocumento(documento: string, fecha?: string): Promise<Cita[]> {
-    const buscado = documento.trim()
+    const buscado = normalizarDocumento(documento)
     if (!buscado) return []
 
+    const ids = await idsDelDocumento(buscado, { estado: { not: 'CANCELADA' }, fecha: fecha ?? diaColombia(ahoraISO()) })
+    if (ids.length === 0) return []
+
     const filas = await prisma.cita.findMany({
-      where: {
-        documentoPaciente: buscado,
-        estado: { not: 'CANCELADA' },
-        fecha: fecha ?? diaColombia(ahoraISO()),
-      },
+      where: { id: { in: ids } },
       orderBy: { horaCita: 'asc' },
       include: { turnos: { select: { codigo: true }, orderBy: { fechaGeneracion: 'desc' }, take: 1 } },
     })
@@ -1452,15 +1473,14 @@ export class PrismaTurnoRepository implements TurnoRepository {
    * existe.
    */
   async otrasCitasDelPaciente(documento: string, fecha?: string): Promise<Cita[]> {
-    const buscado = documento.trim()
+    const buscado = normalizarDocumento(documento)
     if (!buscado) return []
 
+    const ids = await idsDelDocumento(buscado, { estado: 'PROGRAMADA', fecha: { gt: fecha ?? diaColombia(ahoraISO()) } })
+    if (ids.length === 0) return []
+
     const filas = await prisma.cita.findMany({
-      where: {
-        documentoPaciente: buscado,
-        estado: 'PROGRAMADA',
-        fecha: { gt: fecha ?? diaColombia(ahoraISO()) },
-      },
+      where: { id: { in: ids } },
       orderBy: { horaCita: 'asc' },
     })
     return filas.map(aCita)
@@ -2141,7 +2161,10 @@ export class PrismaTurnoRepository implements TurnoRepository {
     }
     if (datos.servicioId !== undefined) cambios.servicioId = datos.servicioId || null
     if (datos.activo !== undefined) {
-      if (datos.activo === false) await validarModuloSinPacienteDentro(id)
+      if (datos.activo === false) {
+        await validarModuloSinPacienteDentro(id)
+        await validarModuloSinDoctoresConPacientes(modulo)
+      }
       cambios.activo = datos.activo
     }
 
@@ -2212,8 +2235,10 @@ export class PrismaTurnoRepository implements TurnoRepository {
       // Las citas ya agendadas guardan el servicio: cambiarselo aqui las
       // dejaria apuntando al anterior. Es mas honesto pedir que se resuelva la
       // agenda primero que mover al doctor y dejar el dia torcido.
+      // De hoy en adelante: una inasistencia vieja se queda en PROGRAMADA para
+      // siempre y bloqueaba el cambio sin remedio.
       const conCitas = await prisma.cita.count({
-        where: { profesionalId: id, estado: 'PROGRAMADA' },
+        where: { profesionalId: id, estado: 'PROGRAMADA', fecha: { gte: diaColombia(ahoraISO()) } },
       })
       if (conCitas > 0) {
         const actual = await exigirServicio(profesional.servicioId)
@@ -2231,7 +2256,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
       if (datos.jornada !== 'COMPLETA') {
         const configuracion = await cargarConfiguracion()
         const citasFuturas = await prisma.cita.findMany({
-          where: { profesionalId: id, estado: 'PROGRAMADA' },
+          where: { profesionalId: id, estado: 'PROGRAMADA', fecha: { gte: diaColombia(ahoraISO()) } },
           select: { horaCita: true },
         })
         const quedanFuera = citasFuturas.filter(
@@ -2258,8 +2283,11 @@ export class PrismaTurnoRepository implements TurnoRepository {
       // ocupando su casilla en el televisor; y sus citas siguen ahi, asi que
       // admisiones puede meter a esos pacientes en la fila de un doctor que no
       // puede llamar a nadie.
+      // Solo los de HOY: nada cierra los turnos de otro dia (todo lo que cierra
+      // mira `pendientesDeHoy`), asi que uno que quedo LLAMADO ayer pedia
+      // "cierra su atencion" sin forma de hacerlo.
       const abiertos = await prisma.turno.count({
-        where: { profesionalId: id, estado: { in: ['EN_ESPERA', 'LLAMADO', 'EN_ATENCION'] } },
+        where: { profesionalId: id, fecha: diaColombia(ahoraISO()), estado: { in: ['EN_ESPERA', 'LLAMADO', 'EN_ATENCION'] } },
       })
       if (abiertos > 0) {
         errorDeNegocio(
@@ -2410,6 +2438,16 @@ export class PrismaTurnoRepository implements TurnoRepository {
     })
 
     return { acceso: aAcceso(acceso), token }
+  }
+
+  async expiracionDelAcceso(token: string): Promise<string | null> {
+    if (!token) return null
+    const acceso = await prisma.accesoProfesional.findUnique({
+      where: { tokenHash: hashToken(token) },
+      select: { expiraEn: true, revocadoEn: true },
+    })
+    if (!acceso || acceso.revocadoEn) return null
+    return acceso.expiraEn.toISOString()
   }
 
   async validarAccesoProfesional(token: string): Promise<Profesional | null> {
@@ -2692,6 +2730,32 @@ async function validarModuloSinPacienteDentro(moduloId: string) {
 }
 
 /**
+ * Un consultorio no se apaga si algun doctor asignado ahi tiene pacientes hoy
+ * (ver `motivoQueImpideDesactivarModulo`).
+ */
+async function validarModuloSinDoctoresConPacientes(modulo: FilaModulo) {
+  const hoy = diaColombia(ahoraISO())
+  const doctores = await prisma.profesional.findMany({
+    where: { moduloId: modulo.id, activo: true },
+    select: { id: true, nombre: true },
+  })
+  const conPacientes = await Promise.all(
+    doctores.map(async (doctor) => ({ nombre: doctor.nombre, pacientesHoy: await pacientesDeHoyDe(doctor.id, hoy) })),
+  )
+  const motivo = motivoQueImpideDesactivarModulo(modulo.nombre, conPacientes)
+  if (motivo) errorDeNegocio(motivo)
+}
+
+/** En espera hoy, mas los citados hoy que todavia no llegan. */
+async function pacientesDeHoyDe(profesionalId: string, hoy: string): Promise<number> {
+  const [enEspera, porLlegar] = await Promise.all([
+    prisma.turno.count({ where: { profesionalId, fecha: hoy, estado: 'EN_ESPERA' } }),
+    prisma.cita.count({ where: { profesionalId, fecha: hoy, estado: 'PROGRAMADA' } }),
+  ])
+  return enEspera + porLlegar
+}
+
+/**
  * Dos servicios no pueden llamarse igual, ni dos doctores.
  *
  * La base ya lo impide con un indice unico, pero reventar contra el indice no
@@ -2754,8 +2818,10 @@ async function validarCambioDeModoFila(servicio: FilaServicio, nuevoModo: Servic
       )
     }
 
+    // Solo citas VIVAS de hoy en adelante: las atendidas y las inasistencias
+    // viejas son historico, y pedir "cancelalas" seria imposible de cumplir.
     const citas = await prisma.cita.count({
-      where: { servicioId: servicio.id, estado: { not: 'CANCELADA' } },
+      where: { servicioId: servicio.id, estado: { in: ['PROGRAMADA', 'PRESENTADO'] }, fecha: { gte: diaColombia(ahoraISO()) } },
     })
     if (citas > 0) {
       errorDeNegocio(
@@ -2765,10 +2831,12 @@ async function validarCambioDeModoFila(servicio: FilaServicio, nuevoModo: Servic
     return
   }
 
+  // Solo los de HOY: los de otro dia ya no se llaman (ver `pendientesDeHoy`).
   const enFila = await prisma.turno.count({
     where: {
       servicioId: servicio.id,
       profesionalId: null,
+      fecha: diaColombia(ahoraISO()),
       estado: { in: ['EN_ESPERA', 'LLAMADO', 'EN_ATENCION'] },
     },
   })

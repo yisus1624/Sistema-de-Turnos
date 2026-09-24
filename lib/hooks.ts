@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import {
   MS_SILENCIO_MAXIMO,
@@ -13,6 +13,7 @@ import { crearUltimaPeticion, type UltimaPeticion } from '@/lib/api/ultima-petic
 import { crearLimitador, type Limitador } from '@/lib/api/limitador'
 import {
   cargarConReintento,
+  crearComprobacionPeriodica,
   crearReintento,
   esperaDeReintento,
   type Reintento,
@@ -21,6 +22,7 @@ import {
 import { fechaTrasCambioDeDia } from '@/lib/api/cambio-de-dia'
 import { hoyEnColombia, pedir } from '@/lib/api/cliente'
 import type { Modulo, Profesional, Servicio } from '@/lib/turnos/types'
+import { conRespaldo, type NombreDeCatalogo } from '@/lib/turnos/nombres-de-respaldo'
 
 /**
  * Devuelve `valor`, pero solo despues de `ms` sin que vuelva a cambiar.
@@ -126,6 +128,8 @@ export type ManejoDeCanal = {
   alConectar: () => void
   alPerderse: () => void
   alCambiarLosDatos: (evento: EventoTurno) => void
+  /** Volvio la red o el primer plano: recargar ya, sin esperar a que el canal reabra. */
+  alVolver?: () => void
 }
 
 /**
@@ -220,6 +224,7 @@ export function crearCanalEnVivo(manejo: ManejoDeCanal) {
    */
   const alVolverLaRed = () => {
     intentosFallidos = 0
+    manejo.alVolver?.()
     reconectar()
   }
   const alVolverAPrimerPlano = () => {
@@ -260,6 +265,7 @@ function engancharRecargaEnVivo(
       ultimo.current.alConectar?.()
     },
     alPerderse: () => avisarConexion('reconectando'),
+    alVolver: resincronizar,
     alCambiarLosDatos: (evento) => {
       ultimo.current.alEvento?.(evento)
       if (leInteresa(evento)) agrupador.rearmar()
@@ -408,6 +414,25 @@ export function useCargaConReintento(
   return recargar
 }
 
+/**
+ * Mientras `activo`, vuelve a llamar a `comprobar` cada tanto (ver
+ * `crearComprobacionPeriodica`), siempre con la `comprobar` mas reciente. Lo
+ * usa la pantalla del doctor con el enlace rechazado: un rechazo pasajero se
+ * recupera solo en vez de dejarla en rojo hasta que alguien pulse F5.
+ */
+export function useComprobacionPeriodica(activo: boolean, comprobar: () => Promise<unknown>) {
+  const ultima = useRef(comprobar)
+  useEffect(() => {
+    ultima.current = comprobar
+  })
+
+  useEffect(() => {
+    if (!activo) return
+    const comprobacion = crearComprobacionPeriodica(() => ultima.current())
+    return () => comprobacion.detener()
+  }, [activo])
+}
+
 /** Cada cuanto se mira si ya cambio el dia en Colombia. */
 const MS_REVISAR_CAMBIO_DE_DIA = 60_000
 
@@ -469,5 +494,30 @@ export function useCatalogosDeTurnos() {
     void recargar()
   }, [recargar])
 
-  return { servicios, modulos, profesionales, fallo }
+  const respaldo = useNombresDeRespaldo()
+  const nombres = useMemo(
+    () => ({
+      servicios: conRespaldo(servicios, respaldo.servicios),
+      modulos: conRespaldo(modulos, respaldo.modulos),
+      profesionales: conRespaldo(profesionales, respaldo.profesionales),
+    }),
+    [servicios, modulos, profesionales, respaldo],
+  )
+
+  return { servicios, modulos, profesionales, nombres, fallo }
+}
+
+type NombresDeRespaldo = Record<'servicios' | 'modulos' | 'profesionales', NombreDeCatalogo[]>
+const SIN_RESPALDO: NombresDeRespaldo = { servicios: [], modulos: [], profesionales: [] }
+
+/**
+ * Nombres de servicios, consultorios y medicos ya desactivados, para que un
+ * turno viejo no salga con "—". Si no se pueden traer se sigue como antes.
+ */
+export function useNombresDeRespaldo(): NombresDeRespaldo {
+  const [respaldo, setRespaldo] = useState<NombresDeRespaldo>(SIN_RESPALDO)
+  useEffect(() => {
+    pedir<NombresDeRespaldo>('/api/turnos/catalogo/nombres').then(setRespaldo, () => undefined)
+  }, [])
+  return respaldo
 }

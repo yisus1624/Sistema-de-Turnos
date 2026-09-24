@@ -25,6 +25,8 @@
  * paciente en admisiones y ponerlo en la fila del doctor correcto: documento,
  * nombre, hora, profesional, consultorio y procedimiento.
  */
+import { esFechaValida, instanteDeFranja } from '@/lib/turnos/tiempo'
+import { normalizarDocumento } from '@/lib/turnos/documento'
 
 /** Una cita del reporte, ya interpretada. */
 export interface FilaReporte {
@@ -59,6 +61,13 @@ export interface Referencia {
 }
 
 export interface ServicioDerivado {
+  /**
+   * Con lo que la carga reconoce este servicio carga tras carga
+   * (`Servicio.claveExterna`). Es FIJA, como la de consultorios y doctores:
+   * el administrador puede renombrar el servicio sin que la carga siguiente
+   * deje de encontrarlo o lo duplique.
+   */
+  clave: string
   nombre: string
   prefijo: string
 }
@@ -94,8 +103,12 @@ export interface ReporteLeido {
  * hace al paciente, y el consultorio como respaldo cuando el procedimiento
  * viene vacio.
  */
-export const SERVICIO_ODONTOLOGIA: ServicioDerivado = { nombre: 'Odontologia', prefijo: 'O' }
-export const SERVICIO_CONSULTA_EXTERNA: ServicioDerivado = { nombre: 'Consulta externa', prefijo: 'C' }
+export const SERVICIO_ODONTOLOGIA: ServicioDerivado = { clave: 'ODONTOLOGIA', nombre: 'Odontologia', prefijo: 'O' }
+export const SERVICIO_CONSULTA_EXTERNA: ServicioDerivado = {
+  clave: 'CONSULTA EXTERNA',
+  nombre: 'Consulta externa',
+  prefijo: 'C',
+}
 
 export function servicioDeLaCita(procedimiento: string, consultorio: string): ServicioDerivado {
   const texto = sinTildes(`${procedimiento} ${consultorio}`).toUpperCase()
@@ -129,13 +142,24 @@ export function claveDe(texto: string) {
 }
 
 /**
- * Fecha del reporte a dia AAAA-MM-DD.
+ * Fecha del reporte a dia AAAA-MM-DD, o `null` si no se reconoce o no existe.
  *
  * Llega como DD/MM/AAAA (formato colombiano) en el XML, y como celda de fecha
  * en el XLSX, que Excel entrega ya convertida. Se aceptan los dos, y tambien
  * AAAA-MM-DD por si algun dia cambian el formato del informe.
+ *
+ * SE COMPRUEBA QUE EL DIA EXISTA. Armar la cadena no basta: "32/09/2026" o
+ * "09/14/2026" (el mes primero) daban un dia imposible que reventaba al
+ * calcular el instante de la cita, y con el la carga entera; "31/02/2026" ni
+ * siquiera reventaba, y la cita quedaba guardada en un dia que no existe.
  */
 export function normalizarFecha(valor: unknown): string | null {
+  const candidata = fechaConForma(valor)
+  return candidata && esFechaValida(candidata) ? candidata : null
+}
+
+/** La fecha escrita como AAAA-MM-DD, exista ese dia o no. */
+function fechaConForma(valor: unknown): string | null {
   if (valor instanceof Date && !Number.isNaN(valor.getTime())) {
     // Excel entrega las fechas como medianoche UTC del dia que muestra la
     // celda. Se toma esa fecha tal cual y NO se convierte a Colombia: hacerlo
@@ -144,8 +168,6 @@ export function normalizarFecha(valor: unknown): string | null {
   }
 
   const texto = String(valor ?? '').trim()
-  if (!texto) return null
-
   const conBarras = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(texto)
   if (conBarras) {
     const [, dia, mes, ano] = conBarras
@@ -153,9 +175,7 @@ export function normalizarFecha(valor: unknown): string | null {
   }
 
   const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(texto)
-  if (iso) return iso[0].slice(0, 10)
-
-  return null
+  return iso ? iso[0].slice(0, 10) : null
 }
 
 /** Hora del reporte a "HH:MM". Acepta "07:00", "7:00" y "07:00:00". */
@@ -175,18 +195,6 @@ export function normalizarHora(valor: unknown): string | null {
   if (horas > 23 || minutos > 59) return null
 
   return `${String(horas).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`
-}
-
-/**
- * Instante de una cita, EN COLOMBIA.
- *
- * El desfase va escrito a mano (-05:00) y no se usa la zona del proceso:
- * Colombia no tiene horario de verano, y si el servidor esta en otra zona la
- * cita del hospital caeria en el dia equivocado. Es la misma regla que en
- * `lib/turnos/tiempo.ts`.
- */
-function instanteDeCita(fecha: string, hora: string) {
-  return new Date(`${fecha}T${hora}:00-05:00`).toISOString()
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +217,18 @@ export interface CamposCrudos {
 const texto = (valor: unknown) => normalizarEspacios(String(valor ?? ''))
 
 /**
+ * Por que no sirve la fecha de una fila.
+ *
+ * Se distingue la que no parece una fecha de la que tiene forma de fecha pero
+ * no existe: a esta ultima casi siempre le pasa que viene con el mes primero,
+ * y decirlo es lo que le ahorra al funcionario adivinar que corregir.
+ */
+function motivoDeFecha(valor: unknown) {
+  if (!fechaConForma(valor)) return `Fecha no reconocida: "${texto(valor)}".`
+  return `La fecha "${texto(valor)}" no existe en el calendario. El reporte debe traerla como dia/mes/año (DD/MM/AAAA).`
+}
+
+/**
  * Convierte una fila cruda en una cita, o dice por que no se puede.
  *
  * Devuelve el motivo en vez de lanzar: una fila mala no puede tumbar la carga
@@ -217,15 +237,15 @@ const texto = (valor: unknown) => normalizarEspacios(String(valor ?? ''))
  */
 export function interpretarFila(fila: number, crudo: CamposCrudos): FilaReporte | ErrorFila {
   const fecha = normalizarFecha(crudo.fecha)
-  if (!fecha) return { fila, motivo: `Fecha no reconocida: "${texto(crudo.fecha)}".` }
+  if (!fecha) return { fila, motivo: motivoDeFecha(crudo.fecha) }
 
   const hora = normalizarHora(crudo.hora)
   if (!hora) return { fila, motivo: `Hora no reconocida: "${texto(crudo.hora)}".` }
 
-  // Solo digitos: el reporte a veces trae el documento con puntos o espacios, y
-  // admisiones busca escribiendo el numero pelado. Si no coinciden caracter a
-  // caracter, el paciente esta en el sistema y aun asi "no aparece".
-  const documento = texto(crudo.documento).replace(/[^0-9A-Za-z]/g, '')
+  // Normalizado igual que al buscar: el reporte a veces trae el documento con
+  // puntos o espacios, y si no coinciden, el paciente esta en el sistema y aun
+  // asi "no aparece".
+  const documento = normalizarDocumento(texto(crudo.documento))
   if (!documento) return { fila, motivo: 'La fila no trae documento del paciente.' }
 
   const nombrePaciente = texto(crudo.nombrePaciente)
@@ -242,7 +262,9 @@ export function interpretarFila(fila: number, crudo: CamposCrudos): FilaReporte 
   return {
     fila,
     fecha,
-    horaCita: instanteDeCita(fecha, hora),
+    // En hora de Colombia, con el desfase escrito a mano: es la misma regla
+    // que usa toda la agenda.
+    horaCita: instanteDeFranja(fecha, hora),
     tipoDocumento: texto(crudo.tipoDocumento) || null,
     documentoPaciente: documento,
     nombrePaciente,
@@ -504,6 +526,24 @@ function esZip(datos: Uint8Array) {
 }
 
 /**
+ * Tope del .xlsx, mucho menor que el del archivo en general.
+ *
+ * ExcelJS abre el libro ENTERO en memoria y en el hilo principal, antes de
+ * poder contar filas: un Excel de 9,4 MB con 300 000 filas bloqueaba el
+ * servidor 9,5 s y pedia hasta 2 GB, con el televisor, los llamados y las
+ * llegadas sin responder. 2 MB alcanza para las 20 000 citas que se cargan de
+ * una vez (y el dia normal pesa unos KB); el XML, que se lee sin ExcelJS,
+ * conserva el tope de la ruta.
+ */
+export const MAXIMO_BYTES_XLSX = 2 * 1024 * 1024
+
+const MOTIVO_XLSX_GRANDE = `El Excel pesa mas de ${MAXIMO_BYTES_XLSX / 1024 / 1024} MB. Subelo por dias, o exporta el reporte como XML.`
+
+function soloUnError(motivo: string): ReporteLeido {
+  return { filas: [], errores: [{ fila: 0, motivo }], fechas: [] }
+}
+
+/**
  * Lee el reporte del hospital, sea cual sea de los dos formatos.
  *
  * SE MIRA EL CONTENIDO, NO LA EXTENSION. El servidor de informes exporta un
@@ -512,7 +552,8 @@ function esZip(datos: Uint8Array) {
  * hospital de verdad usa.
  */
 export async function leerReporteDelHospital(datos: Uint8Array): Promise<ReporteLeido> {
-  if (esZip(datos)) return leerXlsx(datos)
+  if (esZip(datos) && datos.length > MAXIMO_BYTES_XLSX) return soloUnError(MOTIVO_XLSX_GRANDE)
+  if (esZip(datos)) return leerConMotivo(() => leerXlsx(datos), MOTIVO_XLSX_DANADO)
 
   if (esExcelBinario(datos)) {
     return {
@@ -530,7 +571,24 @@ export async function leerReporteDelHospital(datos: Uint8Array): Promise<Reporte
 
   // El resto se trata como texto: el XML del servidor de informes.
   const contenido = new TextDecoder('utf-8').decode(datos).replace(/^\uFEFF/, '')
-  return leerReporteXml(contenido)
+  return leerConMotivo(async () => leerReporteXml(contenido), MOTIVO_XML_DANADO)
+}
+
+const MOTIVO_XLSX_DANADO =
+  'El archivo de Excel esta dañado o no se puede abrir. Vuelve a exportar el Reporte de citas asignadas e intentalo de nuevo.'
+const MOTIVO_XML_DANADO =
+  'El archivo XML esta dañado (trae caracteres que no se pueden leer). Vuelve a exportar el Reporte de citas asignadas e intentalo de nuevo.'
+
+/**
+ * Un archivo malformado es un error del archivo, no del sistema: se explica
+ * como tal (la ruta lo devuelve como 400) en vez de reventar con un 500.
+ */
+async function leerConMotivo(leer: () => Promise<ReporteLeido>, motivo: string): Promise<ReporteLeido> {
+  try {
+    return await leer()
+  } catch {
+    return soloUnError(motivo)
+  }
 }
 
 /**

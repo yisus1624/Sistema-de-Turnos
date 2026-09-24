@@ -95,8 +95,10 @@ test('dos doctores atienden a la vez en el mismo consultorio y cada uno sale en 
 
 test('no se puede llamar desde un consultorio desactivado', async () => {
   const { doctor, modulo } = await doctorConConsultorio()
-  await pacienteEnEspera(doctor.id, '10:30')
+  // Se apaga ANTES de que el doctor tenga pacientes hoy: con pacientes, ya no
+  // se deja apagar (ver `catalogo-datos-viejos.test.mjs`, 7d).
   await repo.actualizarModulo(modulo.id, { activo: false })
+  await pacienteEnEspera(doctor.id, '10:30')
 
   await assert.rejects(
     () =>
