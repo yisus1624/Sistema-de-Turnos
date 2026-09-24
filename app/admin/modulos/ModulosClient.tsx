@@ -287,7 +287,7 @@ export default function ModulosClient() {
         onConfirm={confirmarDesactivar}
         loading={desactivando}
         title={`Desactivar ${aDesactivar?.nombre ?? ''}`}
-        description="Deja de aparecer en la pantalla de la sala de espera y no se le podran asignar turnos. El historico no se pierde y se puede volver a activar cuando haga falta."
+        description="Deja de aparecer en la pantalla de la sala de espera y no se le podran asignar turnos. Los doctores asignados aqui no podran llamar pacientes: si alguno tiene pacientes hoy, primero asignale otro consultorio en Profesionales. El historico no se pierde y se puede volver a activar cuando haga falta."
         confirmLabel="Desactivar"
         danger
       />

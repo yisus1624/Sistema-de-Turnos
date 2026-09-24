@@ -62,6 +62,7 @@ import { ordenAtencion, resumir } from './estadisticas'
 import { reunirActividad } from './actividad'
 import { modulosVisiblesEnPantalla, puestoDe } from './casillas'
 import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
+import { motivoQueImpideDesactivarModulo, type DoctorDelConsultorio } from './reglas-catalogo'
 import { exigirConfiguracionAlDia, marcaSiguiente } from './configuracion-version'
 import {
   ETIQUETA_JORNADA,
@@ -426,7 +427,15 @@ function validarCambioDeModoFila(servicio: Servicio, nuevoModo: Servicio['modoFi
       )
     }
 
-    const citas = estado.citas.filter((c) => c.servicioId === servicio.id && c.estado !== 'CANCELADA')
+    // Solo citas VIVAS de hoy en adelante: las atendidas y las inasistencias
+    // viejas son historico, y pedir "cancelalas" seria imposible de cumplir.
+    const hoy = diaColombia(ahoraISO())
+    const citas = estado.citas.filter(
+      (c) =>
+        c.servicioId === servicio.id &&
+        (c.estado === 'PROGRAMADA' || c.estado === 'PRESENTADO') &&
+        diaColombia(c.horaCita) >= hoy,
+    )
     if (citas.length > 0) {
       errorDeNegocio(
         `${servicio.nombre} tiene ${citas.length} cita(s) agendada(s) que quedarian sin doctor. Atiendelas o cancelalas antes de pasarlo a ventanilla.`,
@@ -436,11 +445,14 @@ function validarCambioDeModoFila(servicio: Servicio, nuevoModo: Servicio['modoFi
   }
 
   // Hacia POR_PROFESIONAL: lo que estorba son los turnos que ya estan en la
-  // fila sin doctor, porque a partir del cambio solo se llama por doctor.
+  // fila sin doctor, porque a partir del cambio solo se llama por doctor. Solo
+  // los de HOY: los de otro dia ya no se llaman (ver `pendientesOrdenados`).
+  const hoy = diaColombia(ahoraISO())
   const enFila = estado.turnos.filter(
     (t) =>
       t.servicioId === servicio.id &&
       !t.profesionalId &&
+      diaColombia(t.fechaGeneracion) === hoy &&
       (t.estado === 'EN_ESPERA' || t.estado === 'LLAMADO' || t.estado === 'EN_ATENCION'),
   )
   if (enFila.length > 0) {
@@ -1803,6 +1815,8 @@ export class InMemoryTurnoRepository implements TurnoRepository {
             `No se puede desactivar: el turno ${abierto.codigo} esta siendo atendido ahi. Espera a que el doctor lo cierre.`,
           )
         }
+        const motivo = motivoQueImpideDesactivarModulo(modulo.nombre, doctoresDelConsultorio(modulo.id))
+        if (motivo) errorDeNegocio(motivo)
       }
       modulo.activo = datos.activo
     }
@@ -1863,9 +1877,9 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       // Las citas ya agendadas guardan el servicio: cambiarselo aqui las
       // dejaria apuntando al servicio anterior. Es mas honesto pedir que se
       // resuelva la agenda primero que mover al doctor y dejar el dia torcido.
-      const conCitas = estado.citas.some(
-        (c) => c.profesionalId === profesional.id && c.estado === 'PROGRAMADA',
-      )
+      // De hoy en adelante: una inasistencia vieja se queda en PROGRAMADA para
+      // siempre y bloqueaba el cambio sin remedio.
+      const conCitas = citasProgramadasDesdeHoy(profesional.id).length > 0
       if (conCitas) {
         errorDeNegocio(
           `${profesional.nombre} tiene citas programadas en ${buscarServicio(profesional.servicioId).nombre}. Atiendelas o cancelalas antes de cambiarle el servicio.`,
@@ -1879,9 +1893,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       // Cambiarle la jornada a un doctor que ya tiene pacientes citados los
       // dejaria fuera de su horario (aparecerian en "fuera de horario" y
       // nadie los llamaria). Se avisa en vez de moverlo callado.
-      const citasFuturas = estado.citas.filter(
-        (c) => c.profesionalId === profesional.id && c.estado === 'PROGRAMADA',
-      )
+      const citasFuturas = citasProgramadasDesdeHoy(profesional.id)
       if (citasFuturas.length > 0 && datos.jornada !== 'COMPLETA') {
         const quedanFuera = citasFuturas.filter(
           (c) => bloqueDeFranja(horaColombia(c.horaCita)) !== datos.jornada,
@@ -1914,9 +1926,13 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       //
       // Se avisa, igual que al cambiarle el servicio o la jornada, en vez de
       // dejar pacientes colgados en silencio.
+      // Solo los de HOY: nada cierra los turnos de otro dia, asi que uno que
+      // quedo LLAMADO ayer pedia "cierra su atencion" sin forma de hacerlo.
+      const hoy = diaColombia(ahoraISO())
       const abiertos = estado.turnos.filter(
         (t) =>
           t.profesionalId === profesional.id &&
+          diaColombia(t.fechaGeneracion) === hoy &&
           (t.estado === 'EN_ESPERA' || t.estado === 'LLAMADO' || t.estado === 'EN_ATENCION'),
       ).length
       if (abiertos > 0) {
@@ -1925,13 +1941,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
         )
       }
 
-      const hoy = diaColombia(ahoraISO())
-      const citasPendientes = estado.citas.filter(
-        (c) =>
-          c.profesionalId === profesional.id &&
-          c.estado === 'PROGRAMADA' &&
-          diaColombia(c.horaCita) >= hoy,
-      ).length
+      const citasPendientes = citasProgramadasDesdeHoy(profesional.id).length
       if (citasPendientes > 0) {
         errorDeNegocio(
           `${profesional.nombre} tiene ${citasPendientes} cita(s) programada(s) de hoy en adelante. Reubicalas o cancelalas antes de darlo de baja.`,
@@ -2175,6 +2185,26 @@ function validarPrefijoLibre(prefijo: string) {
   if (estado.servicios.some((s) => s.prefijo === normalizado)) {
     errorDeNegocio(`El prefijo ${normalizado} ya lo usa otro servicio.`)
   }
+}
+
+/** Las citas del doctor que siguen PROGRAMADA de hoy en adelante (no las inasistencias viejas). */
+function citasProgramadasDesdeHoy(profesionalId: string): Cita[] {
+  const hoy = diaColombia(ahoraISO())
+  return estado.citas.filter(
+    (c) => c.profesionalId === profesionalId && c.estado === 'PROGRAMADA' && diaColombia(c.horaCita) >= hoy,
+  )
+}
+
+/** Los doctores activos asignados al consultorio y sus pacientes de hoy (ver `motivoQueImpideDesactivarModulo`). */
+function doctoresDelConsultorio(moduloId: string): DoctorDelConsultorio[] {
+  const hoy = diaColombia(ahoraISO())
+  const enEspera = (id: string) =>
+    estado.turnos.filter((t) => t.profesionalId === id && t.estado === 'EN_ESPERA' && diaColombia(t.fechaGeneracion) === hoy).length
+  const porLlegar = (id: string) =>
+    estado.citas.filter((c) => c.profesionalId === id && c.estado === 'PROGRAMADA' && diaColombia(c.horaCita) === hoy).length
+  return estado.profesionales
+    .filter((p) => p.activo && p.moduloId === moduloId)
+    .map((p) => ({ nombre: p.nombre, pacientesHoy: enEspera(p.id) + porLlegar(p.id) }))
 }
 
 /** El turno que genero la cita (el ultimo, si hubiera mas de uno). */
