@@ -525,6 +525,24 @@ function esZip(datos: Uint8Array) {
 }
 
 /**
+ * Tope del .xlsx, mucho menor que el del archivo en general.
+ *
+ * ExcelJS abre el libro ENTERO en memoria y en el hilo principal, antes de
+ * poder contar filas: un Excel de 9,4 MB con 300 000 filas bloqueaba el
+ * servidor 9,5 s y pedia hasta 2 GB, con el televisor, los llamados y las
+ * llegadas sin responder. 2 MB alcanza para las 20 000 citas que se cargan de
+ * una vez (y el dia normal pesa unos KB); el XML, que se lee sin ExcelJS,
+ * conserva el tope de la ruta.
+ */
+export const MAXIMO_BYTES_XLSX = 2 * 1024 * 1024
+
+const MOTIVO_XLSX_GRANDE = `El Excel pesa mas de ${MAXIMO_BYTES_XLSX / 1024 / 1024} MB. Subelo por dias, o exporta el reporte como XML.`
+
+function soloUnError(motivo: string): ReporteLeido {
+  return { filas: [], errores: [{ fila: 0, motivo }], fechas: [] }
+}
+
+/**
  * Lee el reporte del hospital, sea cual sea de los dos formatos.
  *
  * SE MIRA EL CONTENIDO, NO LA EXTENSION. El servidor de informes exporta un
@@ -533,6 +551,7 @@ function esZip(datos: Uint8Array) {
  * hospital de verdad usa.
  */
 export async function leerReporteDelHospital(datos: Uint8Array): Promise<ReporteLeido> {
+  if (esZip(datos) && datos.length > MAXIMO_BYTES_XLSX) return soloUnError(MOTIVO_XLSX_GRANDE)
   if (esZip(datos)) return leerXlsx(datos)
 
   if (esExcelBinario(datos)) {
