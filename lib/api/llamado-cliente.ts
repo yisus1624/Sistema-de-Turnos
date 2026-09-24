@@ -31,7 +31,8 @@ const estaOcupado = (error: unknown) => error instanceof ErrorApi && error.statu
 
 export async function llamarSiguienteDesde(
   url: string,
-  cuerpo: Record<string, string>,
+  // Lo que no viene (undefined) no viaja: `JSON.stringify` lo omite.
+  cuerpo: Record<string, string | undefined>,
   opciones: OpcionesPedir & { turnoVisto: Turno | null; esperasSiOcupado?: readonly number[] },
 ): Promise<DesenlaceDelLlamado> {
   const { turnoVisto, esperasSiOcupado = ESPERAS_SI_OCUPADO_MS, ...init } = opciones

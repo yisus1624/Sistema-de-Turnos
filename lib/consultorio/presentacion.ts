@@ -1,10 +1,32 @@
 /**
  * Lo que la pantalla del doctor calcula para mostrarse, sin React, para poder
- * probarlo: iniciales del avatar, el documento legible, el resumen del dia y
- * como contar lo que va a hacer "Retroceder".
+ * probarlo: iniciales del avatar, el documento legible, el resumen del dia,
+ * como contar lo que va a hacer "Retroceder" y si cambio el doctor.
  */
-import type { ItemAgendaProfesional, Turno } from '@/lib/turnos/types'
+import type { ItemAgendaProfesional, Profesional, Turno } from '@/lib/turnos/types'
 import type { PlanDeRetroceso } from '@/lib/turnos/reglas-retroceso'
+
+/** De quien a quien paso la pantalla (ver `cambioDeDoctor`). */
+export interface CambioDeDoctor {
+  antes: string
+  ahora: string
+}
+
+type DoctorEnPantalla = Pick<Profesional, 'id' | 'nombre'>
+
+/**
+ * Si al recargar la pantalla pasa a ser de OTRO doctor, o null.
+ *
+ * Hay una sola cookie de consultorio por navegador: abrir en el mismo PC el
+ * enlace de otro doctor la cambia, y la pestaña que ya estaba abierta cargaba
+ * sus pacientes sin avisar. El doctor que seguia ahi veia pacientes ajenos como
+ * si fueran suyos y podia cerrarle a otro el que tenia adentro. La primera
+ * carga no es un cambio, ni lo es el mismo doctor con otro nombre.
+ */
+export function cambioDeDoctor(visto: DoctorEnPantalla | null, recibido: DoctorEnPantalla): CambioDeDoctor | null {
+  if (!visto || visto.id === recibido.id) return null
+  return { antes: visto.nombre, ahora: recibido.nombre }
+}
 
 /** "Ana Maria Ortega Ruiz" -> "AO": nombre y primer apellido. */
 export function iniciales(nombre?: string | null): string {

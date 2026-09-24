@@ -16,9 +16,27 @@
  * esta usando otra persona: una sola definicion para las tres cosas.
  */
 import { ConflictoDeTurno, errorDeNegocio } from './errores'
-import type { FiltroTurnoAbierto, Modulo, Servicio, SolicitudDeLlamado, Turno } from './types'
+import type { FiltroTurnoAbierto, Modulo, Profesional, Servicio, SolicitudDeLlamado, Turno } from './types'
 
 export type { SolicitudDeLlamado } from './types'
+
+/**
+ * Desde que consultorio llama un doctor: el que tiene ASIGNADO.
+ *
+ * Nunca el que diga la pantalla. El `moduloId` viajaba en el cuerpo y el
+ * servidor aceptaba cualquier consultorio activo: una pestaña con el enlace de
+ * otro doctor en la cookie llamaba a los pacientes de ese otro hacia la puerta
+ * equivocada. El doctor no elige consultorio en su pantalla, asi que no hay
+ * nada que leer del cuerpo; sin uno asignado, no llama en uno cualquiera.
+ */
+export function consultorioDelProfesional(profesional: Pick<Profesional, 'moduloId'>): string {
+  if (!profesional.moduloId) {
+    errorDeNegocio(
+      'No tienes consultorio asignado, asi que todavia no puedes llamar pacientes. Pide en admisiones o en sistemas que te lo asignen.',
+    )
+  }
+  return profesional.moduloId
+}
 
 export function alcanceDelLlamado(quien: SolicitudDeLlamado): FiltroTurnoAbierto {
   if (quien.profesionalId !== undefined) return { profesionalId: quien.profesionalId }

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
-import { errorConsultorio, requireProfesionalDelConsultorio } from '@/lib/turnos/acceso-consultorio'
+import { errorConsultorio, requireProfesionalDeLaPantalla } from '@/lib/turnos/acceso-consultorio'
 import { verificarTurnoDelProfesional } from '@/lib/turnos/acceso-consultorio-turno'
 import { registrarCierre } from '@/lib/turnos/rastro-llamado'
 import { EVENTOS } from '@/lib/seguridad/eventos'
@@ -8,7 +8,7 @@ import { EVENTOS } from '@/lib/seguridad/eventos'
 export async function POST(request: Request, context: { params: Promise<{ turnoId: string }> }) {
   try {
     const { turnoId } = await context.params
-    const profesional = await requireProfesionalDelConsultorio(request)
+    const { profesional } = await requireProfesionalDeLaPantalla(request)
     await verificarTurnoDelProfesional(turnoId, profesional.id)
 
     // El doctor entra por enlace y no tiene cuenta: queda su id de profesional

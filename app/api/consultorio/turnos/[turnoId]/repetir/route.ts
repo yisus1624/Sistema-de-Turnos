@@ -1,19 +1,19 @@
 import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
-import { errorConsultorio, requireProfesionalDelConsultorio } from '@/lib/turnos/acceso-consultorio'
+import { errorConsultorio, requireProfesionalDeLaPantalla } from '@/lib/turnos/acceso-consultorio'
 import { verificarTurnoDelProfesional } from '@/lib/turnos/acceso-consultorio-turno'
 import { registrarRepeticion } from '@/lib/turnos/rastro-llamado'
-import { cuerpoJson, repetirSchema } from '@/lib/validators/turnos'
+import { repetirSchema } from '@/lib/validators/turnos'
 
 export async function POST(request: Request, context: { params: Promise<{ turnoId: string }> }) {
   try {
     const { turnoId } = await context.params
-    const profesional = await requireProfesionalDelConsultorio(request)
+    const { profesional, cuerpo } = await requireProfesionalDeLaPantalla(request)
     await verificarTurnoDelProfesional(turnoId, profesional.id)
 
-    const cuerpo = repetirSchema.safeParse(await cuerpoJson(request))
+    const visto = repetirSchema.safeParse(cuerpo)
     const { turno, yaAplicada } = await turnoRepository.repetirLlamado(turnoId, {
-      vecesLlamadoVisto: cuerpo.success ? cuerpo.data?.vecesLlamadoVisto : undefined,
+      vecesLlamadoVisto: visto.success ? visto.data?.vecesLlamadoVisto : undefined,
     })
 
     // Se apunta aparte del primer llamado: un numero que se repite tres veces

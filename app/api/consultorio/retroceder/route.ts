@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { turnoRepository } from '@/lib/turnos/repositorio'
-import { errorConsultorio, requireProfesionalDelConsultorio } from '@/lib/turnos/acceso-consultorio'
+import { errorConsultorio, requireProfesionalDeLaPantalla } from '@/lib/turnos/acceso-consultorio'
 import { registrarCierre } from '@/lib/turnos/rastro-llamado'
 import { EVENTOS } from '@/lib/seguridad/eventos'
-import { cuerpoJson, turnoAbiertoIdSchema } from '@/lib/validators/turnos'
+import { turnoAbiertoIdSchema } from '@/lib/validators/turnos'
 
 /**
  * Lo que el doctor VEIA al pulsar "Retroceder": el paciente en atencion y el
@@ -20,9 +20,9 @@ const bodySchema = z.object({
 /** Retrocede al turno anterior (ver `lib/turnos/reglas-retroceso.ts`). */
 export async function POST(request: Request) {
   try {
-    const profesional = await requireProfesionalDelConsultorio(request)
+    const { profesional, cuerpo } = await requireProfesionalDeLaPantalla(request)
 
-    const parsed = bodySchema.safeParse(await cuerpoJson(request))
+    const parsed = bodySchema.safeParse(cuerpo)
     if (!parsed.success) {
       return NextResponse.json({ error: 'Esta pantalla esta desactualizada. Recarga la pagina.' }, { status: 400 })
     }

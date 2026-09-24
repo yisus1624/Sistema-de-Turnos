@@ -41,6 +41,15 @@ export function idDeTurnoValido(id: string): string {
   return leido.data
 }
 
+/**
+ * El profesional que MUESTRA la pantalla del consultorio (ver
+ * `exigirMismoProfesional`). Opcional a proposito: las pestañas abiertas con el
+ * codigo de antes no lo mandan y tienen que seguir funcionando hasta que
+ * recarguen. El valor se compara tal cual con el de la cookie, asi que no hace
+ * falta acotarlo: cualquier otra cosa simplemente no coincide.
+ */
+export const profesionalVistoSchema = z.object({ profesionalId: z.unknown() })
+
 /** Cuerpo de "Repetir": el conteo que tenia la pantalla. Ver `decidirRepeticion`. */
 export const repetirSchema = z
   .object({ vecesLlamadoVisto: z.number().int().min(0).max(10_000).optional() })
