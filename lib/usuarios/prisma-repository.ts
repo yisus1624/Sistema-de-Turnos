@@ -13,7 +13,7 @@
  * (`lib/hospital/README.md`); cuando lo haga se escribe el adaptador y la UI
  * no cambia, porque las tres implementaciones cumplen el mismo contrato.
  */
-import { cifrarContrasena, contrasenaCoincide } from './contrasenas'
+import { cifrarContrasena, contrasenaCoincide, contrasenaCoincideSinDelatar } from './contrasenas'
 import { prisma } from '@/lib/prisma'
 import { errorDeNegocio } from '@/lib/turnos/errores'
 import type { UsuarioRepository } from './repository'
@@ -74,9 +74,9 @@ const CAMPOS_PUBLICOS = {
 export class PrismaUsuarioRepository implements UsuarioRepository {
   async verificarCredenciales(usuario: string, password: string): Promise<Usuario | null> {
     const registro = await prisma.usuario.findUnique({ where: { usuario: normalizarUsuario(usuario) } })
-    if (!registro || !registro.activo) return null
-    if (!(await contrasenaCoincide(password, registro.passwordHash))) return null
-    return aUsuario(registro)
+    const vigente = registro?.activo ? registro : null
+    if (!(await contrasenaCoincideSinDelatar(password, vigente?.passwordHash ?? null))) return null
+    return vigente ? aUsuario(vigente) : null
   }
 
   async buscarPorId(id: string): Promise<Usuario | null> {
