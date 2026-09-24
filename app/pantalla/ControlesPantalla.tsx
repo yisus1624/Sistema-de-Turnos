@@ -15,10 +15,26 @@
  * conexion caida se ve exactamente igual que una sala sin pacientes.
  */
 
-import { CornersIn, CornersOut, SpeakerHigh, SpeakerX } from '@phosphor-icons/react/dist/ssr'
+import { useEffect, useState } from 'react'
+import { CornersIn, CornersOut, SpeakerHigh, SpeakerX, WifiSlash } from '@phosphor-icons/react/dist/ssr'
 import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import type { EstadoConexionEnVivo } from '@/lib/hooks'
 import type { AvisoDeSonido } from '@/lib/turnos/pantalla-tv'
+
+/** Tras este tiempo reconectando, lo que se ve ya no es de fiar y se dice en grande. */
+const MS_AVISO_SIN_CONEXION = 30_000
+
+/** Si la conexion lleva mas de `MS_AVISO_SIN_CONEXION` en "reconectando". */
+function useSinConexionProlongada(conexion: EstadoConexionEnVivo): boolean {
+  const [prolongada, setProlongada] = useState(false)
+  useEffect(() => {
+    setProlongada(false)
+    if (conexion !== 'reconectando') return
+    const id = setTimeout(() => setProlongada(true), MS_AVISO_SIN_CONEXION)
+    return () => clearTimeout(id)
+  }, [conexion])
+  return prolongada
+}
 
 type ControlesPantallaProps = {
   conexion: EstadoConexionEnVivo
@@ -60,9 +76,36 @@ export default function ControlesPantalla({
     tono === 'oscuro'
       ? 'bg-white/70 text-slate-600 hover:bg-white'
       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+  const sinConexionProlongada = useSinConexionProlongada(conexion)
 
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
+      {sinConexionProlongada ? (
+        /*
+          Una franja arriba, de lado a lado: el semaforo pequeño no basta cuando
+          la sala lleva rato sin recibir llamados y nadie mira los mandos.
+        */
+        <div
+          role="alert"
+          className="fixed inset-x-0 top-0 z-50 flex items-center justify-center gap-3 bg-red-700 px-4 py-3 text-xl font-bold text-white"
+        >
+          <WifiSlash size="1.5rem" weight="bold" aria-hidden="true" />
+          Sin conexión: los turnos pueden no estar al día
+        </div>
+      ) : null}
+      {!sonidoActivo ? (
+        /*
+          El mudo del televisor queda recordado para siempre: sin esta marca,
+          una sala silenciada se veia igual que una que suena.
+        */
+        <span
+          role="status"
+          className="flex h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-amber-100 px-4 text-sm font-bold text-amber-900"
+        >
+          <SpeakerX size="1.25rem" weight="bold" aria-hidden="true" />
+          SALA EN SILENCIO
+        </span>
+      ) : null}
       {avisoSonido ? (
         /*
           Visible pero sin tapar nada: una pastilla ambar junto a los mandos.
