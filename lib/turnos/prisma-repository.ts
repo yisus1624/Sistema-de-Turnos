@@ -2440,6 +2440,16 @@ export class PrismaTurnoRepository implements TurnoRepository {
     return { acceso: aAcceso(acceso), token }
   }
 
+  async expiracionDelAcceso(token: string): Promise<string | null> {
+    if (!token) return null
+    const acceso = await prisma.accesoProfesional.findUnique({
+      where: { tokenHash: hashToken(token) },
+      select: { expiraEn: true, revocadoEn: true },
+    })
+    if (!acceso || acceso.revocadoEn) return null
+    return acceso.expiraEn.toISOString()
+  }
+
   async validarAccesoProfesional(token: string): Promise<Profesional | null> {
     if (!token) return null
 

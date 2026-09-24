@@ -77,3 +77,16 @@ export function etiquetaDeRetroceso(plan: PlanDeRetroceso | null): string | null
   if (plan.restaurar) return `Volver a ${plan.restaurar.codigo}`
   return plan.devolver ? `Devolver ${plan.devolver.codigo} a la fila` : null
 }
+
+/** Desde cuantos minutos antes de vencer se le avisa al doctor. */
+export const MINUTOS_DE_AVISO_DE_VENCIMIENTO = 30
+
+/**
+ * Minutos que le quedan al enlace, solo si ya toca avisar; `null` si falta
+ * mas o no se sabe (un servidor viejo que no manda `expiraEn`).
+ */
+export function minutosParaVencer(expiraEn: string | null | undefined, ahora: number): number | null {
+  if (!expiraEn) return null
+  const minutos = Math.max(0, Math.ceil((new Date(expiraEn).getTime() - ahora) / 60000))
+  return minutos <= MINUTOS_DE_AVISO_DE_VENCIMIENTO ? minutos : null
+}

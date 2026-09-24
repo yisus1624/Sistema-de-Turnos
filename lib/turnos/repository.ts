@@ -347,6 +347,11 @@ export interface TurnoRepository {
    */
   validarAccesoProfesional(token: string): Promise<Profesional | null>
   /**
+   * Cuando vence el enlace de este token (ISO), o `null` si no existe o fue
+   * revocado. Solo lee: no apunta uso ni limpia nada.
+   */
+  expiracionDelAcceso(token: string): Promise<string | null>
+  /**
    * El token EN CLARO del enlace vigente de un doctor, o `null` si no tiene
    * ninguno vivo (o si su copia cifrada ya no se puede leer).
    *

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { turnoRepository } from '@/lib/turnos/repositorio'
-import { errorConsultorio, requireProfesionalDelConsultorio } from '@/lib/turnos/acceso-consultorio'
+import { errorConsultorio, requireProfesionalDelConsultorio, tokenDeLaPeticion } from '@/lib/turnos/acceso-consultorio'
 import { diaColombia } from '@/lib/turnos/tiempo'
 
 
@@ -35,7 +35,7 @@ export async function GET(request: Request) {
     // `retroceso` es lo que haria el boton "Retroceder" ahora mismo: la
     // pantalla lo muestra antes de confirmar y lo devuelve al pulsar, para que
     // el servidor solo haga ESE retroceso.
-    const [modulos, servicios, pendientes, turnoActual, agenda, retroceso] = await Promise.all([
+    const [modulos, servicios, pendientes, turnoActual, agenda, retroceso, expiraEn] = await Promise.all([
       // Todos, activos o no: el consultorio del doctor puede ser de otro
       // servicio ("consultorio general") y aun asi hay que decir cual es.
       turnoRepository.listarModulos(undefined, true),
@@ -44,12 +44,14 @@ export async function GET(request: Request) {
       turnoRepository.turnoAbierto({ profesionalId: profesional.id }, hoy),
       turnoRepository.agendaProfesional(profesional.id, fecha),
       turnoRepository.planDeRetroceso(profesional.id),
+      // Para avisar al doctor antes de que el enlace se le venza a media consulta.
+      turnoRepository.expiracionDelAcceso(tokenDeLaPeticion(request)),
     ])
 
     const consultorio = modulos.find((m) => m.id === profesional.moduloId) ?? null
     const servicio = servicios.find((s) => s.id === profesional.servicioId) ?? null
 
-    return NextResponse.json({ profesional, consultorio, servicio, pendientes, turnoActual, agenda, retroceso, fecha })
+    return NextResponse.json({ profesional, consultorio, servicio, pendientes, turnoActual, agenda, retroceso, fecha, expiraEn })
   } catch (error) {
     return errorConsultorio(error)
   }

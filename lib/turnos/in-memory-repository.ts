@@ -2059,6 +2059,13 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     return { acceso: accesoPublico, token }
   }
 
+  async expiracionDelAcceso(token: string): Promise<string | null> {
+    if (!token) return null
+    const hash = hashToken(token)
+    const acceso = estado.accesosProfesional.find((a) => a.tokenHash === hash && !a.revocadoEn)
+    return acceso?.expiraEn ?? null
+  }
+
   async validarAccesoProfesional(token: string): Promise<Profesional | null> {
     if (!token) return null
     const hash = hashToken(token)

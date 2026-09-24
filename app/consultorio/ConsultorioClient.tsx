@@ -28,7 +28,13 @@ import {
 import { avisoDePacienteYaLlamado, llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
 import { MS_MAXIMO_POR_ACCION } from '@/lib/consultorio/tiempos'
 import { afectaALaFila } from '@/lib/realtime/canal'
-import { cambioDeDoctor, etiquetaDeRetroceso, resumenDelDia, type CambioDeDoctor } from '@/lib/consultorio/presentacion'
+import {
+  cambioDeDoctor,
+  etiquetaDeRetroceso,
+  minutosParaVencer,
+  resumenDelDia,
+  type CambioDeDoctor,
+} from '@/lib/consultorio/presentacion'
 import type { PlanDeRetroceso } from '@/lib/turnos/reglas-retroceso'
 import type { ItemAgendaProfesional, Modulo, Profesional, Servicio, Turno } from '@/lib/turnos/types'
 import { EncabezadoConsultorio } from './EncabezadoConsultorio'
@@ -78,6 +84,8 @@ export default function ConsultorioClient() {
   // Lo que haria "Retroceder" ahora mismo, tal como lo calcula el servidor.
   const [retroceso, setRetroceso] = useState<PlanDeRetroceso | null>(null)
   const [confirmandoRetroceso, setConfirmandoRetroceso] = useState(false)
+  // Minutos que le quedan al enlace, solo cuando ya toca avisar.
+  const [minutosDelEnlace, setMinutosDelEnlace] = useState<number | null>(null)
   // Siempre hoy: el doctor no elige dia. Pasa solo al siguiente a medianoche.
   const [fecha, setFecha] = useState(hoyEnColombia())
   useFechaQueSigueAHoy(setFecha)
@@ -111,6 +119,7 @@ export default function ConsultorioClient() {
         turnoActual: Turno | null
         agenda: ItemAgendaProfesional[]
         retroceso: PlanDeRetroceso | null
+        expiraEn?: string | null
       }>(`/api/consultorio?fecha=${fecha}`, { ...SIN_LOGIN, signal: recarga.signal })
       if (!recarga.esVigente()) return 'reemplazada'
 
@@ -130,6 +139,7 @@ export default function ConsultorioClient() {
       setTurnoActual(data.turnoActual)
       setAgenda(data.agenda)
       setRetroceso(data.retroceso ?? null)
+      setMinutosDelEnlace(minutosParaVencer(data.expiraEn, Date.now()))
       setTokenInvalido(false)
       setSinConexion(false)
     } catch (error) {
@@ -404,6 +414,13 @@ export default function ConsultorioClient() {
           <Aviso tono="ambar" icono="alerta">
             Sin conexion con el servidor: lo que ves puede estar desactualizado. Se sigue intentando solo y se pone
             al dia en cuanto vuelva la conexion.
+          </Aviso>
+        ) : null}
+
+        {minutosDelEnlace !== null ? (
+          <Aviso tono="ambar" icono="alerta">
+            Tu enlace de acceso vence en {minutosDelEnlace} {minutosDelEnlace === 1 ? 'minuto' : 'minutos'}. Pide a
+            sistemas o a admisiones uno nuevo para no quedarte sin pantalla a media consulta.
           </Aviso>
         ) : null}
 
