@@ -7,6 +7,8 @@
  * en un dia que el operador no habia elegido.
  */
 
+
+
 /** La franja elegida en la parrilla: de que dia, con que doctor y a que hora. */
 export type CeldaDeAgenda = {
   fecha: string
