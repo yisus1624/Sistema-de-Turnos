@@ -1217,7 +1217,7 @@ function JornadaEnColumnas({
             </p>
             <p className="mt-0.5 text-sm leading-6 text-slate-500">
               {sinFranjas
-                ? 'Las horas configuradas para esta jornada no dejan espacio para ninguna consulta. Revisalas en Pantalla y audio.'
+                ? 'Las horas configuradas para esta jornada no dejan espacio para ninguna consulta. Revisalas en Ajustes.'
                 : filtrando
                   ? 'En esta jornada no hay doctores que coincidan con lo que buscas. Prueba con otro nombre o quita el filtro.'
                   : ocultandoSinCitas

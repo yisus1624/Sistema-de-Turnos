@@ -105,7 +105,7 @@ test('registrar la llegada avisa en vivo a la fila del profesional', async () =>
 
   const eventos = await eventosDurante(async () => {
     const { turno } = await repo.registrarLlegada(cita.id)
-    avisarFilaCambiada(turno)
+    await avisarFilaCambiada(turno)
   })
 
   const aviso = eventos.find((evento) => evento.tipo === 'fila.cambiada')
@@ -119,7 +119,7 @@ test('el aviso de llegada no lleva ningun dato del paciente', async () => {
 
   const eventos = await eventosDurante(async () => {
     const { turno } = await repo.registrarLlegada(cita.id)
-    avisarFilaCambiada(turno)
+    await avisarFilaCambiada(turno)
   })
 
   const aviso = eventos.find((evento) => evento.tipo === 'fila.cambiada')
@@ -141,7 +141,7 @@ test('un turno de ventanilla avisa la fila del servicio, sin profesional', async
 
   const eventos = await eventosDurante(async () => {
     const turno = await repo.generarTurnoDeVentanilla(servicio.id)
-    avisarFilaCambiada(turno)
+    await avisarFilaCambiada(turno)
   })
 
   const aviso = eventos.find((evento) => evento.tipo === 'fila.cambiada')

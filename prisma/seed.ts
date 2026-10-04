@@ -86,6 +86,41 @@ async function sembrarCuenta(params: {
 }
 
 /**
+ * La cuenta de DEMOSTRACION, para mostrar el sistema y la simulacion de carga.
+ *
+ * Trabaja sobre el hospital de prueba en memoria (`lib/demostracion/mundo.ts`):
+ * no ve ni un dato real y lo que escribe directo en la base le esta cerrado
+ * (`exigirCuentaReal`). Por eso, a diferencia de las otras dos, su clave puede
+ * ser corta y conocida: lo peor que deja hacer es jugar con pacientes
+ * inventados. Si hace falta, se cambia con TURNOS_DEMO_PASSWORD.
+ *
+ * Se crea solo si no existe NINGUNA cuenta con ese nombre: una cuenta real que
+ * se llamara igual nunca se convierte en demostracion por correr el seed.
+ */
+async function sembrarCuentaDeDemostracion() {
+  const usuario = (process.env.TURNOS_DEMO_USUARIO ?? 'demo1').trim().toLowerCase()
+  const existente = await prisma.usuario.findUnique({ where: { usuario }, select: { esDemostracion: true } })
+  if (existente) {
+    console.log(`usuario "${usuario}": ya existe${existente.esDemostracion ? '' : ' (y NO es de demostracion)'}, no se toca`)
+    return
+  }
+
+  await prisma.usuario.create({
+    data: {
+      nombre: 'Cuenta de demostracion',
+      usuario,
+      passwordHash: await cifrarContrasena(process.env.TURNOS_DEMO_PASSWORD?.trim() || 'demo1'),
+      rol: 'ADMINISTRADOR',
+      area: 'Demostracion',
+      activo: true,
+      secciones: [],
+      esDemostracion: true,
+    },
+  })
+  console.log(`usuario "${usuario}": creado (cuenta de demostracion)`)
+}
+
+/**
  * Longitud minima exigida a una contrasena semilla en produccion.
  *
  * Doce, no las ocho que pide la pantalla de usuarios: estas dos cuentas no son
@@ -170,6 +205,8 @@ async function main() {
     rol: 'OPERADOR',
     area: 'Admisiones',
   })
+
+  await sembrarCuentaDeDemostracion()
 }
 
 main()

@@ -10,7 +10,7 @@
  * cliente no podria notar que dejaron de llegar, que es justo como se detecta
  * una conexion muerta en silencio.
  */
-import { realtimeHub } from '@/lib/realtime/hub'
+import { mundoActual } from '@/lib/demostracion/mundo'
 import { ocuparPlaza, tocaAnotarElRechazo, type MotivoDeRechazo } from '@/lib/realtime/aforo'
 import { abrirConexionEnVivo } from '@/lib/realtime/conexion'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
@@ -61,9 +61,12 @@ export async function GET() {
     return canalLleno()
   }
 
+  // El canal del mundo de la peticion: la sesion de demostracion escucha el de
+  // la demostracion, y un televisor sin sesion el de las salas reales.
+  const { hub } = await mundoActual()
   const stream = abrirConexionEnVivo({
     plaza: reserva.plaza,
-    suscribir: (oyente) => realtimeHub.subscribe(oyente),
+    suscribir: (oyente) => hub.subscribe(oyente),
   })
 
   return new Response(stream, {

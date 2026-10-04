@@ -1,42 +1,56 @@
 /**
- * Cambiar LA PROPIA contrasena, con la actual por delante.
+ * El ADMINISTRADOR cambia SU usuario y/o SU contrasena, con la actual por
+ * delante.
  *
- * POR QUE EXISTE APARTE DE /api/usuarios/[id]. Esa ruta es administracion de
- * cuentas: exige la seccion `/admin/usuarios` y sirve para RESTABLECER la clave
- * de otro. Mientras esa fuera la unica forma de cambiar una contrasena, el
- * administrador tenia que conocer la clave nueva de todo el personal para
- * entregarsela, asi que las credenciales de la gente pasaban por un tercero y
- * lo que el registro dice de un turno llamado deja de ser atribuible con
- * seguridad. Aqui no hace falta ninguna seccion —solo tener sesion— y no se
- * puede tocar la cuenta de nadie mas: el id sale de la sesion, nunca del
+ * SOLO EL ADMINISTRADOR (decision del hospital). Las cuentas de los operadores
+ * las maneja el administrador desde Usuarios (`/api/usuarios/[id]`): ahi les
+ * cambia el nombre de entrada o les restablece la clave. Un operador que
+ * llegue hasta aqui recibe 403, y la cuenta de demostracion tambien: su
+ * usuario y su clave son los que se reparten para mostrar el sistema.
+ *
+ * No se puede tocar la cuenta de nadie mas: el id sale de la sesion, nunca del
  * cuerpo de la peticion.
  *
  * Y SE EXIGE LA CONTRASENA ACTUAL porque una sesion abierta es cosa corriente
  * en un mostrador: un equipo desatendido, con una pantalla que cambiara la
- * clave sin pedir nada, es una cuenta regalada.
+ * clave o el usuario sin pedir nada, es una cuenta regalada.
  */
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { usuarioRepository } from '@/lib/usuarios/repositorio'
-import { apiError, requireSession } from '@/lib/permissions/session'
+import { apiError, exigirCuentaReal, requireRol } from '@/lib/permissions/session'
 import { contextoPeticion, limitarIntentos, limpiarIntentos } from '@/lib/seguridad/registro'
 import { registrarApuntes } from '@/lib/seguridad/apuntar'
-import { apunteDeContrasenaPropia } from '@/lib/usuarios/auditoria'
+import { apunteDeContrasenaPropia, apunteDeRenombradoFallido, apuntesDeEdicion } from '@/lib/usuarios/auditoria'
 import type { Usuario } from '@/lib/usuarios/types'
 
 /**
- * Minimo de 8 caracteres, el mismo que pide la pantalla de usuarios.
- *
- * Se queda igual a proposito: una cuenta no puede quedar mas debil por el
- * camino que se use para cambiarle la clave.
+ * Minimo de 8 caracteres, el mismo que pide la pantalla de usuarios; y el
+ * usuario con las mismas reglas que al crearlo (ver `/api/usuarios`).
  */
-const cambioSchema = z.object({
-  // Con el mismo tope que el inicio de sesion (ver `loginSchema`): bcrypt en el
-  // servidor, y una contrasena de megas es trabajo gratis para quien quiera
-  // cansarlo.
-  actual: z.string().min(1, 'Escribe tu contrasena actual.').max(200, 'La contrasena es demasiado larga.'),
-  nueva: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.').max(200, 'La contrasena es demasiado larga.'),
-})
+const cambioSchema = z
+  .object({
+    // Con el mismo tope que el inicio de sesion (ver `loginSchema`): bcrypt en el
+    // servidor, y una contrasena de megas es trabajo gratis para quien quiera
+    // cansarlo.
+    actual: z.string().min(1, 'Escribe tu contrasena actual.').max(200, 'La contrasena es demasiado larga.'),
+    nueva: z
+      .string()
+      .min(8, 'La contrasena debe tener minimo 8 caracteres.')
+      .max(200, 'La contrasena es demasiado larga.')
+      .optional(),
+    usuario: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .min(3, 'El usuario debe tener al menos 3 caracteres.')
+      .max(40)
+      .regex(/^[a-z0-9._-]+$/, 'El usuario solo admite letras, numeros, punto, guion y guion bajo.')
+      .optional(),
+  })
+  .refine((datos) => datos.nueva !== undefined || datos.usuario !== undefined, {
+    message: 'Escribe un usuario nuevo o una contrasena nueva.',
+  })
 
 /** Cuantas veces se puede fallar la contrasena actual, y en cuanto tiempo. */
 const INTENTOS = 5
@@ -44,7 +58,8 @@ const MS_VENTANA = 15 * 60 * 1000
 
 export async function POST(request: Request) {
   try {
-    const session = await requireSession()
+    const session = await requireRol(['ADMINISTRADOR'])
+    exigirCuentaReal(session)
 
     const parsed = cambioSchema.safeParse(await request.json().catch(() => null))
     if (!parsed.success) {
@@ -86,19 +101,43 @@ async function cambiar(
     return NextResponse.json({ error: 'La contrasena actual no es correcta.' }, { status: 400 })
   }
 
-  if (datos.nueva === datos.actual) {
+  if (datos.nueva !== undefined && datos.nueva === datos.actual) {
     return NextResponse.json({ error: 'La contrasena nueva debe ser distinta de la actual.' }, { status: 400 })
   }
 
-  // LA CUENTA SE EDITA POR SU ID: no cambia de identidad al cambiar de clave,
-  // y el historico de turnos y de eventos sigue apuntando al mismo funcionario.
-  await usuarioRepository.actualizar(cuenta.id, { password: datos.nueva })
+  const usuarioNuevo = datos.usuario !== undefined && datos.usuario !== cuenta.usuario ? datos.usuario : undefined
+  if (usuarioNuevo === undefined && datos.nueva === undefined) {
+    return NextResponse.json({ error: 'Ese ya es tu usuario: no hay nada que cambiar.' }, { status: 400 })
+  }
+
+  // LA CUENTA SE EDITA POR SU ID: no cambia de identidad al cambiar de nombre
+  // o de clave, y el historico de turnos y de eventos sigue apuntando al mismo
+  // funcionario.
+  let actualizada: Usuario
+  try {
+    actualizada = await usuarioRepository.actualizar(cuenta.id, {
+      ...(usuarioNuevo !== undefined ? { usuario: usuarioNuevo } : {}),
+      ...(datos.nueva !== undefined ? { password: datos.nueva } : {}),
+    })
+  } catch (error) {
+    // El unico esperable: el nombre de usuario ya lo tiene otra cuenta.
+    if (usuarioNuevo !== undefined) {
+      await registrarApuntes([apunteDeRenombradoFallido(cuenta, usuarioNuevo, 'usuario_ya_tomado')], firma)
+    }
+    throw error
+  }
 
   // Acerto: se le borra la cuenta de intentos. El limite cuenta FALLOS, no
   // usos, o quien cambia su clave dos veces en un dia se bloquea solo.
   limpiarIntentos('cambio_clave_propia', cuenta.id)
 
-  await registrarApuntes([apunteDeContrasenaPropia(cuenta, true)], firma)
+  await registrarApuntes(
+    [
+      ...(usuarioNuevo !== undefined ? apuntesDeEdicion({ antes: cuenta, despues: actualizada, passwordCambiada: false }) : []),
+      ...(datos.nueva !== undefined ? [apunteDeContrasenaPropia(actualizada, true)] : []),
+    ],
+    firma,
+  )
 
-  return NextResponse.json({ ok: true })
+  return NextResponse.json({ ok: true, usuario: actualizada.usuario })
 }

@@ -23,6 +23,7 @@
  * Las reglas de acceso estan cubiertas en `tests/permisos-secciones.test.mjs`.
  */
 import type { RolUsuario } from '@/lib/usuarios/types'
+import type { ModoAccesoProfesional } from '@/lib/turnos/types'
 
 export type SeccionSistema = {
   href: string
@@ -31,13 +32,28 @@ export type SeccionSistema = {
   grupo: string
   /** Rol al que pertenece la seccion por defecto. */
   rol: RolUsuario
+  /**
+   * Solo la ve la CUENTA DE DEMOSTRACION (ver `lib/demostracion/mundo.ts`),
+   * por mucho que su rol o su lista de secciones la incluyan. Tampoco se
+   * reparte desde Usuarios.
+   */
+  soloDemostracion?: boolean
+  /**
+   * Solo aparece con ESE modo de entrada de los medicos (ver
+   * `accesoProfesionales`): con enlace se ven los enlaces, con PIN los PIN.
+   */
+  soloConAcceso?: ModoAccesoProfesional
 }
 
 export const secciones: SeccionSistema[] = [
   // --- Administrador ---
   { href: '/admin/turnos', label: 'Turnos en curso', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
   { href: '/admin/citas', label: 'Citas', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
-  { href: '/admin/enlaces', label: 'Enlaces de consultorio', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
+  // Uno u otro, segun como entren los medicos (lo elige el administrador en
+  // "Ajustes"): los enlaces, o el PIN de cada medico y los equipos
+  // autorizados para entrar con el.
+  { href: '/admin/enlaces', label: 'Enlaces de consultorio', grupo: 'Operacion', rol: 'ADMINISTRADOR', soloConAcceso: 'ENLACE' },
+  { href: '/admin/pines', label: 'PIN de medicos', grupo: 'Operacion', rol: 'ADMINISTRADOR', soloConAcceso: 'PIN' },
   // Reportes vuelve al menu (pedido del hospital, sep. 2026): el PDF de turnos
   // por periodo, con su resumen. Historico y estadisticas siguen retirados.
   { href: '/admin/reportes', label: 'Reportes', grupo: 'Operacion', rol: 'ADMINISTRADOR' },
@@ -45,8 +61,13 @@ export const secciones: SeccionSistema[] = [
   { href: '/admin/modulos', label: 'Modulos y ventanillas', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/profesionales', label: 'Profesionales', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
   { href: '/admin/usuarios', label: 'Usuarios', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
-  { href: '/admin/pantalla', label: 'Pantalla y audio', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
-  { href: '/admin/pruebas', label: 'Simulacion de carga', grupo: 'Pruebas', rol: 'ADMINISTRADOR' },
+  // La pantalla de la sala y el volumen: lo que se toca a diario.
+  { href: '/admin/pantalla', label: 'Pantalla', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
+  // Lo que se configura de vez en cuando: sonido, diseño del televisor,
+  // entrada de los medicos y horarios.
+  { href: '/admin/ajustes', label: 'Ajustes', grupo: 'Configuracion', rol: 'ADMINISTRADOR' },
+  // Solo en la cuenta de demostracion: con los datos reales rehacia la jornada.
+  { href: '/admin/pruebas', label: 'Simulacion de carga', grupo: 'Pruebas', rol: 'ADMINISTRADOR', soloDemostracion: true },
 
   // --- Operador ---
   { href: '/operador/agenda', label: 'Agenda de citas', grupo: 'Atencion', rol: 'OPERADOR' },
@@ -79,6 +100,22 @@ export const secciones: SeccionSistema[] = [
   //   { href: '/operador', label: 'Llamado de turnos', grupo: 'Atencion', rol: 'OPERADOR' },
 ]
 
+/**
+ * Si la seccion se muestra con el modo de entrada de medicos que esta en uso.
+ * Sin modo conocido (una pantalla de carga), se muestran todas.
+ */
+export function seccionDelModo(href: string, modo?: ModoAccesoProfesional | string): boolean {
+  if (!modo) return true
+  // Un valor que ya no existe (el "AMBOS" de una version anterior) cuenta como
+  // "con enlace", el de partida: nunca puede dejar el menu sin ninguno de los dos.
+  const vigente = modo === 'PIN' ? 'PIN' : 'ENLACE'
+  const seccion = secciones.find((s) => s.href === href)
+  return !seccion?.soloConAcceso || seccion.soloConAcceso === vigente
+}
+
+/** Las que se pueden repartir desde Usuarios: todas menos las de la demostracion. */
+export const seccionesRepartibles: SeccionSistema[] = secciones.filter((seccion) => !seccion.soloDemostracion)
+
 /** Secciones que le corresponden a un rol cuando no se le recorta el acceso. */
 export function seccionesDelRol(rol: RolUsuario): SeccionSistema[] {
   return secciones.filter((seccion) => seccion.rol === rol)
@@ -94,7 +131,9 @@ export function puedeVerSeccion(
   rol: RolUsuario,
   seccionesDelUsuario: string[] | null | undefined,
   href: string,
+  demostracion = false,
 ) {
+  if (!demostracion && secciones.some((seccion) => seccion.href === href && seccion.soloDemostracion)) return false
   if (seccionesDelUsuario) return seccionesDelUsuario.includes(href)
   return secciones.some((seccion) => seccion.rol === rol && seccion.href === href)
 }
@@ -106,4 +145,13 @@ export function primeraRutaPermitida(rol: RolUsuario, seccionesDelUsuario?: stri
   // marcaron al crearlo.
   const permitida = secciones.find((seccion) => puedeVerSeccion(rol, seccionesDelUsuario, seccion.href))
   return permitida?.href ?? '/auth/login'
+}
+
+/**
+ * "Mi cuenta" es SOLO del administrador (decision del hospital): ahi cambia su
+ * usuario y su contrasena. Las cuentas de los operadores las cambia el
+ * administrador desde Usuarios, y la de demostracion no se toca.
+ */
+export function tieneMiCuenta(rol: RolUsuario, demostracion = false): boolean {
+  return rol === 'ADMINISTRADOR' && !demostracion
 }

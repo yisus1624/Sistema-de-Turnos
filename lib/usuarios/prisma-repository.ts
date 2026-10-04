@@ -28,6 +28,7 @@ type FilaUsuario = {
   activo: boolean
   secciones: string[]
   versionCredenciales: number
+  esDemostracion: boolean
   fechaCreacion: Date
 }
 
@@ -56,6 +57,7 @@ function aUsuario(fila: FilaUsuario): Usuario {
     fechaCreacion: fila.fechaCreacion.toISOString(),
     secciones: fila.secciones.length > 0 ? fila.secciones : null,
     versionCredenciales: fila.versionCredenciales,
+    esDemostracion: fila.esDemostracion,
   }
 }
 
@@ -68,6 +70,7 @@ const CAMPOS_PUBLICOS = {
   activo: true,
   secciones: true,
   versionCredenciales: true,
+  esDemostracion: true,
   fechaCreacion: true,
 } as const
 
@@ -118,6 +121,7 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
         // que entrar: el guarda lo devolvia al login y el login lo mandaba de
         // vuelta, en bucle.
         secciones: datos.rol === 'ADMINISTRADOR' ? [] : (datos.secciones ?? []),
+        esDemostracion: datos.esDemostracion ?? false,
       },
       select: CAMPOS_PUBLICOS,
     })
@@ -125,7 +129,7 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
   }
 
   async actualizar(id: string, datos: Partial<DatosUsuario>): Promise<Usuario> {
-    const actual = await prisma.usuario.findUnique({ where: { id }, select: { id: true, rol: true } })
+    const actual = await prisma.usuario.findUnique({ where: { id }, select: { id: true, rol: true, esDemostracion: true } })
     if (!actual) errorDeNegocio('El usuario indicado no existe.')
 
     const cambios: {
@@ -137,6 +141,7 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
       passwordHash?: string
       versionCredenciales?: { increment: number }
       secciones?: string[]
+      esDemostracion?: boolean
     } = {}
 
     if (datos.usuario !== undefined) {
@@ -157,6 +162,12 @@ export class PrismaUsuarioRepository implements UsuarioRepository {
       cambios.versionCredenciales = { increment: 1 }
     }
     if (datos.secciones !== undefined) cambios.secciones = datos.secciones ?? []
+    // Cambiar de mundo invalida la sesion abierta: no puede seguir entrando a
+    // la base real con la marca vieja, ni al reves.
+    if (datos.esDemostracion !== undefined && datos.esDemostracion !== actual.esDemostracion) {
+      cambios.esDemostracion = datos.esDemostracion
+      cambios.versionCredenciales = { increment: 1 }
+    }
 
     // Un administrador siempre ve todo; el campo solo aplica a OPERADOR.
     if ((cambios.rol ?? actual.rol) === 'ADMINISTRADOR') cambios.secciones = []

@@ -3,6 +3,7 @@ import { GeistSans } from 'geist/font/sans'
 import './globals.css'
 import 'sileo/styles.css'
 import { Toaster } from 'sileo'
+import { RegistrarApp } from '@/components/app/InstalarApp'
 
 const appUrl =
   process.env.NEXT_PUBLIC_BASE_URL ??
@@ -26,6 +27,8 @@ export const metadata: Metadata = {
     title: 'Turnos',
     statusBarStyle: 'black-translucent',
   },
+  // El de la pestaña sale de `app/icon.svg`; este es el del icono en el iPhone.
+  icons: { apple: '/icons/apple-touch-icon.png' },
   // Sistema interno del hospital: nunca debe indexarse.
   robots: {
     index: false,
@@ -55,6 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           el cupo de nginx que necesitaban los inicios de sesion de verdad.
         */}
         {children}
+        <RegistrarApp />
         <Toaster position="top-right" offset={{ top: 18, right: 18, bottom: 88 }} />
       </body>
     </html>

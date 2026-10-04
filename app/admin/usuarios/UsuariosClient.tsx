@@ -18,7 +18,7 @@ import EmptyState from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/toast'
 import { Campo, Entrada, Interruptor, Seleccion, Tabla, TablaSkeleton } from '@/components/admin/Campos'
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
-import { secciones as catalogoSecciones, seccionesDelRol } from '@/lib/permissions/rutas'
+import { seccionesRepartibles as catalogoSecciones, seccionesDelRol } from '@/lib/permissions/rutas'
 import type { RolUsuario, Usuario } from '@/lib/usuarios/types'
 
 type Formulario = {
@@ -29,6 +29,8 @@ type Formulario = {
   password: string
   /** `null` = acceso a todas las secciones de operador. */
   secciones: string[] | null
+  /** Cuenta de demostracion: trabaja sobre el hospital de prueba, nunca sobre los datos reales. */
+  esDemostracion: boolean
 }
 
 const FORMULARIO_VACIO: Formulario = {
@@ -38,6 +40,7 @@ const FORMULARIO_VACIO: Formulario = {
   area: '',
   password: '',
   secciones: null,
+  esDemostracion: false,
 }
 
 /** Secciones marcables, agrupadas como en el menu. */
@@ -197,6 +200,7 @@ export default function UsuariosClient({
       area: usuario.area ?? '',
       password: '',
       secciones: usuario.secciones ?? null,
+      esDemostracion: usuario.esDemostracion ?? false,
     })
     setAbierto(true)
   }
@@ -221,6 +225,7 @@ export default function UsuariosClient({
           rol: formulario.rol,
           area: formulario.area || null,
           secciones,
+          esDemostracion: formulario.esDemostracion,
         }
         // La contrasena solo se envia si el administrador escribio una nueva.
         if (formulario.password) cuerpo.password = formulario.password
@@ -299,6 +304,11 @@ export default function UsuariosClient({
                         <Badge tone={usuario.rol === 'ADMINISTRADOR' ? 'blue' : 'slate'}>
                           {etiquetaRol[usuario.rol]}
                         </Badge>
+                        {usuario.esDemostracion ? (
+                          <Badge tone="amber" className="ml-2">
+                            Demostracion
+                          </Badge>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3">
                         <Acceso usuario={usuario} />
@@ -391,6 +401,28 @@ export default function UsuariosClient({
               placeholder="Facturacion"
             />
           </Campo>
+
+          {/*
+            LA CUENTA DE DEMOSTRACION ve el sistema entero, pero sobre un
+            hospital de prueba en memoria: sus doctores, pacientes y turnos son
+            inventados, y sus llamados no llegan a los televisores de las salas.
+            Es la que se usa para mostrar el sistema y la simulacion de carga.
+          */}
+          <div className="flex items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3.5">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-600">Cuenta de demostracion</p>
+              <p className="mt-0.5 text-xs font-medium text-slate-500">
+                Trabaja sobre un hospital de prueba con datos inventados, nunca sobre los datos reales. Sirve para
+                mostrar el sistema y la simulacion de carga.
+              </p>
+            </div>
+            <Interruptor
+              activo={formulario.esDemostracion}
+              onChange={(valor) => setFormulario((f) => ({ ...f, esDemostracion: valor }))}
+              etiqueta="Cuenta de demostracion"
+              disabled={editando?.id === usuarioActualId}
+            />
+          </div>
 
           {formulario.rol === 'OPERADOR' ? (
             <div className="rounded-xl border border-slate-200 p-3.5">

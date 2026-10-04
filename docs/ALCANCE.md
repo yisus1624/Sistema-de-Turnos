@@ -114,8 +114,9 @@ para que quien siga no las descubra de golpe.
 - `components/citas/AgendaCitasClient.tsx` (~1300 lineas) y
   `components/profesionales/EnlacesClient.tsx` (~900) concentran varias
   responsabilidades. Extraer los modales es el siguiente paso natural.
-- "Simulacion de carga" sigue en el menu de administracion aunque su ruta
-  responda 403 mientras no se declare `TURNOS_SIMULACION=1`.
+- "Simulacion de carga" sigue en el menu de administracion de todas las
+  cuentas, pero solo funciona en la cuenta de demostracion (en las demas sale
+  apagada y explicada).
 - Las contraseñas que ya estaban guardadas conservan el coste de cifrado
   anterior y pasan al nuevo cuando su dueño la cambie. Ver
   `lib/usuarios/contrasenas.ts`.

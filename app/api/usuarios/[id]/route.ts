@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { usuarioRepository } from '@/lib/usuarios/repositorio'
-import { apiError, requireSeccion } from '@/lib/permissions/session'
+import { apiError, exigirCuentaReal, requireSeccion } from '@/lib/permissions/session'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { registrarApuntes, type Firma } from '@/lib/seguridad/apuntar'
 import { EVENTOS } from '@/lib/seguridad/eventos'
-import { secciones as catalogoSecciones } from '@/lib/permissions/rutas'
+import { seccionesRepartibles as catalogoSecciones } from '@/lib/permissions/rutas'
 import { revisarCambio, revisarQueQuedeUnAdministrador } from '@/lib/usuarios/politica-permisos'
 import { apunteDeRenombradoFallido, apuntesDeEdicion } from '@/lib/usuarios/auditoria'
 import type { Usuario } from '@/lib/usuarios/types'
@@ -25,6 +25,8 @@ const cambioSchema = z.object({
   rol: z.enum(['ADMINISTRADOR', 'OPERADOR']).optional(),
   area: z.string().trim().max(60).nullable().optional(),
   activo: z.boolean().optional(),
+  /** Cuenta de demostracion: ver `lib/demostracion/mundo.ts`. */
+  esDemostracion: z.boolean().optional(),
   password: z
     .string()
     .min(8, 'La contrasena debe tener minimo 8 caracteres.')
@@ -42,6 +44,7 @@ const cambioSchema = z.object({
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await requireSeccion('/admin/usuarios')
+    exigirCuentaReal(session)
     const { id } = await context.params
 
     const body = await request.json().catch(() => null)

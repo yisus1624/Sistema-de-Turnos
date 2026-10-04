@@ -1,5 +1,6 @@
 import type { PlanDeRetroceso } from './reglas-retroceso'
 import type {
+  PinProfesional,
   AccionSobreTurno,
   ActividadCatalogo,
   AccesoProfesional,
@@ -368,6 +369,20 @@ export interface TurnoRepository {
   listarAccesosProfesional(): Promise<AccesoProfesional[]>
   /** Revoca el acceso y borra su copia cifrada: deja de poder mostrarse. */
   revocarAccesoProfesional(id: string): Promise<AccesoProfesional>
+
+  // --- PIN de los medicos (ver `lib/turnos/reglas-pin.ts`) ---
+
+  /** Los PIN de todos los medicos que tienen uno, descifrados para el administrador. */
+  listarPines(): Promise<PinProfesional[]>
+  /**
+   * Le sortea un PIN nuevo al medico (unico entre todos) y lo deja activo. Si
+   * ya tenia uno, el anterior deja de servir en el acto.
+   */
+  asignarPin(profesionalId: string): Promise<{ pin: string }>
+  cambiarEstadoPin(profesionalId: string, activo: boolean): Promise<PinProfesional>
+  eliminarPin(profesionalId: string): Promise<void>
+  /** El medico de ese PIN, o null si no existe, esta desactivado o el medico esta dado de baja. */
+  profesionalPorPin(pin: string): Promise<Profesional | null>
 }
 
 /**

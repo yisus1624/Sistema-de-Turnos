@@ -12,19 +12,13 @@
  *   - si con el minimo no caben, se reparten en mas columnas;
  *   - y solo como ultimo recurso, en paginas que rotan solas.
  *
- * Este archivo es la puerta de entrada: cada diseño tiene su calculo
- * (`distribucion-cartelera.ts`, `distribucion-cuadricula.ts`) y aqui vive lo
- * que comparten, la rotacion de paginas.
+ * Este archivo es la puerta de entrada: el calculo de la cartelera (sus dos
+ * variantes) vive en `distribucion-cartelera.ts` y aqui lo que se comparte, la
+ * rotacion de paginas.
  */
 
 export { MAXIMO_EN_UNA_PANTALLA, MINIMO_TEXTO, MINIMO_TURNO, ladoCorto, type Espacio, type Letra, type TextosDeCasilla } from './legibilidad-pantalla'
 export { POCAS_FILAS, planDeCartelera, tablaConFoto, type CeldasDeFila, type FormaDeFila, type PlanDeCartelera } from './distribucion-cartelera'
-export {
-  planDeCuadricula,
-  type CasillaDeCuadricula,
-  type PaginaDeCuadricula,
-  type PlanDeCuadricula,
-} from './distribucion-cuadricula'
 
 // --- Rotacion de paginas ---------------------------------------------------------
 

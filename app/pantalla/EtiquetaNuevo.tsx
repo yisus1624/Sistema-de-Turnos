@@ -3,10 +3,9 @@ import { cn } from '@/lib/ui'
 /**
  * "NUEVO", pegado a la esquina de un turno recien llamado.
  *
- * Dura mas que el resalte (ver `MS_NUEVO`): quien levanta la vista tarde ve de
- * un golpe que turnos cambiaron en el ultimo minuto, aunque ya se hayan
- * llamado varios seguidos. Ambar sobre texto casi negro (mas de 10:1), sin
- * animacion: el destello ya lo pone la fila.
+ * Dura lo mismo que el resalte, quince segundos (ver `MS_NUEVO`): marca los
+ * llamados de hace un momento y se quita solo. Ambar sobre texto casi negro
+ * (mas de 10:1), sin animacion: el destello ya lo pone la fila.
  */
 export function EtiquetaNuevo({ tamano, className }: { tamano: number; className?: string }) {
   return (

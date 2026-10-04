@@ -12,7 +12,7 @@
  * por el paso del tiempo. Se ven todas a la vez, ajustadas al televisor que
  * toque; solo si ni con la letra minima caben, se reparten en paginas que
  * rotan, y la rotacion salta a la pagina del consultorio que acaba de llamar
- * (ver `planDeCuadricula` y `decidirPagina`).
+ * (ver `planDeCartelera` y `decidirPagina`).
  *
  * SIN PORTADA. La pantalla pinta los turnos y abre el canal en cuanto carga:
  * tras un apagon o un reinicio del PC, el televisor vuelve solo. El gesto de
@@ -35,7 +35,6 @@ import {
 import { decidirLlamadoEnVivo, mezclarFotoDePantalla } from '@/lib/turnos/mezcla-pantalla'
 import { casillaLibreDe, claveDeCasilla } from '@/lib/turnos/casillas'
 import Cartelera from './Cartelera'
-import DisenoCuadricula from './DisenoCuadricula'
 import { horaColombiana, useAhora } from './Reloj'
 import ControlesPantalla from './ControlesPantalla'
 import { useResaltes } from './useResaltes'
@@ -90,6 +89,8 @@ interface FotoDePantalla {
   casillas?: CasillaPantalla[]
   configuracion?: ConfiguracionSistema
   ahora?: string
+  /** Es la sala del hospital de demostracion (sesion de la cuenta demo). */
+  demostracion?: boolean
 }
 
 /** Marca de la cancelacion propia, para no confundirla con un fallo de red. */
@@ -190,8 +191,8 @@ export default function PantallaPublicaPage() {
    * Si el servidor ya dijo QUE ASPECTO tiene que tener esta pantalla.
    *
    * EXISTE PARA NO ENSEÑAR EL DISEÑO EQUIVOCADO. `CONFIGURACION_POR_DEFECTO`
-   * trae `disenoPantalla: 'CUADRICULA'`, asi que sin esto el televisor pintaba
-   * la cuadricula en el primer dibujado y saltaba a la cartelera un instante
+   * trae un diseño de partida, asi que sin esto el televisor podia pintar
+   * un diseño y saltar al otro un instante
    * despues, cuando llegaba la respuesta. En la sala de espera eso se ve como
    * un parpadeo a la configuracion anterior, y parece que el cambio no se
    * hubiera guardado.
@@ -201,6 +202,9 @@ export default function PantallaPublicaPage() {
    * admite provisionalidad es el aspecto, porque cambia la pantalla entera.
    */
   const [configuracionCargada, setConfiguracionCargada] = useState(false)
+  // Si esta pantalla muestra el hospital de demostracion: se marca en grande,
+  // para que nadie la confunda con la sala real.
+  const [demostracion, setDemostracion] = useState(false)
   // Si ya llegaron datos del servidor. Sin esto, una primera carga fallida se
   // leia en la sala como "no hay consultorios" (ver `mensajeSinCasillas`).
   const [estadoDeCarga, setEstadoDeCarga] = useState<EstadoDeCarga>('cargando')
@@ -212,8 +216,8 @@ export default function PantallaPublicaPage() {
   // resaltados a la vez (ver `useResaltes`).
   const { resaltes, resaltar, apagar } = useResaltes()
 
-  // Un unico reloj para los dos diseños (ver `useAhora`). La cuadricula lo
-  // pinta con su propio `Reloj` abajo; la cartelera lo recibe ya formateado.
+  // Un unico reloj para los dos diseños (ver `useAhora`): la cartelera
+  // lo recibe ya formateado.
   const ahora = useAhora()
 
   // Inicializacion perezosa: una sola campana por montaje, sin recrearla en
@@ -327,6 +331,7 @@ export default function PantallaPublicaPage() {
   const aplicarFoto = useCallback(
     (estado: FotoDePantalla, eventosAlPedir: Map<string, number>) => {
       if (estado.configuracion) setConfiguracion(estado.configuracion)
+      setDemostracion(estado.demostracion === true)
       // Ya se sabe que aspecto toca, aunque la respuesta venga sin
       // configuracion: la buena es entonces la de por defecto.
       setConfiguracionCargada(true)
@@ -607,43 +612,27 @@ export default function PantallaPublicaPage() {
    *
    * Es una espera de milisegundos contra el propio servidor, y se resuelve
    * sola tanto si contesta como si falla (ver `cargarEstado`). Preferir un
-   * instante de fondo liso a pintar la cuadricula y saltar a la cartelera:
+   * instante de fondo liso a pintar un diseño y saltar al otro:
    * el salto se lee desde la sala como un fallo del sistema.
    */
   if (!configuracionCargada) {
     return <main className="h-screen bg-[var(--turnos-bg)]" aria-busy="true" />
   }
 
-  if (configuracion.disenoPantalla === 'CARTELERA') {
-    return (
-      <Cartelera
-        casillas={casillas}
-        configuracion={configuracion}
-        resaltes={resaltes}
-        hora={ahora ? horaColombiana(ahora) : null}
-        mensajeSinLlamados={estadoDeCarga === 'listo' ? 'Aun no se ha llamado ningun turno.' : mensajeSinCasillas(estadoDeCarga)}
-        controles={
-          <ControlesPantalla
-            conexion={conexion}
-            avisoSonido={aviso}
-            activarSonido={activarSonido}
-            sonidoActivo={sonidoActivo}
-            alternarSonido={alternarSonido}
-            pantallaCompleta={pantallaCompleta}
-            alternarPantallaCompleta={alternarPantallaCompleta}
-            tono="oscuro"
-          />
-        }
-      />
-    )
-  }
-
   return (
-    <DisenoCuadricula
+    <>
+    {demostracion ? (
+      <p className="pointer-events-none fixed bottom-[1.2vmin] left-1/2 z-50 -translate-x-1/2 rounded-full bg-amber-400 px-[1.6vmin] py-[0.5vmin] text-[max(0.9rem,1.8vmin)] font-black tracking-[0.08em] text-slate-950 shadow-lg">
+        DEMOSTRACION · datos de prueba
+      </p>
+    ) : null}
+    <Cartelera
       casillas={casillas}
+      variante={configuracion.disenoPantalla === 'CARTELERA_PACIENTE' ? 'paciente' : 'turno'}
       configuracion={configuracion}
       resaltes={resaltes}
-      mensajeVacio={mensajeSinCasillas(estadoDeCarga)}
+      hora={ahora ? horaColombiana(ahora) : null}
+      mensajeSinLlamados={estadoDeCarga === 'listo' ? 'Aun no se ha llamado ningun turno.' : mensajeSinCasillas(estadoDeCarga)}
       controles={
         <ControlesPantalla
           conexion={conexion}
@@ -653,8 +642,10 @@ export default function PantallaPublicaPage() {
           alternarSonido={alternarSonido}
           pantallaCompleta={pantallaCompleta}
           alternarPantallaCompleta={alternarPantallaCompleta}
+          tono="oscuro"
         />
       }
     />
+    </>
   )
 }

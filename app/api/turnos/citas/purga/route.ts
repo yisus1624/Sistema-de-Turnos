@@ -15,7 +15,7 @@ import { z } from 'zod'
 import { limiteDeRetencion, previsualizarPurga, purgarDatosDePacientes } from '@/lib/citas/purga'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
-import { apiError, requireRol } from '@/lib/permissions/session'
+import { apiError, exigirCuentaReal, requireRol } from '@/lib/permissions/session'
 import { esFechaValida } from '@/lib/turnos/tiempo'
 import { conFrenoDeConsultaPesada } from '@/lib/seguridad/freno-consultas'
 
@@ -37,6 +37,7 @@ const cuerpo = z.object({
 export async function GET(request: Request) {
   try {
     const session = await requireRol(['ADMINISTRADOR'])
+    exigirCuentaReal(session)
 
     const pedido = new URL(request.url).searchParams.get('limite')
     if (pedido && !esFechaValida(pedido)) {
@@ -56,6 +57,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const session = await requireRol(['ADMINISTRADOR'])
+    exigirCuentaReal(session)
 
     const parsed = cuerpo.safeParse(await request.json())
     if (!parsed.success) {

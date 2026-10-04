@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { usuarioRepository } from '@/lib/usuarios/repositorio'
-import { apiError, requireSeccion } from '@/lib/permissions/session'
+import { apiError, exigirCuentaReal, requireSeccion } from '@/lib/permissions/session'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
-import { secciones as catalogoSecciones } from '@/lib/permissions/rutas'
+import { seccionesRepartibles as catalogoSecciones } from '@/lib/permissions/rutas'
 import { revisarAlta } from '@/lib/usuarios/politica-permisos'
 
 export async function GET() {
   try {
-    await requireSeccion('/admin/usuarios')
+    exigirCuentaReal(await requireSeccion('/admin/usuarios'))
     const usuarios = await usuarioRepository.listar()
     return NextResponse.json({ usuarios })
   } catch (error) {
@@ -45,11 +45,14 @@ const usuarioSchema = z.object({
   area: z.string().trim().max(60).nullable().optional(),
   password: z.string().min(8, 'La contrasena debe tener minimo 8 caracteres.').max(200, 'La contrasena es demasiado larga.'),
   secciones: seccionesSchema.nullable().optional(),
+  /** Cuenta de demostracion: ver `lib/demostracion/mundo.ts`. */
+  esDemostracion: z.boolean().optional(),
 })
 
 export async function POST(request: Request) {
   try {
     const session = await requireSeccion('/admin/usuarios')
+    exigirCuentaReal(session)
 
     const body = await request.json().catch(() => null)
     const parsed = usuarioSchema.safeParse(body)

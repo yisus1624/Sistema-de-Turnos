@@ -108,6 +108,9 @@ model Usuario {
   secciones     String[]   @default([])
   /// Sube en cada cambio de contrasena: los JWT emitidos con otra version caen.
   versionCredenciales Int  @default(0)
+  /// Cuenta de demostracion: trabaja contra el hospital de mentira en memoria
+  /// (lib/demostracion/mundo.ts) y nunca contra estas tablas de turnos.
+  esDemostracion Boolean   @default(false)
   fechaCreacion DateTime   @default(now())
   actualizadoEn DateTime   @updatedAt
 
@@ -192,6 +195,7 @@ model Profesional {
   citas    Cita[]
   turnos   Turno[]
   accesos  AccesoProfesional[]
+  pin      PinProfesional?
 
   @@index([servicioId])
   @@index([moduloId])
@@ -201,6 +205,25 @@ model Profesional {
 /// Enlace temporal con el que un doctor entra a su consultorio sin usuario ni
 /// contrasena. EL TOKEN EN CLARO NO SE GUARDA: solo su hash, igual que en la
 /// implementacion en memoria.
+/// El PIN de 6 digitos con que un medico entra a su consultorio.
+///
+/// `pinHuella` es lo que valida la entrada (HMAC con la clave del servidor, no
+/// un hash a secas: con un millon de PIN posibles, un hash sin clave se
+/// deshace probandolos todos). `pinCifrado` es la copia que el administrador
+/// puede volver a ver. Unico por huella: un PIN identifica a UN medico.
+model PinProfesional {
+  profesionalId String   @id
+  pinHuella     String   @unique
+  pinCifrado    String
+  activo        Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  profesional Profesional @relation(fields: [profesionalId], references: [id], onDelete: Cascade)
+
+  @@map("pines_profesional")
+}
+
 model AccesoProfesional {
   id            String    @id @default(cuid())
   profesionalId String
@@ -364,9 +387,10 @@ model Configuracion {
 
   /// Con que aspecto se dibuja el televisor de la sala de espera.
   ///
-  /// "CUADRICULA" es el de siempre: una casilla fija por consultorio, todas
-  /// visibles a la vez. "CARTELERA" es el formato de panel sobre imagen de
-  /// fondo, con el turno en curso destacado y el siguiente de cada consultorio.
+  /// "CARTELERA" es el panel sobre imagen de fondo con el turno en curso, el
+  /// medico y el consultorio. "CARTELERA_PACIENTE" es la misma pieza con el
+  /// nombre del paciente y el consultorio, sin turno ni medico. La antigua
+  /// "CUADRICULA" se retiro (migracion 20261004120000_retirar_cuadricula).
   ///
   /// Se guarda AQUI, y no en cada televisor, porque es una decision del
   /// hospital: el administrador la toma una vez en /admin/pantalla y todas las
@@ -377,7 +401,16 @@ model Configuracion {
   /// Texto y no enum a proposito: agregar un diseño nuevo no deberia obligar a
   /// una migracion de base. El valor se valida en la aplicacion
   /// (`DISENOS_PANTALLA` en lib/turnos/types.ts), que es donde vive la lista.
-  disenoPantalla String @default("CUADRICULA")
+  disenoPantalla String @default("CARTELERA")
+
+  /// Como entran los medicos: "ENLACE" o "PIN" (uno u otro). Texto, como el
+  /// diseño: la lista vive en la aplicacion (`MODOS_ACCESO_PROFESIONAL`).
+  accesoProfesionales String @default("ENLACE")
+
+  /// SIN USO: era la version de los "equipos autorizados" para entrar con PIN,
+  /// que el hospital descarto (el PIN solo basta). Se deja la columna para no
+  /// obligar a una migracion que borre datos.
+  versionEquipos Int @default(0)
 
   /// Ruta de la imagen de fondo de la cartelera, servida desde `public/`
   /// (por ejemplo "/img/fondo-sala.jpg"). Vacio = sin imagen, fondo liso.

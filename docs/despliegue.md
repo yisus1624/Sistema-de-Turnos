@@ -521,11 +521,29 @@ Ademas, con cuentas individuales:
 
 El administrador las crea en **Configuracion → Usuarios**.
 
-## 6. Panel de simulacion
+## 6. Cuenta de demostracion y simulacion de carga
 
-`TURNOS_SIMULACION` **vacia en produccion**. Ese panel borra las citas y los
-turnos del dia de un clic, y no distingue una cita de ejemplo de una que acaba
-de cargar el mostrador.
+Para mostrar el sistema se usa una **cuenta de demostracion**: en
+**Configuracion -> Usuarios** se crea un usuario (normalmente administrador) y
+se enciende **Cuenta de demostracion**.
+
+Con esa cuenta se ve el sistema entero, pero sobre un hospital de prueba que
+vive en la memoria del servidor (`lib/demostracion/mundo.ts`): 11 consultorios,
+11 doctores en la mañana y 11 en la tarde, y pacientes inventados. Nada llega a
+la base real y sus llamados viajan por un canal en vivo aparte, asi que no
+suenan en los televisores de las salas. La pantalla `/pantalla` abierta en el
+navegador con esa sesion muestra la sala de prueba con la marca
+**DEMOSTRACION** abajo.
+
+- **Simulacion de carga** (`/admin/pruebas`) solo corre en esa cuenta. Ya no
+  existe `TURNOS_SIMULACION`: con cualquier otra cuenta el panel sale apagado.
+- Lo que escribe directo en la base real (usuarios, carga del reporte de
+  citas, purga, recalculo de jornadas) le responde a la cuenta de
+  demostracion que no esta disponible.
+- El hospital de prueba se vuelve a sembrar al reiniciar el servidor.
+- **No** iniciar sesion con la cuenta de demostracion en el navegador del PC
+  que maneja el televisor de una sala: esa pantalla mostraria la sala de
+  prueba (con la marca, pero en la sala).
 
 ## Repaso final antes de entregar
 
@@ -539,7 +557,7 @@ de cargar el mostrador.
 - [ ] `TURNOS_CONFIAR_PROXY=1`.
 - [ ] Pool de la base acotado (`connection_limit`) y `statement_timeout` puesto.
 - [ ] El puerto 3000 no se alcanza desde fuera del servidor.
-- [ ] `TURNOS_SIMULACION` vacia.
+- [ ] Migraciones aplicadas (`npm run db:deploy`), incluida la de la cuenta de demostracion.
 - [ ] `TURNOS_HSTS=1` **y recompilado**, despues de comprobar que entran todos.
 - [ ] El servidor arranca sin ningun aviso en rojo ni amarillo por consola.
 - [ ] Una cuenta por funcionario, con sus secciones.

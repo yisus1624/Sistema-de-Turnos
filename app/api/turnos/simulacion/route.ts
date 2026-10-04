@@ -6,12 +6,10 @@
  * pacientes: las citas ya se gastaron en la primera y ademas el tope de citas
  * por profesional impide seguir agregando.
  *
- * ESTO SE LLEVA POR DELANTE LA JORNADA EN CURSO. Contra la base de verdad no
- * borra ninguna cita (ver `reiniciarDatosDeHoy` en el repositorio de Prisma),
- * pero si borra TODOS los turnos de hoy y deshace el registro de llegada de
- * los pacientes que ya estaban en la fila. Por eso queda cerrada salvo que se
- * abra a proposito con TURNOS_SIMULACION=1: en el hospital, un clic de mas en
- * una pantalla del menu de administracion no puede vaciar la sala de espera.
+ * ESTO SE LLEVA POR DELANTE LA JORNADA EN CURSO, y por eso SOLO la cuenta de
+ * demostracion puede usarla (`simulacionHabilitada`): su sesion trabaja sobre
+ * el hospital de prueba en memoria (`lib/demostracion/mundo.ts`), y ahi rehacer
+ * el dia no le quita el turno a ningun paciente de verdad.
  */
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -43,7 +41,7 @@ export async function POST(request: Request) {
   try {
     const session = await requireSeccion('/admin/pruebas')
 
-    if (!simulacionHabilitada()) {
+    if (!simulacionHabilitada(session)) {
       return NextResponse.json({ error: MOTIVO_SIMULACION_APAGADA }, { status: 403 })
     }
 
@@ -69,7 +67,7 @@ export async function POST(request: Request) {
     // `prepararSimulacionDeCarga`): no crea citas, usa las que ya existen.
     const preparada = await prepararSimulacionDeCarga(turnoRepository, peticion.data)
     // Que las pantallas se enteren ya, no en la resincronizacion del minuto.
-    avisarDatosReiniciados()
+    await avisarDatosReiniciados()
     return NextResponse.json(preparada)
   } catch (error) {
     return apiError(error)
@@ -82,13 +80,13 @@ export async function POST(request: Request) {
  */
 export async function DELETE() {
   try {
-    await requireSeccion('/admin/pruebas')
-    if (!simulacionHabilitada()) {
+    const session = await requireSeccion('/admin/pruebas')
+    if (!simulacionHabilitada(session)) {
       return NextResponse.json({ error: MOTIVO_SIMULACION_APAGADA }, { status: 403 })
     }
 
     const consultoriosBorrados = await limpiarSimulacionDeCarga(turnoRepository)
-    avisarDatosReiniciados()
+    await avisarDatosReiniciados()
     return NextResponse.json({ consultoriosBorrados })
   } catch (error) {
     return apiError(error)

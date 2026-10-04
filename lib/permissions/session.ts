@@ -34,7 +34,7 @@ export async function requireRol(roles: RolUsuario[]) {
 export async function requireSeccion(...secciones: string[]) {
   const session = await requireSession()
   const permitido = secciones.some((seccion) =>
-    puedeVerSeccion(session.user.rol, session.user.secciones, seccion),
+    puedeVerSeccion(session.user.rol, session.user.secciones, seccion, session.user.demostracion),
   )
   if (!permitido) {
     throw Object.assign(new Error('Sin permisos para esta accion'), { status: 403 })
@@ -44,10 +44,12 @@ export async function requireSeccion(...secciones: string[]) {
 
 /** Si el usuario tiene acceso a alguna seccion, sin lanzar error. */
 export function tieneSeccion(
-  session: { user: { rol: RolUsuario; secciones: string[] | null } },
+  session: { user: { rol: RolUsuario; secciones: string[] | null; demostracion?: boolean } },
   ...secciones: string[]
 ) {
-  return secciones.some((seccion) => puedeVerSeccion(session.user.rol, session.user.secciones, seccion))
+  return secciones.some((seccion) =>
+    puedeVerSeccion(session.user.rol, session.user.secciones, seccion, session.user.demostracion),
+  )
 }
 
 /**
@@ -110,4 +112,19 @@ function datosParaCliente(error: unknown): Record<string, unknown> {
   if (typeof error !== 'object' || error === null || !('datosParaCliente' in error)) return {}
   const datos: unknown = error.datosParaCliente
   return typeof datos === 'object' && datos !== null ? { ...datos } : {}
+}
+
+/**
+ * Corta lo que la cuenta de demostracion no puede hacer: lo que escribe
+ * DIRECTO en la base real, sin pasar por el repositorio de turnos que la
+ * desvia al hospital de mentira (usuarios, carga del reporte, purga,
+ * recalculo de jornadas). Ver `lib/demostracion/mundo.ts`.
+ */
+export function exigirCuentaReal(session: { user: { demostracion?: boolean } }) {
+  if (session.user.demostracion) {
+    throw Object.assign(
+      new Error('Esto no esta disponible en la cuenta de demostracion: trabaja sobre los datos reales del hospital.'),
+      { status: 403 },
+    )
+  }
 }

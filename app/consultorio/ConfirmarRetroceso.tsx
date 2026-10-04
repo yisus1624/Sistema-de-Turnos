@@ -14,7 +14,7 @@ import { queSeDeshace } from '@/lib/consultorio/presentacion'
 import type { PlanDeRetroceso } from '@/lib/turnos/reglas-retroceso'
 import type { Turno } from '@/lib/turnos/types'
 
-function Paso({ icono: Icono, tono, turno, texto }: { icono: Icon; tono: string; turno: Turno; texto: string }) {
+function Paso({ icono: Icono, tono, turno, texto, sinCodigo }: { icono: Icon; tono: string; turno: Turno; texto: string; sinCodigo: boolean }) {
   return (
     <li className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 p-3.5">
       <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-full ${tono}`}>
@@ -22,8 +22,14 @@ function Paso({ icono: Icono, tono, turno, texto }: { icono: Icon; tono: string;
       </span>
       <div className="min-w-0">
         <p className="truncate text-sm font-semibold text-brand-950">
-          <span className="tabular-nums">{turno.codigo}</span>
-          {turno.nombrePaciente ? ` · ${turno.nombrePaciente}` : ''}
+          {sinCodigo ? (
+            (turno.nombrePaciente ?? 'Paciente')
+          ) : (
+            <>
+              <span className="tabular-nums">{turno.codigo}</span>
+              {turno.nombrePaciente ? ` · ${turno.nombrePaciente}` : ''}
+            </>
+          )}
         </p>
         <p className="mt-0.5 text-sm leading-5 text-slate-600">{texto}</p>
       </div>
@@ -37,7 +43,10 @@ export function ConfirmarRetroceso({
   cargando,
   alCerrar,
   alConfirmar,
+  sinCodigo = false,
 }: {
+  /** Con la cartelera de nombres: el paciente por su nombre, sin codigo. */
+  sinCodigo?: boolean
   plan: PlanDeRetroceso | null
   abierto: boolean
   cargando: boolean
@@ -58,6 +67,7 @@ export function ConfirmarRetroceso({
         <ul className="space-y-2.5">
           {plan.restaurar ? (
             <Paso
+              sinCodigo={sinCodigo}
               icono={ArrowBendUpLeft}
               tono="bg-acento-600 text-white"
               turno={plan.restaurar}
@@ -66,6 +76,7 @@ export function ConfirmarRetroceso({
           ) : null}
           {plan.devolver ? (
             <Paso
+              sinCodigo={sinCodigo}
               icono={Hourglass}
               tono="bg-white text-slate-600 ring-1 ring-slate-200"
               turno={plan.devolver}

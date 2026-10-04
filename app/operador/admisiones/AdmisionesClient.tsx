@@ -33,6 +33,7 @@ import { esReintentable, type ResultadoDeCarga } from '@/lib/api/reintento'
 // estaba rechazando con un 401. Justo aqui es donde peor duele.
 import { horaCorta, mensajeDeError, pedir } from '@/lib/api/cliente'
 import type { Cita, ComprobanteLlegada, Turno } from '@/lib/turnos/types'
+import { useSalaConNombres } from '@/lib/api/diseno-sala'
 
 /** Digitos minimos antes de consultar: menos que esto da media EPS. */
 const MINIMO_DIGITOS = 4
@@ -73,6 +74,16 @@ export default function AdmisionesClient() {
   const [buscando, setBuscando] = useState(false)
   const [registrando, setRegistrando] = useState<string | null>(null)
   const [comprobante, setComprobante] = useState<ComprobanteLlegada | null>(null)
+  /*
+   * QUE SE LE DICE AL PACIENTE DEPENDE DE LA PANTALLA DE LA SALA.
+   *
+   * Con la cartelera de turno, el televisor solo muestra el codigo: hay que
+   * dictarselo. Con la de paciente, el televisor muestra su NOMBRE y no el
+   * codigo, asi que mandarlo a estar pendiente de un codigo que nunca va a
+   * aparecer lo deja perdido. Se lee de la misma ruta que el televisor; si no
+   * responde, se queda en la de turno, que es la de partida.
+   */
+  const conNombreEnPantalla = useSalaConNombres()
 
   // Si la ultima busqueda fallo. Mientras tanto no se muestra ninguna cita:
   // antes quedaban a la vista las del paciente ANTERIOR, con su boton de
@@ -156,8 +167,17 @@ export default function AdmisionesClient() {
           c.id === cita.id ? { ...c, estado: 'PRESENTADO', codigoTurno: entregado.codigo } : c,
         ) ?? null,
       )
-      if (yaRegistrada) toast.info('La llegada ya estaba registrada', `Su turno es el ${entregado.codigo}.`)
-      else toast.success('Llegada registrada', `Turno ${entregado.codigo} para ${cita.nombrePaciente}.`)
+      if (yaRegistrada) {
+        toast.info(
+          'La llegada ya estaba registrada',
+          conNombreEnPantalla ? `${cita.nombrePaciente} ya esta en la fila.` : `Su turno es el ${entregado.codigo}.`,
+        )
+      } else {
+        toast.success(
+          'Llegada registrada',
+          conNombreEnPantalla ? `${cita.nombrePaciente} quedo en la fila.` : `Turno ${entregado.codigo} para ${cita.nombrePaciente}.`,
+        )
+      }
     } catch (error) {
       toast.error('No se pudo registrar la llegada', error instanceof Error ? error.message : undefined)
     } finally {
@@ -199,15 +219,27 @@ export default function AdmisionesClient() {
         </div>
       ) : comprobante ? (
         <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50">
-          <div className="px-6 pt-5 text-center">
-            <p className="text-sm font-bold uppercase tracking-wide text-emerald-700">Turno asignado</p>
-            <p className="mt-1 text-6xl font-semibold tracking-[-0.03em] text-emerald-900">
-              {comprobante.codigo}
-            </p>
-            {comprobante.nombrePaciente ? (
-              <p className="mt-1 text-sm font-bold text-emerald-800">{comprobante.nombrePaciente}</p>
-            ) : null}
-          </div>
+          {conNombreEnPantalla ? (
+            // Lo que va a salir en el televisor es el nombre: eso es lo grande.
+            // El turno queda pequeño, solo como referencia interna.
+            <div className="px-6 pt-5 text-center">
+              <p className="text-sm font-bold uppercase tracking-wide text-emerald-700">Llegada registrada</p>
+              <p className="mt-1 text-3xl font-semibold leading-tight tracking-[-0.02em] text-emerald-900">
+                {comprobante.nombrePaciente ?? 'Paciente en la fila'}
+              </p>
+              <p className="mt-1 text-xs font-bold text-emerald-700">Turno interno {comprobante.codigo}</p>
+            </div>
+          ) : (
+            <div className="px-6 pt-5 text-center">
+              <p className="text-sm font-bold uppercase tracking-wide text-emerald-700">Turno asignado</p>
+              <p className="mt-1 text-6xl font-semibold tracking-[-0.03em] text-emerald-900">
+                {comprobante.codigo}
+              </p>
+              {comprobante.nombrePaciente ? (
+                <p className="mt-1 text-sm font-bold text-emerald-800">{comprobante.nombrePaciente}</p>
+              ) : null}
+            </div>
+          )}
 
           {/* Consultorio y doctor: es lo que hay que decirle en voz alta, asi
               que va en bloques grandes y separados, no en una linea de texto
@@ -234,11 +266,19 @@ export default function AdmisionesClient() {
             </div>
           </div>
 
-          <p className="bg-emerald-100 px-6 py-3 text-center text-sm font-semibold leading-6 text-emerald-900">
-            Digale al paciente que espere en la sala. En la pantalla va a aparecer{' '}
-            <strong className="font-semibold">solo su turno {comprobante.codigo}</strong> y el consultorio al
-            que debe entrar; su nombre no se muestra ni se dice en voz alta.
-          </p>
+          {conNombreEnPantalla ? (
+            <p className="bg-emerald-100 px-6 py-3 text-center text-sm font-semibold leading-6 text-emerald-900">
+              Digale al paciente que espere en la sala y este pendiente de la pantalla: cuando lo llamen va a
+              aparecer <strong className="font-semibold">su nombre</strong> y el consultorio al que debe entrar.
+              No necesita recordar ningun numero de turno.
+            </p>
+          ) : (
+            <p className="bg-emerald-100 px-6 py-3 text-center text-sm font-semibold leading-6 text-emerald-900">
+              Digale al paciente que espere en la sala. En la pantalla va a aparecer{' '}
+              <strong className="font-semibold">solo su turno {comprobante.codigo}</strong> y el consultorio al
+              que debe entrar; su nombre no se muestra ni se dice en voz alta.
+            </p>
+          )}
         </div>
       ) : null}
 

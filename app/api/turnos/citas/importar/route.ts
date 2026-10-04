@@ -14,7 +14,7 @@
  */
 import { NextResponse } from 'next/server'
 import { importarReporteDeCitas } from '@/lib/citas/importar-reporte'
-import { apiError, requireSeccion } from '@/lib/permissions/session'
+import { apiError, exigirCuentaReal, requireSeccion } from '@/lib/permissions/session'
 import { registrarEvento, contextoPeticion } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { detalleDeImportacion } from '@/lib/citas/rastro-importacion'
@@ -33,6 +33,7 @@ const MAXIMO_BYTES = 10 * 1024 * 1024
 export async function POST(request: Request) {
   try {
     const session = await requireSeccion('/admin/citas', '/operador/agenda')
+    exigirCuentaReal(session)
 
     // El freno ANTES de leer el formulario: leer 10 MB ya es trabajo, y quien
     // dispara importaciones en bucle no tiene por que conseguirlo.

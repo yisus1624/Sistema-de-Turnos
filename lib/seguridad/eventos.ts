@@ -61,6 +61,17 @@ export const EVENTOS = {
    */
   ACCESO_PROFESIONAL_CONSULTADO: 'ACCESO_PROFESIONAL_CONSULTADO',
 
+  // --- Entrada de los medicos con PIN (ver `lib/consultorio/freno-pin.ts`) ---
+  /** Un medico entro (o fallo al entrar) con su PIN. Nunca se apunta el PIN. */
+  ACCESO_POR_PIN: 'ACCESO_POR_PIN',
+  /** El administrador sorteo, activo, desactivo, elimino o consulto un PIN. */
+  PIN_ASIGNADO: 'PIN_ASIGNADO',
+  PIN_ACTIVADO: 'PIN_ACTIVADO',
+  PIN_DESACTIVADO: 'PIN_DESACTIVADO',
+  PIN_ELIMINADO: 'PIN_ELIMINADO',
+  PIN_CONSULTADO: 'PIN_CONSULTADO',
+
+
   CITA_CREADA: 'CITA_CREADA',
   CITA_CANCELADA: 'CITA_CANCELADA',
   CITA_REPROGRAMADA: 'CITA_REPROGRAMADA',

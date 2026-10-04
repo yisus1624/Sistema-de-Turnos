@@ -1,30 +1,32 @@
 'use client'
 
 /**
- * Panel de pruebas: pone a los 10 profesionales sembrados a "atender" al
- * tiempo (genera sus accesos, registra la llegada de sus citas de hoy, y
- * llama pacientes en oleadas) para poder ver en vivo, en la misma pantalla,
- * como reacciona /pantalla. Pensado para demos y para detectar problemas de
- * la pantalla publica bajo varios consultorios activos, no para produccion.
+ * Panel de simulacion de carga, SOLO EN LA CUENTA DE DEMOSTRACION: pone a los
+ * doctores del hospital de prueba a "atender" al tiempo (genera sus accesos,
+ * registra la llegada de sus citas de hoy y llama pacientes en oleadas) para
+ * ver en vivo como reacciona /pantalla. Todo pasa en el hospital de mentira en
+ * memoria (`lib/demostracion/mundo.ts`): ni un dato real se toca.
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Broadcast,
   FastForward,
   Megaphone,
   PlayCircle,
+  Repeat,
   Stop,
   Warning,
 } from '@phosphor-icons/react/dist/ssr'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import ConfirmModal from '@/components/ui/ConfirmModal'
 import { Campo, Entrada } from '@/components/admin/Campos'
-import { hoyEnColombia, mensajeDeError, pedir } from '@/lib/api/cliente'
+import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import { llamarSiguienteDesde } from '@/lib/api/llamado-cliente'
-import type { HorarioDia, Turno } from '@/lib/turnos/types'
+import type { Turno } from '@/lib/turnos/types'
+import { useSalaConNombres } from '@/lib/api/diseno-sala'
+import { nombreAbreviado } from '@/lib/turnos/nombre-abreviado'
 import { MAXIMO_CONSULTORIOS_SIMULADOS, type SimulacionPreparada } from '@/lib/turnos/simulacion-carga'
 
 type DoctorSimulado = {
@@ -50,27 +52,33 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
   const [doctores, setDoctores] = useState<DoctorSimulado[]>([])
   const [preparando, setPreparando] = useState(false)
   const [enOleada, setEnOleada] = useState(false)
-  const [consultoriosASimular, setConsultoriosASimular] = useState(10)
+  const [enAutomatico, setEnAutomatico] = useState(false)
+  // Once: los doctores que el hospital tiene a la vez en una jornada.
+  const [consultoriosASimular, setConsultoriosASimular] = useState(11)
   const [pacientesPorConsultorio, setPacientesPorConsultorio] = useState(3)
   const [tamanoOleada, setTamanoOleada] = useState(2)
   const [pausaSegundos, setPausaSegundos] = useState(4)
   const [log, setLog] = useState<string[]>([])
-  // Preparar la simulacion borra los turnos de hoy y devuelve las citas a
-  // PROGRAMADA, sean de ejemplo o de verdad. Nunca debe pasar por un solo clic.
-  const [confirmarReinicio, setConfirmarReinicio] = useState(false)
-  /**
-   * Cuantas citas hay hoy de verdad, para el aviso de reinicio.
-   *
-   * `null` mientras se averigua o si no se pudo. El aviso decia siempre "se
-   * van a borrar todas las citas y todos los turnos de hoy" en rojo, tambien
-   * los dias en los que no hay ni una: daba miedo sin motivo y hacia dudar de
-   * si la pantalla estaba fallando. Y ademas no era cierto contra la base de
-   * verdad, que no borra ni una cita (ver `reiniciarDatosDeHoy` en el
-   * repositorio de Prisma). Decir el numero, y decir lo que de verdad pasa,
-   * convierte un susto en una decision informada.
-   */
-  const [citasQueSeBorran, setCitasQueSeBorran] = useState<number | null>(null)
   const detenerRef = useRef(false)
+  // Con la cartelera de nombres, ni aqui sale el codigo: el nombre abreviado.
+  const conNombres = useSalaConNombres()
+  const quien = useCallback(
+    (turno: Turno) =>
+      conNombres
+        ? nombreAbreviado(turno.nombrePaciente)
+        : `${turno.codigo}${turno.nombrePaciente ? ` — ${turno.nombrePaciente}` : ''}`,
+    [conNombres],
+  )
+  /*
+   * Los doctores de AHORA, para las oleadas. Sin esto cada oleada leia la lista
+   * del momento en que se pulso el boton: en el modo automatico, la segunda
+   * vuelta mandaba el turno de la primera como "el que tengo abierto", el
+   * servidor contestaba que ya tenia otro y nadie avanzaba.
+   */
+  const doctoresRef = useRef<DoctorSimulado[]>([])
+  useEffect(() => {
+    doctoresRef.current = doctores
+  }, [doctores])
 
   const agregarLog = useCallback((linea: string) => {
     const hora = new Intl.DateTimeFormat('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(
@@ -79,25 +87,6 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
     setLog((prev) => [...prev.slice(-79), `${hora}  ${linea}`])
   }, [])
 
-  /** Abre la confirmacion y, mientras, averigua que hay hoy que perder. */
-  async function pedirConfirmacion() {
-    setCitasQueSeBorran(null)
-    setConfirmarReinicio(true)
-
-    try {
-      const { horario } = await pedir<{ horario: HorarioDia }>(
-        `/api/turnos/agenda/horario?fecha=${hoyEnColombia()}`,
-      )
-      const enParrilla = horario.bloques.reduce(
-        (total, bloque) => total + bloque.columnas.reduce((suma, columna) => suma + columna.citas, 0),
-        0,
-      )
-      setCitasQueSeBorran(enParrilla + horario.fueraDeHorario.length)
-    } catch {
-      // No se pudo saber: se queda el aviso generico, que es el prudente.
-      setCitasQueSeBorran(null)
-    }
-  }
 
   async function prepararSimulacion() {
     detenerRef.current = false
@@ -160,17 +149,21 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
         const desenlace = await llamarSiguienteDesde(
           '/api/consultorio/llamar-siguiente',
           { moduloId: doctor.moduloId, profesionalId: doctor.profesionalId },
-          { headers: { 'x-consultorio-token': doctor.token }, turnoVisto: doctor.turnoActual ?? null },
+          // Un 401 aqui es el enlace del doctor simulado, no la sesion del
+          // administrador: se anota en el registro, sin mandarlo al login.
+          { headers: { 'x-consultorio-token': doctor.token }, turnoVisto: doctor.turnoActual ?? null, sinRedirigirAlLogin: true },
         )
         const { turno } = desenlace
         if (desenlace.tipo === 'ya_tenia_uno') {
-          agregarLog(`${doctor.nombre}: ya tenia llamado el ${turno.codigo}; se toma ese.`)
+          agregarLog(`${doctor.nombre}: ya tenia llamado a ${quien(turno)}; se toma ese.`)
           setDoctores((prev) =>
             prev.map((d) => (d.profesionalId === doctor.profesionalId ? { ...d, llamando: false, turnoActual: turno } : d)),
           )
           return
         }
-        agregarLog(`${doctor.nombre} llamo a ${turno.codigo}${turno.nombrePaciente ? ` — ${turno.nombrePaciente}` : ''}.`)
+        // Sin punto doble cuando el nombre abreviado ya termina en inicial ("P.").
+        const llamado = quien(turno)
+        agregarLog(`${doctor.nombre} llamo a ${llamado}${llamado.endsWith('.') ? '' : '.'}`)
         setDoctores((prev) =>
           prev.map((d) =>
             d.profesionalId === doctor.profesionalId
@@ -183,32 +176,60 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
         setDoctores((prev) => prev.map((d) => (d.profesionalId === doctor.profesionalId ? { ...d, llamando: false } : d)))
       }
     },
-    [agregarLog],
+    [agregarLog, quien],
   )
 
   function esperar(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
+  /** Una vuelta: todos los doctores llaman al siguiente, en oleadas. */
+  async function unaVuelta() {
+    const total = doctoresRef.current.length
+    for (let i = 0; i < total; i += tamanoOleada) {
+      if (detenerRef.current) return
+      const oleada = doctoresRef.current.slice(i, i + tamanoOleada)
+      await Promise.all(oleada.map((doctor) => llamarUno(doctor)))
+      if (detenerRef.current) return
+      if (i + tamanoOleada < total) await esperar(pausaSegundos * 1000)
+    }
+  }
+
   async function siguienteParaTodos() {
     setEnOleada(true)
     detenerRef.current = false
     agregarLog(`Llamando a todos en oleadas de ${tamanoOleada}...`)
-
-    for (let i = 0; i < doctores.length; i += tamanoOleada) {
-      if (detenerRef.current) break
-      const oleada = doctores.slice(i, i + tamanoOleada)
-      await Promise.all(oleada.map((doctor) => llamarUno(doctor)))
-      if (detenerRef.current) break
-      if (i + tamanoOleada < doctores.length) await esperar(pausaSegundos * 1000)
-    }
-
+    await unaVuelta()
     setEnOleada(false)
+  }
+
+  /**
+   * Vuelta tras vuelta hasta que se detenga o se acaben los pacientes: la demo
+   * corre sola mientras se explica. Entre vueltas, la misma pausa.
+   */
+  async function automatico() {
+    setEnOleada(true)
+    setEnAutomatico(true)
+    detenerRef.current = false
+    agregarLog('Modo automatico: los consultorios van llamando solos. Pulsa "Parar automatico" para detenerlo.')
+    while (!detenerRef.current && doctoresRef.current.some((d) => d.pacientesEnEspera > 0)) {
+      await unaVuelta()
+      if (!detenerRef.current) await esperar(pausaSegundos * 1000)
+    }
+    if (!detenerRef.current) agregarLog('Modo automatico: ya no quedan pacientes en espera.')
+    setEnAutomatico(false)
+    setEnOleada(false)
+  }
+
+  function pararAutomatico() {
+    detenerRef.current = true
+    agregarLog('Deteniendo el modo automatico al terminar la oleada en curso...')
   }
 
   async function detenerSimulacion() {
     detenerRef.current = true
     setEnOleada(false)
+    setEnAutomatico(false)
     setPreparando(false)
     setDoctores([])
     agregarLog('Deteniendo: se limpian los turnos de hoy...')
@@ -232,17 +253,16 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
           <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
             <Warning size={20} weight="fill" className="mt-0.5 shrink-0 text-amber-600" />
             <div className="space-y-2 text-sm leading-6 text-amber-900">
-              <p className="font-semibold">La simulacion esta apagada en este servidor.</p>
+              <p className="font-semibold">La simulacion solo corre en la cuenta de demostracion.</p>
               <p>
-                Este es el servidor con la agenda real del hospital. La simulacion rehace los turnos del dia
-                y les cambia el enlace a los doctores, asi que aqui queda cerrada a proposito: no es una
+                Esta cuenta trabaja sobre los datos reales del hospital, y la simulacion rehace los turnos del
+                dia y les cambia el enlace a los doctores, asi que aqui queda cerrada a proposito: no es una
                 falla.
               </p>
               <p>
-                Para mostrarla, entra al servidor de demostracion, que tiene el mismo sistema y una base
-                aparte con pacientes de mentira. Se enciende con{' '}
-                <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-xs">TURNOS_SIMULACION=1</code>
-                .
+                Para mostrarla, cierra sesion y entra con la cuenta de demostracion: tiene el mismo sistema
+                con un hospital de prueba aparte (once doctores por jornada y pacientes inventados). Si
+                todavia no existe, creala en Usuarios marcando &quot;Cuenta de demostracion&quot;.
               </p>
             </div>
           </div>
@@ -254,16 +274,16 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm leading-6 text-slate-600">
-              Elige cuantos consultorios quieres ver en la pantalla (hasta {MAXIMO_CONSULTORIOS_SIMULADOS}) y
-              prepara la simulacion: usa las citas que ya existen (las de hoy y, si no alcanzan, las del ultimo
-              dia con citas) y registra la llegada de sus pacientes, sin crear pacientes ni citas. Cada doctor
-              llama desde su consultorio real: varios pueden compartir el mismo y cada uno sale en su fila de
-              la pantalla. Luego llama pacientes uno por uno desde cada tarjeta, o dale a
-              &quot;Siguiente para todos&quot; para que vayan pasando en oleadas.
+              Todo pasa en el hospital de demostracion: los doctores y los pacientes son de prueba y nada
+              llega a los datos reales ni a los televisores de las salas. Elige cuantos consultorios quieres
+              ver en la pantalla (hasta {MAXIMO_CONSULTORIOS_SIMULADOS}) y prepara la simulacion: se registra
+              la llegada de los pacientes de cada doctor. Luego llama pacientes uno por uno desde cada
+              tarjeta, dale a &quot;Siguiente para todos&quot; para una oleada, o a &quot;Automatico&quot; para
+              que vayan pasando solos hasta que lo pares.
             </p>
             <div className="flex flex-wrap items-center gap-3">
               <Button
-                onClick={() => void pedirConfirmacion()}
+                onClick={() => void prepararSimulacion()}
                 loading={preparando}
                 disabled={!habilitada || enOleada}
               >
@@ -279,6 +299,21 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
                 <FastForward size={18} weight="bold" />
                 Siguiente para todos
               </Button>
+              {enAutomatico ? (
+                <Button variant="secondary" onClick={pararAutomatico}>
+                  <Stop size={18} weight="bold" />
+                  Parar automatico
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  onClick={() => void automatico()}
+                  disabled={!habilitada || preparando || enOleada || doctores.length === 0}
+                >
+                  <Repeat size={18} weight="bold" />
+                  Automatico
+                </Button>
+              )}
               <Button
                 variant="danger"
                 onClick={detenerSimulacion}
@@ -365,7 +400,7 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
                     </div>
                     <p className="mt-2 truncate text-sm text-slate-600">
                       {doctor.turnoActual
-                        ? `Atendiendo ${doctor.turnoActual.codigo}${doctor.turnoActual.nombrePaciente ? ` — ${doctor.turnoActual.nombrePaciente}` : ''}`
+                        ? `Atendiendo a ${quien(doctor.turnoActual)}`
                         : 'Sin paciente en atencion.'}
                     </p>
                     <Button
@@ -423,45 +458,6 @@ export default function PruebasClient({ habilitada }: { habilitada: boolean }) {
         </CardContent>
       </Card>
 
-      <ConfirmModal
-        open={confirmarReinicio}
-        onClose={() => setConfirmarReinicio(false)}
-        onConfirm={() => {
-          setConfirmarReinicio(false)
-          void prepararSimulacion()
-        }}
-        title="Esto rehace la jornada de hoy"
-        description="Preparar la simulacion vacia la sala de espera antes de empezar."
-        confirmLabel="Rehacer el dia y preparar"
-        danger
-      >
-        {citasQueSeBorran === null ? (
-          <p className="text-sm leading-6 text-slate-600">
-            Se van a <strong className="font-semibold text-red-700">borrar todos los turnos de hoy</strong> y
-            a deshacer el registro de llegada de los pacientes que ya esten en la fila. Las citas no se
-            borran: vuelven a quedar como PROGRAMADA.
-          </p>
-        ) : citasQueSeBorran === 0 ? (
-          <p className="text-sm leading-6 text-slate-600">
-            Hoy <strong className="font-semibold">no hay ninguna cita cargada</strong>, asi que no se
-            interrumpe a nadie. Se borran los turnos que haya podido dejar una prueba anterior y se agregan
-            pacientes de mentira para la simulacion.
-          </p>
-        ) : (
-          <p className="text-sm leading-6 text-slate-600">
-            Hoy hay <strong className="font-semibold text-red-700">{citasQueSeBorran} cita(s)</strong>: se
-            borran sus turnos y las que ya se hayan presentado vuelven a quedar como PROGRAMADA, o sea que
-            el mostrador tendria que registrarles la llegada otra vez. Las citas en si no se borran.
-          </p>
-        )}
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Tambien se generan enlaces nuevos para los doctores que entren en la simulacion, con lo que{' '}
-          <strong className="font-semibold">se invalidan los enlaces que esten usando ahora</strong>.
-        </p>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Esta pantalla es solo para demos y pruebas de carga. No la uses en un dia de atencion real.
-        </p>
-      </ConfirmModal>
     </div>
   )
 }

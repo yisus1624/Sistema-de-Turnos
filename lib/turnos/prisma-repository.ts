@@ -28,7 +28,8 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { contextoDeTransaccion, prisma } from '@/lib/prisma'
-import { cifrarSiSePuede, descifrar } from '@/lib/seguridad/cifrado'
+import { cifrar, cifrarSiSePuede, descifrar, huella } from '@/lib/seguridad/cifrado'
+import { esPinValido, sortearPin, SORTEOS_MAXIMOS } from './reglas-pin'
 import { realtimeHub } from '@/lib/realtime/hub'
 import { ConflictoDeTurno, ErrorPasajero, errorDeNegocio } from './errores'
 import { DEVUELTO_A_LA_FILA, exigirPlanVisto, planDeRetroceso, REABIERTO, type PlanDeRetroceso } from './reglas-retroceso'
@@ -44,13 +45,13 @@ import {
 } from './reglas-llamado'
 import { ordenAtencion, resumir, type PuestoEnLaFila } from './estadisticas'
 import { reunirActividad } from './actividad'
-import { modulosVisiblesEnPantalla, puestoDe } from './casillas'
+import { modulosVisiblesEnPantalla, nombreParaPantalla, puestoDe } from './casillas'
 import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
 import { motivoQueImpideDesactivarModulo } from './reglas-catalogo'
 import { esConflictoPasajero, mensajeDeChoque } from './choques-unicos'
 import { mismoDocumento, normalizarDocumento } from './documento'
 import { CONFIGURACION_INICIAL } from './configuracion-inicial'
-import { esDisenoPantalla } from './types'
+import { esDisenoPantalla, esModoAccesoProfesional } from './types'
 import { CONFIGURACION_YA_CAMBIADA, exigirConfiguracionAlDia } from './configuracion-version'
 import {
   ETIQUETA_JORNADA,
@@ -68,6 +69,7 @@ import {
 } from './tiempo'
 import type { TurnoRepository } from './repository'
 import type {
+  PinProfesional,
   AccionSobreTurno,
   ActividadCatalogo,
   AccesoProfesional,
@@ -130,6 +132,15 @@ function aServicio(fila: FilaServicio): Servicio {
 
 function aModulo(fila: FilaModulo): Modulo {
   return { id: fila.id, nombre: fila.nombre, servicioId: fila.servicioId, activo: fila.activo }
+}
+
+function aPin(fila: { profesionalId: string; pinCifrado: string; activo: boolean; actualizadoEn: Date }): PinProfesional {
+  return {
+    profesionalId: fila.profesionalId,
+    pin: descifrar(fila.pinCifrado),
+    activo: fila.activo,
+    actualizadoEn: fila.actualizadoEn.toISOString(),
+  }
 }
 
 function aProfesional(fila: FilaProfesional): Profesional {
@@ -219,6 +230,7 @@ type FilaConfiguracion = {
   jornadaTardeInicio: string
   jornadaTardeFin: string
   disenoPantalla: string
+  accesoProfesionales: string
   fondoPantalla: string
 }
 
@@ -235,6 +247,9 @@ function aConfiguracion(fila: FilaConfiguracion): ConfiguracionGuardada {
     disenoPantalla: esDisenoPantalla(fila.disenoPantalla)
       ? fila.disenoPantalla
       : CONFIGURACION_INICIAL.disenoPantalla,
+    accesoProfesionales: esModoAccesoProfesional(fila.accesoProfesionales)
+      ? fila.accesoProfesionales
+      : CONFIGURACION_INICIAL.accesoProfesionales,
     fondoPantalla: fila.fondoPantalla,
     duracionCitaMinutos: fila.duracionCitaMinutos,
     jornadaMananaInicio: fila.jornadaMananaInicio,
@@ -1929,6 +1944,7 @@ export class PrismaTurnoRepository implements TurnoRepository {
               ? (profesionalPorId.get(turno.profesionalId)?.nombre ?? null)
               : null,
             codigo: turno.codigo,
+            ...nombreParaPantalla(configuracion.disenoPantalla, turno.nombrePaciente),
             horaLlamado: iso(turno.horaLlamado),
             vecesLlamado: turno.vecesLlamado,
             siguienteCodigo: turno.profesionalId
@@ -2532,6 +2548,54 @@ export class PrismaTurnoRepository implements TurnoRepository {
     return aAcceso(fila)
   }
 
+  // --- PIN de los medicos ---
+
+  async listarPines(): Promise<PinProfesional[]> {
+    const filas = await prisma.pinProfesional.findMany()
+    return filas.map(aPin)
+  }
+
+  async asignarPin(profesionalId: string): Promise<{ pin: string }> {
+    await exigirProfesional(profesionalId)
+    for (let sorteo = 0; sorteo < SORTEOS_MAXIMOS; sorteo += 1) {
+      const pin = sortearPin()
+      const datos = { pinHuella: huella(pin), pinCifrado: cifrar(pin), activo: true }
+      try {
+        await prisma.pinProfesional.upsert({
+          where: { profesionalId },
+          create: { profesionalId, ...datos },
+          update: datos,
+        })
+        return { pin }
+      } catch (error) {
+        // Le salio el PIN de otro medico (la huella es unica): otro sorteo.
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') continue
+        throw error
+      }
+    }
+    errorDeNegocio('No se pudo sortear un PIN libre. Vuelve a intentarlo.')
+  }
+
+  async cambiarEstadoPin(profesionalId: string, activo: boolean): Promise<PinProfesional> {
+    const existe = await prisma.pinProfesional.findUnique({ where: { profesionalId }, select: { profesionalId: true } })
+    if (!existe) errorDeNegocio('Ese medico todavia no tiene PIN.')
+    return aPin(await prisma.pinProfesional.update({ where: { profesionalId }, data: { activo } }))
+  }
+
+  async eliminarPin(profesionalId: string): Promise<void> {
+    await prisma.pinProfesional.deleteMany({ where: { profesionalId } })
+  }
+
+  async profesionalPorPin(pin: string): Promise<Profesional | null> {
+    if (!esPinValido(pin)) return null
+    const fila = await prisma.pinProfesional.findUnique({
+      where: { pinHuella: huella(pin) },
+      include: { profesional: true },
+    })
+    if (!fila?.activo || !fila.profesional.activo) return null
+    return aProfesional(fila.profesional)
+  }
+
   /** Ver `tokenVigenteDeProfesional` en el contrato del repositorio. */
   async tokenVigenteDeProfesional(profesionalId: string): Promise<string | null> {
     const acceso = await prisma.accesoProfesional.findFirst({
@@ -2577,7 +2641,9 @@ async function proximoDelProfesional(profesionalId: string | null): Promise<stri
 }
 
 /**
- * Arma la casilla que ve la pantalla publica. NO lleva datos del paciente.
+ * Arma la casilla que ve la pantalla publica. El nombre del paciente solo va
+ * si el diseño elegido lo muestra (ver `nombreParaPantalla`): por eso se lee
+ * la configuracion, una fila, en cada llamado.
  *
  * LLEVA TAMBIEN EL PROXIMO, y tiene que llevarlo. Esta casilla es la que viaja
  * por el canal en vivo cuando alguien llama un turno, y la pantalla reemplaza
@@ -2587,11 +2653,12 @@ async function proximoDelProfesional(profesionalId: string | null): Promise<stri
  * resincronizacion, hasta un minuto despues.
  */
 async function casillaDeTurno(turno: FilaTurno): Promise<CasillaPantalla> {
-  const [modulo, servicio, profesional, siguienteCodigo] = await Promise.all([
+  const [modulo, servicio, profesional, siguienteCodigo, configuracion] = await Promise.all([
     turno.moduloId ? prisma.modulo.findUnique({ where: { id: turno.moduloId } }) : null,
     prisma.servicio.findUnique({ where: { id: turno.servicioId } }),
     turno.profesionalId ? prisma.profesional.findUnique({ where: { id: turno.profesionalId } }) : null,
     proximoDelProfesional(turno.profesionalId),
+    cargarConfiguracion(),
   ])
 
   return {
@@ -2602,6 +2669,7 @@ async function casillaDeTurno(turno: FilaTurno): Promise<CasillaPantalla> {
     servicioNombre: servicio?.nombre ?? 'Ventanilla',
     profesionalNombre: profesional?.nombre ?? null,
     codigo: turno.codigo,
+    ...nombreParaPantalla(configuracion.disenoPantalla, turno.nombrePaciente),
     horaLlamado: iso(turno.horaLlamado),
     vecesLlamado: turno.vecesLlamado,
     siguienteCodigo,

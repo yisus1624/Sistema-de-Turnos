@@ -5,6 +5,8 @@ import {
   Flask,
   Key,
   Gear,
+  Password,
+  SlidersHorizontal,
   Megaphone,
   MonitorPlay,
   Stack,
@@ -13,7 +15,8 @@ import {
   UserFocus,
   UsersThree,
 } from '@phosphor-icons/react'
-import { puedeVerSeccion, secciones, type SeccionSistema } from '@/lib/permissions/rutas'
+import { puedeVerSeccion, seccionDelModo, secciones, type SeccionSistema } from '@/lib/permissions/rutas'
+import type { ModoAccesoProfesional } from '@/lib/turnos/types'
 import type { RolUsuario } from '@/lib/usuarios/types'
 
 export type NavItem = SeccionSistema & { icon: Icon }
@@ -37,6 +40,7 @@ const iconos: Record<string, Icon> = {
   '/admin/turnos': Ticket,
   '/admin/citas': CalendarPlus,
   '/admin/enlaces': Key,
+  '/admin/pines': Password,
   '/admin/reportes': FileText,
 
   '/admin/servicios': Stack,
@@ -44,6 +48,7 @@ const iconos: Record<string, Icon> = {
   '/admin/profesionales': Stethoscope,
   '/admin/usuarios': UsersThree,
   '/admin/pantalla': MonitorPlay,
+  '/admin/ajustes': SlidersHorizontal,
   '/admin/pruebas': Flask,
   '/operador/agenda': CalendarPlus,
   '/operador/admisiones': UserFocus,
@@ -61,11 +66,17 @@ const ICONO_POR_DEFECTO: Icon = Ticket
  * le puede haber dado una seccion de administracion; `puedeVerSeccion` decide
  * cual entra. Los grupos que quedan vacios no se devuelven.
  */
-export function navDelUsuario(rol: RolUsuario, seccionesDelUsuario?: string[] | null): NavSection[] {
+export function navDelUsuario(
+  rol: RolUsuario,
+  seccionesDelUsuario?: string[] | null,
+  demostracion = false,
+  modoAcceso?: ModoAccesoProfesional,
+): NavSection[] {
   const grupos: NavSection[] = []
 
   for (const seccion of secciones) {
-    if (!puedeVerSeccion(rol, seccionesDelUsuario, seccion.href)) continue
+    if (!puedeVerSeccion(rol, seccionesDelUsuario, seccion.href, demostracion)) continue
+    if (!seccionDelModo(seccion.href, modoAcceso)) continue
 
     const item: NavItem = { ...seccion, icon: iconos[seccion.href] ?? ICONO_POR_DEFECTO }
     const grupo = grupos.find((g) => g.label === seccion.grupo)

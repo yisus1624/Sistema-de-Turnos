@@ -1,15 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Clock } from '@phosphor-icons/react/dist/ssr'
 
 /**
- * La hora actual, refrescada cada quince segundos.
- *
- * Vive aparte del `Reloj` porque los DOS diseños de pantalla la necesitan —la
- * cuadricula la pinta abajo a la derecha y la cartelera arriba— y tener dos
- * temporizadores para el mismo dato significa que, con un televisor encendido
- * toda la jornada, los dos acaban marcando minutos distintos.
+ * La hora actual, refrescada cada quince segundos. La cartelera la recibe ya
+ * formateada desde la pagina, que tiene un solo temporizador para todo.
  *
  * Arranca en `null` a proposito: la hora del servidor y la del televisor no
  * tienen por que coincidir, y pintarla antes de que monte el componente haria
@@ -35,28 +30,4 @@ export function horaColombiana(ahora: Date) {
     minute: '2-digit',
     timeZone: 'America/Bogota',
   }).format(ahora)
-}
-
-export default function Reloj() {
-  const ahora = useAhora()
-
-  if (!ahora) return null
-
-  const hora = horaColombiana(ahora)
-  const fecha = new Intl.DateTimeFormat('es-CO', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'America/Bogota',
-  }).format(ahora)
-
-  return (
-    <div className="flex items-center gap-3">
-      <Clock size="2.4rem" weight="thin" className="text-slate-500" />
-      <div className="leading-tight">
-        <p className="text-2xl font-semibold tabular-nums tracking-[-0.01em] text-slate-700">{hora}</p>
-        <p className="text-sm font-bold text-slate-500">{fecha}</p>
-      </div>
-    </div>
-  )
 }

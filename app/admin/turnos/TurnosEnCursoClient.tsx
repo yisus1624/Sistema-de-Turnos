@@ -47,6 +47,7 @@ import { cambiaLosCatalogos } from '@/lib/realtime/canal'
 import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import { iconoDeServicio } from '@/components/ui/iconos-servicio'
 import { TarjetaIndicador, TONOS_INDICADOR } from '@/components/ui/TarjetaIndicador'
+import { nombreAbreviado, seNombraAlPaciente } from '@/lib/turnos/nombre-abreviado'
 import type { CasillaPantalla, Modulo, Profesional, Servicio, Turno } from '@/lib/turnos/types'
 
 /** Cada cuanto, como mucho, se vuelve a pedir el dia completo (ver `useLimitador`). */
@@ -181,12 +182,23 @@ export default function TurnosEnCursoClient() {
   // Sin aviso si fallan: la hora de "actualizado" ya dice desde cuando no llega
   // nada, y `useCargaConReintento` lo vuelve a intentar solo.
 
+  /*
+   * Con la cartelera de nombres el paciente no conoce su codigo, asi que aqui
+   * tampoco se muestra: va el nombre abreviado (ver `nombreAbreviado`). Sale
+   * de la misma foto de la sala, que trae la configuracion.
+   */
+  const [conNombres, setConNombres] = useState(false)
+
   /** Quien esta en cada consultorio ahora: ligero (la sala va en cache), con cada evento. */
   const cargarSala = useCallback(async (): Promise<ResultadoDeCarga> => {
     const carga = cargasDeSala.iniciar()
-    const pantalla = await pedir<{ casillas: CasillaPantalla[] }>('/api/turnos/pantalla', { signal: carga.signal })
+    const pantalla = await pedir<{ casillas: CasillaPantalla[]; configuracion?: { disenoPantalla?: string } }>(
+      '/api/turnos/pantalla',
+      { signal: carga.signal },
+    )
     if (!carga.esVigente()) return 'reemplazada'
     setCasillas(pantalla.casillas)
+    setConNombres(seNombraAlPaciente(pantalla.configuracion?.disenoPantalla))
   }, [cargasDeSala])
 
   /**
@@ -430,6 +442,7 @@ export default function TurnosEnCursoClient() {
                   cola={tablero.cola}
                   paleta={PALETAS_SERVICIO[indice % PALETAS_SERVICIO.length]}
                   nombreDeModulo={nombreDeModulo}
+                  conNombres={conNombres}
                 />
               ))}
             </div>
@@ -455,6 +468,7 @@ function TarjetaServicio({
   cola,
   paleta,
   nombreDeModulo,
+  conNombres,
 }: {
   nombre: string
   /** Consultorios que ahora mismo estan atendiendo este servicio. */
@@ -462,6 +476,8 @@ function TarjetaServicio({
   cola: Turno[]
   paleta: PaletaServicio
   nombreDeModulo: (turno: Turno) => string | null
+  /** Nombre abreviado del paciente en vez del codigo (cartelera con nombre). */
+  conNombres: boolean
 }) {
   /*
     La cola se muestra recortada porque un servicio con treinta esperando
@@ -527,9 +543,15 @@ function TarjetaServicio({
                     {estilo.etiqueta}
                   </span>
 
-                  <span className="shrink-0 text-sm font-semibold tabular-nums tracking-[-0.01em] text-brand-950">
-                    {turno.codigo}
-                  </span>
+                  {conNombres ? (
+                    <span className="min-w-0 truncate text-sm font-semibold tracking-[-0.01em] text-brand-950">
+                      {nombreAbreviado(turno.nombrePaciente)}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-sm font-semibold tabular-nums tracking-[-0.01em] text-brand-950">
+                      {turno.codigo}
+                    </span>
+                  )}
 
                   {modulo ? (
                     <>

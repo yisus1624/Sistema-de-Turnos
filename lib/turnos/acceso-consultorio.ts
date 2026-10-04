@@ -58,6 +58,7 @@
 import { createHash } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { turnoRepository } from './repositorio'
+import { PREFIJO_TOKEN_DEMOSTRACION } from '@/lib/demostracion/mundo'
 import { MINUTOS_ACCESO_MAXIMO } from './repository'
 import type { Profesional } from './types'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
@@ -135,9 +136,10 @@ export class FrenoDeAccesoError extends Error {
 
 /**
  * La forma de un token de consultorio: 32 bytes al azar en base64url, que son
- * 43 caracteres (ver `crearAccesoProfesional`).
+ * 43 caracteres (ver `crearAccesoProfesional`); los de la cuenta de
+ * demostracion llevan delante `PREFIJO_TOKEN_DEMOSTRACION`.
  */
-const FORMATO_DEL_TOKEN = /^[A-Za-z0-9_-]{43}$/
+const FORMATO_DEL_TOKEN = new RegExp(`^(?:${PREFIJO_TOKEN_DEMOSTRACION})?[A-Za-z0-9_-]{43}$`)
 
 /** Ventana de los dos limites. */
 const MS_VENTANA = 5 * 60 * 1000

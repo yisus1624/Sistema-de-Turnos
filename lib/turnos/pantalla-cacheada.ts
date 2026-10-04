@@ -81,6 +81,9 @@ export async function estadoPantallaCacheado(): Promise<EstadoPantalla> {
 
   if (cache.foto && Date.now() < cache.expiraEn) return cache.foto
 
+  // SOLO la piden peticiones del hospital real: la ruta publica atiende antes
+  // y aparte a la sesion de demostracion, sin pasar por esta cache (ver
+  // `app/api/turnos/pantalla`), asi que una foto de prueba nunca se guarda aqui.
   const foto = turnoRepository.estadoPantalla()
   cache.foto = foto
   cache.expiraEn = Date.now() + MS_VIGENCIA

@@ -52,14 +52,28 @@ export const separacionCeldas = (letra: Letra) => Math.round(SEPARACION_CELDAS_E
 export const separacionPisos = (forma: FormaDeFila, letra: Letra) =>
   forma === 'dos-pisos' ? Math.round(SEPARACION_PISOS_EM * letra.consultorio) : 0
 
-const anchoTurno = (letra: Letra, textos: MedidaDeTextos) => Math.ceil((textos.turno + RELLENO_TURNO_EM) * letra.turno)
+/**
+ * Una fila SIN TURNO (la cartelera con el nombre del paciente, ver
+ * `CarteleraPaciente`) se pide con `textos.turno` en 0: la celda del codigo
+ * desaparece entera, con su hueco, y el nombre ocupa su lugar.
+ */
+const conTurno = (textos: MedidaDeTextos) => textos.turno > 0
 
-/** Lo que pide cada texto para caber en dos lineas, en pixeles. */
+const anchoTurno = (letra: Letra, textos: MedidaDeTextos) =>
+  conTurno(textos) ? Math.ceil((textos.turno + RELLENO_TURNO_EM) * letra.turno) : 0
+
+/**
+ * Lo que pide cada texto, en pixeles: los dos en dos lineas... salvo cuando el
+ * plan pide el consultorio en UNA (`consultorioEnUnaLinea`, la cartelera de
+ * paciente): es la pastilla a la que el paciente tiene que ir y se lee de un
+ * golpe, y el nombre, que si puede partirse en dos, cede el ancho.
+ */
 function anchoPedido(letra: Letra, textos: MedidaDeTextos): { medico: number; consultorio: number } {
   const em = (dosLineas: number) => Math.max(ANCHO_MINIMO_TEXTO_EM, dosLineas)
+  const consultorio = textos.consultorioEnUnaLinea ? textos.consultorio.unaLinea : textos.consultorio.dosLineas
   return {
     medico: em(textos.medico.dosLineas) * letra.medico,
-    consultorio: (em(textos.consultorio.dosLineas) + ADORNO_PASTILLA_EM) * letra.consultorio,
+    consultorio: (em(consultorio) + ADORNO_PASTILLA_EM) * letra.consultorio,
   }
 }
 
@@ -104,24 +118,25 @@ const GEOMETRIAS: Record<FormaDeFila, GeometriaDeFila> = {
   },
 }
 
-const aireLateral = (forma: FormaDeFila, letra: Letra) =>
-  2 * rellenoX(letra) + GEOMETRIAS[forma].separaciones * separacionCeldas(letra)
+const aireLateral = (forma: FormaDeFila, letra: Letra, textos: MedidaDeTextos) =>
+  2 * rellenoX(letra) + (GEOMETRIAS[forma].separaciones - (conTurno(textos) ? 0 : 1)) * separacionCeldas(letra)
 
 export function anchoNecesario(forma: FormaDeFila, letra: Letra, textos: MedidaDeTextos): number {
   const deTextos = GEOMETRIAS[forma].anchoDeTextos(anchoPedido(letra, textos))
-  return anchoTurno(letra, textos) + deTextos + aireLateral(forma, letra)
+  return anchoTurno(letra, textos) + deTextos + aireLateral(forma, letra, textos)
 }
 
 /** Lo que queda de la columna despues del codigo se reparte entre los textos. */
 export function celdasDe(forma: FormaDeFila, letra: Letra, entrada: { ancho: number; textos: MedidaDeTextos }): CeldasDeFila {
   const turno = anchoTurno(letra, entrada.textos)
-  const resto = Math.max(0, entrada.ancho - turno - aireLateral(forma, letra))
+  const resto = Math.max(0, entrada.ancho - turno - aireLateral(forma, letra, entrada.textos))
   return { turno, ...GEOMETRIAS[forma].celdasDeTextos(resto, anchoPedido(letra, entrada.textos)) }
 }
 
 /** El ancho de cada columna de la reja de la fila; el encabezado usa la misma. */
 export function rejaDe(forma: FormaDeFila, celdas: CeldasDeFila): number[] {
-  return GEOMETRIAS[forma].reja(celdas)
+  const reja = GEOMETRIAS[forma].reja(celdas)
+  return celdas.turno > 0 ? reja : reja.slice(1)
 }
 
 /** Lo que pide de alto la fila; los textos, en una linea si les cabe. */
@@ -132,7 +147,8 @@ export function altoNecesario(
 ): number {
   const celdas = celdasDe(forma, letra, fila)
   const textos = GEOMETRIAS[forma].altoDeTextos(altoDeTextos(letra, fila.textos, celdas, fila.conServicio), letra)
-  return Math.max(ALTO_TURNO_EM * letra.turno, textos) + 2 * RELLENO_VERTICAL_EM * letra.turno
+  const turno = conTurno(fila.textos) ? ALTO_TURNO_EM * letra.turno : 0
+  return Math.max(turno, textos) + 2 * RELLENO_VERTICAL_EM * letra.turno
 }
 
 export const cabeEnFila = (forma: FormaDeFila, textos: MedidaDeTextos, fila: Espacio) => (letra: Letra) =>

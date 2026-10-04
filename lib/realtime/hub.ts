@@ -101,6 +101,17 @@ class RealtimeHub {
   }
 }
 
+export type { RealtimeHub }
+
+/**
+ * Un canal APARTE del de las salas reales: lo usa la cuenta de demostracion
+ * (`lib/demostracion/mundo.ts`) para que sus llamados de prueba nunca suenen
+ * en un televisor del hospital.
+ */
+export function crearHubAparte(): RealtimeHub {
+  return new RealtimeHub()
+}
+
 declare global {
   var __turnosRealtimeHub: RealtimeHub | undefined
 }

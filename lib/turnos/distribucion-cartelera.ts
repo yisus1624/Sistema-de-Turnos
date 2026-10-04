@@ -16,6 +16,7 @@ import {
   ladoCorto,
   letraConEscala,
   MAXIMO_EN_UNA_PANTALLA,
+  MINIMO_TEXTO,
   mayorLetra,
   medirTextos,
   rangosEnUnaPantalla,
@@ -112,15 +113,24 @@ interface Contexto {
   separacionColumnas: number
   /** Lo que miden el codigo, el medico y el consultorio mas largos (topados, ver `textosReservados`). */
   textos: MedidaDeTextos
+  /** Las formas de fila que se pueden probar (ver `planDeCartelera`). */
+  formas: readonly FormaDeFila[]
 }
 
-function contextoDe(pantalla: Espacio, filas: TextosDeCasilla[]): Contexto {
+function contextoDe(pantalla: Espacio, filas: TextosDeCasilla[], sinTurno: boolean, consultorioEnUnaLinea = false): Contexto {
   const lado = ladoCorto(pantalla)
+  const textos = { ...textosReservados(medirTextos(filas)), consultorioEnUnaLinea }
   return {
     lado,
     separacionFilas: Math.max(6, Math.round(lado * 0.006)),
     separacionColumnas: Math.max(12, Math.round(lado * 0.015)),
-    textos: textosReservados(medirTextos(filas)),
+    // Sin turno, la fila no reserva la celda del codigo (ver `filas-de-cartelera.ts`).
+    textos: sinTurno ? { ...textos, turno: 0 } : textos,
+    // Y siempre en UNA PLANTA: el paciente a la izquierda y el consultorio con
+    // su numero al lado, cada uno con su titulo. Apilados, la columna tenia un
+    // solo titulo ("Paciente y consultorio") y la pastilla quedaba debajo del
+    // nombre, que es lo que el hospital no queria.
+    formas: sinTurno ? ['una-planta'] : FORMAS,
   }
 }
 
@@ -185,7 +195,7 @@ function conPocasColumnas(util: Espacio, ctx: Contexto, filas: number, rangos: r
   for (let columnas = Math.ceil(filas / FILAS_POR_COLUMNA); columnas <= filas; columnas += 1) {
     const filasPorColumna = Math.ceil(filas / columnas)
     const preferida: FormaDeFila = filasPorColumna <= FILAS_EN_DOS_PISOS ? 'dos-pisos' : 'una-planta'
-    for (const forma of [preferida, ...FORMAS.filter((f) => f !== preferida)]) {
+    for (const forma of [preferida, ...ctx.formas.filter((f) => f !== preferida)].filter((f) => ctx.formas.includes(f))) {
       for (const rango of rangos) {
         const eleccion = eleccionCon(ctx, repartoCon(util, ctx, { forma, columnas, filasPorColumna }), rango)
         if (eleccion) return eleccion
@@ -198,7 +208,7 @@ function conPocasColumnas(util: Espacio, ctx: Contexto, filas: number, rangos: r
 /** La letra normal si cabe, y si no, cada vez mas apretada. */
 function primeraQueQuepa(util: Espacio, ctx: Contexto, filas: number, rangos: readonly RangoDeLetra[]): Eleccion | null {
   for (const rango of rangos) {
-    const eleccion = mejorEnUnaPagina(util, ctx, filas, rango, FORMAS)
+    const eleccion = mejorEnUnaPagina(util, ctx, filas, rango, ctx.formas)
     if (eleccion) return eleccion
   }
   return null
@@ -271,8 +281,8 @@ const porPaginaDe = (reparto: Reparto | null) => (reparto ? reparto.columnas * r
  * una sola con la letra minima: mejor apretada que ilegible.
  */
 function paginado(util: Espacio, ctx: Contexto): Eleccion {
-  const mejor = FORMAS.map((forma) => mayorRepartoDe(util, ctx, forma)).reduce((a, b) => (porPaginaDe(b) > porPaginaDe(a) ? b : a))
-  const reparto = mejor ?? repartoCon(util, ctx, { forma: 'dos-pisos', columnas: 1, filasPorColumna: 1 })
+  const mejor = ctx.formas.map((forma) => mayorRepartoDe(util, ctx, forma)).reduce((a, b) => (porPaginaDe(b) > porPaginaDe(a) ? b : a))
+  const reparto = mejor ?? repartoCon(util, ctx, { forma: ctx.formas.at(-1)!, columnas: 1, filasPorColumna: 1 })
   return eleccionCon(ctx, reparto) ?? { reparto, letra: letraConEscala(0, ctx.lado, RANGO_CARTELERA) }
 }
 
@@ -321,17 +331,43 @@ function planDesde(eleccion: Eleccion, ctx: Contexto, filas: TextosDeCasilla[]):
 /**
  * El plan de la cartelera para los turnos en curso (`filas`) en el `espacio`
  * medido de la tabla. De cada fila solo mira cuanto miden sus textos.
+ *
+ * Con `sinTurno` la fila no lleva codigo: es la cartelera con el nombre del
+ * paciente, que viaja en `profesionalNombre` (el mismo hueco de dos lineas).
  */
-export function planDeCartelera(espacio: Espacio, filas: TextosDeCasilla[], pantalla: Espacio): PlanDeCartelera {
+export function planDeCartelera(
+  espacio: Espacio,
+  filas: TextosDeCasilla[],
+  pantalla: Espacio,
+  { sinTurno = false }: { sinTurno?: boolean } = {},
+): PlanDeCartelera {
   const util = espacioUtil(espacio)
-  const ctx = contextoDe(pantalla, filas)
   const cantidad = Math.max(1, filas.length)
   // Hasta `MAXIMO_EN_UNA_PANTALLA` turnos, todos a la vista: si con la letra
   // normal no caben, se aprieta un poco antes que pasar a una pagina 2.
   const rangos = cantidad <= MAXIMO_EN_UNA_PANTALLA ? rangosEnUnaPantalla(RANGO_CARTELERA) : [RANGO_CARTELERA]
-  const eleccion =
+  const elegir = (ctx: Contexto) =>
     cantidad > FILAS_POR_COLUMNA && cantidad <= MAXIMO_EN_UNA_PANTALLA
       ? conPocasColumnas(util, ctx, cantidad, rangos)
       : primeraQueQuepa(util, ctx, cantidad, rangos)
-  return planDesde(eleccion ?? paginado(util, ctx), ctx, filas)
+
+  // La cartelera de paciente va en una planta en cualquier televisor
+  // horizontal. En uno puesto en VERTICAL no hay ancho para el nombre y el
+  // consultorio lado a lado sin achicar el nombre por debajo de lo legible:
+  // ahi el consultorio baja debajo del nombre.
+  const vertical = pantalla.alto > pantalla.ancho
+  const plan = (ctx: Contexto) => planDesde(elegir(ctx) ?? paginado(util, ctx), ctx, filas)
+
+  if (sinTurno && !vertical) {
+    // Primero con el consultorio en una linea ("CONSULTA EXTERNA" entera) si
+    // el nombre del paciente sigue leyendose de lejos y todo cabe en una
+    // pagina; si no (un monitor 4:3, por ejemplo), en dos, como la otra.
+    const enUnaLinea = plan(contextoDe(pantalla, filas, true, true))
+    const piso = MINIMO_TEXTO * ladoCorto(pantalla) * (cantidad <= MAXIMO_EN_UNA_PANTALLA ? 0.55 : 1)
+    const unaPagina = cantidad > MAXIMO_EN_UNA_PANTALLA || enUnaLinea.paginas === 1
+    if (unaPagina && enUnaLinea.letra.medico >= piso) return enUnaLinea
+  }
+
+  const base = contextoDe(pantalla, filas, sinTurno)
+  return plan(sinTurno && vertical ? { ...base, formas: FORMAS } : base)
 }

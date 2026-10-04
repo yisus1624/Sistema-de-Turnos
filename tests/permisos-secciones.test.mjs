@@ -82,3 +82,34 @@ test('cada rol tiene al menos una seccion propia', () => {
   assert.ok(seccionesDelRol('ADMINISTRADOR').length > 0)
   assert.ok(seccionesDelRol('OPERADOR').length > 0)
 })
+
+test('la simulacion de carga solo la ve la cuenta de demostracion, y no se reparte desde Usuarios', async () => {
+  const { puedeVerSeccion, seccionesRepartibles, tieneMiCuenta } = await import('@/lib/permissions/rutas')
+  assert.equal(puedeVerSeccion('ADMINISTRADOR', null, '/admin/pruebas'), false, 'el administrador real no la ve')
+  assert.equal(puedeVerSeccion('OPERADOR', ['/admin/pruebas'], '/admin/pruebas'), false, 'ni dandosela a mano')
+  assert.equal(puedeVerSeccion('ADMINISTRADOR', null, '/admin/pruebas', true), true, 'la cuenta demo si')
+  assert.ok(!seccionesRepartibles.some((s) => s.href === '/admin/pruebas'))
+  // Lo demas del administrador no cambia.
+  assert.equal(puedeVerSeccion('ADMINISTRADOR', null, '/admin/usuarios'), true)
+
+  assert.equal(tieneMiCuenta('ADMINISTRADOR'), true)
+  assert.equal(tieneMiCuenta('OPERADOR'), false)
+  assert.equal(tieneMiCuenta('ADMINISTRADOR', true), false, 'la cuenta demo no cambia su usuario ni su clave')
+})
+
+test('uno u otro: con enlace el menu muestra Enlaces y oculta PIN; con PIN, al reves', async () => {
+  const { seccionDelModo } = await import('@/lib/permissions/rutas')
+  assert.equal(seccionDelModo('/admin/enlaces', 'ENLACE'), true)
+  assert.equal(seccionDelModo('/admin/pines', 'ENLACE'), false)
+  assert.equal(seccionDelModo('/admin/enlaces', 'PIN'), false)
+  assert.equal(seccionDelModo('/admin/pines', 'PIN'), true)
+  // Lo demas no depende del modo.
+  assert.equal(seccionDelModo('/admin/turnos', 'PIN'), true)
+  assert.equal(seccionDelModo('/admin/turnos', 'ENLACE'), true)
+})
+
+test('un modo de entrada viejo o desconocido cuenta como "con enlace": el menu nunca queda sin los dos', async () => {
+  const { seccionDelModo } = await import('@/lib/permissions/rutas')
+  assert.equal(seccionDelModo('/admin/enlaces', 'AMBOS'), true)
+  assert.equal(seccionDelModo('/admin/pines', 'AMBOS'), false)
+})

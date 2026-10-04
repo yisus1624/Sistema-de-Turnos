@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-const { planDeCuadricula, planDeCartelera, tablaConFoto, MINIMO_TURNO, MINIMO_TEXTO, MAXIMO_EN_UNA_PANTALLA } = await import(
+const { planDeCartelera, tablaConFoto, MINIMO_TURNO, MINIMO_TEXTO, MAXIMO_EN_UNA_PANTALLA } = await import(
   '@/lib/turnos/distribucion-pantalla'
 )
 
@@ -26,19 +26,20 @@ const { planDeCuadricula, planDeCartelera, tablaConFoto, MINIMO_TURNO, MINIMO_TE
  * 21:9 y 16:10 no se midieron: salen de las mismas proporciones.
  */
 const PANTALLAS = {
-  '1280x720': { pantalla: { ancho: 1280, alto: 720 }, cuadricula: { ancho: 1251, alto: 543 }, conFoto: { ancho: 979, alto: 533 }, ancha: { ancho: 1228, alto: 533 } },
-  '1366x768': { pantalla: { ancho: 1366, alto: 768 }, cuadricula: { ancho: 1335, alto: 588 }, conFoto: { ancho: 1046, alto: 579 }, ancha: { ancho: 1312, alto: 579 } },
-  '1920x1080': { pantalla: { ancho: 1920, alto: 1080 }, cuadricula: { ancho: 1877, alto: 889 }, conFoto: { ancho: 1469, alto: 736 }, ancha: { ancho: 1842, alto: 779 } },
-  '3840x2160': { pantalla: { ancho: 3840, alto: 2160 }, cuadricula: { ancho: 3754, alto: 1778 }, conFoto: { ancho: 2938, alto: 1471 }, ancha: { ancho: 3684, alto: 1558 } },
-  '1024x768 (4:3)': { pantalla: { ancho: 1024, alto: 768 }, cuadricula: { ancho: 993, alto: 588 }, conFoto: { ancho: 773, alto: 579 }, ancha: { ancho: 970, alto: 579 } },
-  '1080x1920 (vertical)': { pantalla: { ancho: 1080, alto: 1920 }, cuadricula: { ancho: 1037, alto: 1665 }, conFoto: { ancho: 1002, alto: 1571 }, ancha: { ancho: 1002, alto: 1571 } },
-  '2560x1080 (21:9)': { pantalla: { ancho: 2560, alto: 1080 }, cuadricula: { ancho: 2517, alto: 889 }, conFoto: { ancho: 1981, alto: 736 }, ancha: { ancho: 2482, alto: 779 } },
-  '1680x1050 (16:10)': { pantalla: { ancho: 1680, alto: 1050 }, cuadricula: { ancho: 1638, alto: 859 }, conFoto: { ancho: 1278, alto: 708 }, ancha: { ancho: 1604, alto: 751 } },
+  '1280x720': { pantalla: { ancho: 1280, alto: 720 }, conFoto: { ancho: 979, alto: 533 }, ancha: { ancho: 1228, alto: 533 } },
+  '1366x768': { pantalla: { ancho: 1366, alto: 768 }, conFoto: { ancho: 1046, alto: 579 }, ancha: { ancho: 1312, alto: 579 } },
+  '1920x1080': { pantalla: { ancho: 1920, alto: 1080 }, conFoto: { ancho: 1469, alto: 736 }, ancha: { ancho: 1842, alto: 779 } },
+  '3840x2160': { pantalla: { ancho: 3840, alto: 2160 }, conFoto: { ancho: 2938, alto: 1471 }, ancha: { ancho: 3684, alto: 1558 } },
+  '1024x768 (4:3)': { pantalla: { ancho: 1024, alto: 768 }, conFoto: { ancho: 773, alto: 579 }, ancha: { ancho: 970, alto: 579 } },
+  '1080x1920 (vertical)': { pantalla: { ancho: 1080, alto: 1920 }, conFoto: { ancho: 1002, alto: 1571 }, ancha: { ancho: 1002, alto: 1571 } },
+  '2560x1080 (21:9)': { pantalla: { ancho: 2560, alto: 1080 }, conFoto: { ancho: 1981, alto: 736 }, ancha: { ancho: 2482, alto: 779 } },
+  '1680x1050 (16:10)': { pantalla: { ancho: 1680, alto: 1050 }, conFoto: { ancho: 1278, alto: 708 }, ancha: { ancho: 1604, alto: 751 } },
 }
 const PANORAMICAS = ['1280x720', '1366x768', '1920x1080', '3840x2160']
 /** Donde el ancho escasea: el objetivo de letra con pocos consultorios tambien vale aqui. */
 const ESTRECHAS = ['1080x1920 (vertical)', '1024x768 (4:3)']
-const CANTIDADES = [1, 2, 3, 4, 6, 8, 12, 16, 20]
+// 9 a 11: los doctores que el hospital tiene a la vez en cada jornada, mañana o tarde.
+const CANTIDADES = [1, 2, 3, 4, 6, 8, 9, 10, 11, 12, 16, 20]
 
 const ladoCorto = ({ ancho, alto }) => Math.min(ancho, alto)
 const espacioDeCartelera = (tv, n) => (tablaConFoto(n, tv.pantalla) ? tv.conFoto : tv.ancha)
@@ -46,9 +47,19 @@ const cartelera = (nombre, n, medico) => {
   const tv = PANTALLAS[nombre]
   return planDeCartelera(espacioDeCartelera(tv, n), casillas(n, medico), tv.pantalla)
 }
-const cuadricula = (nombre, n, medico) => {
+
+/**
+ * La cartelera con el nombre del paciente: sin codigo, y el nombre en el hueco
+ * del medico (asi la mide `Cartelera` con la variante `paciente`).
+ */
+const paciente = (nombre, n, nombrePaciente) => {
   const tv = PANTALLAS[nombre]
-  return planDeCuadricula(tv.cuadricula, casillas(n, medico), tv.pantalla)
+  const filas = casillas(n).map((c, i) => ({
+    moduloNombre: c.moduloNombre,
+    codigo: null,
+    profesionalNombre: nombrePaciente ?? `JUAN CARLOS PEREZ GOMEZ ${i + 1}`,
+  }))
+  return planDeCartelera(espacioDeCartelera(tv, n), filas, tv.pantalla, { sinTurno: true })
 }
 
 /**
@@ -62,10 +73,6 @@ function casillas(n, medico) {
     profesionalNombre: medico ?? `DR. MEDICO DE PRUEBA NUMERO ${i + 1}`,
     moduloNombre: `CONS ${String(i + 1).padStart(2, '0')} - CONSULTA EXTERNA`,
   }))
-}
-
-function gruposEnPagina(lista, pagina) {
-  return pagina.conEncabezados ? new Set(lista.slice(pagina.desde, pagina.hasta).map((c) => c.grupo)).size : 0
 }
 
 /** Holgura de medio pixel: el navegador redondea. */
@@ -91,28 +98,6 @@ test('los minimos de legibilidad son los acordados: turno 4,5 % y textos 2,8 % d
 for (const [nombre, tv] of Object.entries(PANTALLAS)) {
   const lado = ladoCorto(tv.pantalla)
   for (const n of CANTIDADES) {
-    test(`cuadricula ${nombre} con ${n}: todas caben, nada se recorta y la letra se lee de lejos`, () => {
-      const lista = casillas(n)
-      const plan = cuadricula(nombre, n)
-
-      const mostradas = plan.paginas.reduce((suma, p) => suma + (p.hasta - p.desde), 0)
-      assert.equal(mostradas, n, 'ninguna casilla se oculta')
-
-      for (const pagina of plan.paginas) {
-        letraLegible(pagina.letra, lado, n)
-        const { letra } = pagina
-        // El codigo entero en una linea, y consultorio y medico al menos en una.
-        alMenos(pagina.anchoTarjeta, letra.turno * 4, 'ancho para el codigo')
-        alMenos(pagina.altoTarjeta, letra.turno * 1.2 + (letra.consultorio + letra.medico) * 1.1, 'alto de la tarjeta')
-        const anchoUsado = pagina.columnas * pagina.anchoTarjeta + (pagina.columnas - 1) * plan.separacion
-        assert.ok(anchoUsado <= tv.cuadricula.ancho + 0.5, 'no desborda a lo ancho')
-        const bloques = gruposEnPagina(lista, pagina)
-        const altoUsado =
-          pagina.filas * pagina.altoTarjeta + bloques * plan.altoEncabezado + (pagina.filas + bloques - 1) * plan.separacion
-        assert.ok(altoUsado <= tv.cuadricula.alto + 0.5, `no desborda a lo alto (${altoUsado} > ${tv.cuadricula.alto})`)
-      }
-    })
-
     test(`cartelera ${nombre} con ${n}: todas las filas caben y se leen de lejos`, () => {
       const espacio = espacioDeCartelera(tv, n)
       const plan = cartelera(nombre, n)
@@ -156,19 +141,13 @@ for (const nombre of PANORAMICAS) {
     assert.ok(letra.turno <= 0.055 * lado + 0.5, `turno ${letra.turno}`)
     assert.ok(altoFila <= 0.15 * lado, `fila de ${altoFila} px`)
   })
-
-  test(`cuadricula ${nombre}: con 1 consultorio la tarjeta no se vuelve gigante`, () => {
-    const { letra } = cuadricula(nombre, 1).paginas[0]
-    assert.ok(letra.turno <= 0.09 * lado + 0.5, `turno ${letra.turno}`)
-    assert.ok(letra.consultorio <= 0.04 * lado + 0.5, `consultorio ${letra.consultorio}`)
-  })
 }
 
 for (const nombre of Object.keys(PANTALLAS)) {
   const lado = ladoCorto(PANTALLAS[nombre].pantalla)
   test(`${nombre}: con pocos consultorios la letra nunca baja del minimo legible`, () => {
     for (const n of [1, 2, 3, 4]) {
-      for (const { letra } of [cartelera(nombre, n), cuadricula(nombre, n).paginas[0]]) {
+      for (const { letra } of [cartelera(nombre, n), paciente(nombre, n)]) {
         alMenos(letra.turno, 0.045 * lado, `turno con ${n}`)
         alMenos(letra.medico, 0.028 * lado, `medico con ${n}`)
       }
@@ -179,7 +158,7 @@ for (const nombre of Object.keys(PANTALLAS)) {
 test('jerarquia: el turno es lo mas grande, luego el consultorio y luego el medico', () => {
   for (const nombre of Object.keys(PANTALLAS)) {
     for (const n of CANTIDADES) {
-      for (const { letra } of [cartelera(nombre, n), ...cuadricula(nombre, n).paginas]) {
+      for (const { letra } of [cartelera(nombre, n)]) {
         assert.ok(letra.turno > letra.consultorio, `${nombre} con ${n}`)
         assert.ok(letra.consultorio >= letra.medico, `${nombre} con ${n}`)
         assert.ok(letra.servicio < letra.medico, 'el servicio es secundario')
@@ -193,16 +172,6 @@ test('la foto queda al lado de la tabla de 1 a 5 filas en pantallas panoramicas'
   assert.deepEqual([1, 2, 3, 5, 6].map((n) => tablaConFoto(n, panoramica)), [true, true, true, true, false])
   assert.equal(tablaConFoto(4, { ancho: 1024, alto: 768 }), false, '4:3 no tiene ancho que ceder')
   assert.equal(tablaConFoto(4, { ancho: 1080, alto: 1920 }), false, 'vertical tampoco')
-})
-
-// La banda del consultorio de la cuadricula se pinta en MAYUSCULAS: medir el
-// nombre tal cual subestimaba su ancho hasta un 10 % con nombres en minusculas.
-test('la cuadricula mide el consultorio como se pinta: en minusculas o en mayusculas, el mismo plan', () => {
-  const tv = PANTALLAS['1080x1920 (vertical)']
-  const con = (nombre) => casillas(17).map((c, i) => ({ ...c, moduloNombre: nombre(`Consultorio de medicina general ${i + 1}`) }))
-  const enMinusculas = planDeCuadricula(tv.cuadricula, con((x) => x), tv.pantalla)
-  const enMayusculas = planDeCuadricula(tv.cuadricula, con((x) => x.toUpperCase()), tv.pantalla)
-  assert.deepEqual(enMinusculas, enMayusculas)
 })
 
 // En la fila de dos pisos el medico va DEBAJO del consultorio: si su nombre
@@ -235,18 +204,9 @@ test('la cartelera no cambia segun que letra o numero traiga el codigo', () => {
   }
 })
 
-test('en una tarjeta angosta el consultorio y el medico largos tienen alto para dos lineas', () => {
-  // 6 tarjetas en 720p: "CONS 01 - CONSULTA EXTERNA" no cabe en una linea de la tarjeta.
-  const pagina = cuadricula('1280x720', 6).paginas[0]
-  const { letra } = pagina
-  assert.ok(pagina.anchoTarjeta < 18 * letra.consultorio, 'el caso de prueba obliga a partir el nombre')
-  alMenos(pagina.altoTarjeta, letra.turno * 1.2 + (letra.consultorio + letra.medico) * 2.2, 'alto para dos lineas')
-})
-
 test('con pocos consultorios la letra es mayor que con muchos', () => {
   for (const nombre of Object.keys(PANTALLAS)) {
     assert.ok(cartelera(nombre, 1).letra.turno >= cartelera(nombre, 12).letra.turno, nombre)
-    assert.ok(cuadricula(nombre, 4).paginas[0].letra.turno > cuadricula(nombre, 20).paginas[0].letra.turno, nombre)
   }
 })
 
@@ -270,7 +230,7 @@ const NOMBRE_LARGO = 'CARLOS RAMON DE LEON CASTILLO'
 const NOMBRE_LARGUISIMO = 'MARIA FERNANDA DE LOS ANGELES DEL SOCORRO PEREZ DE LA ESPRIELLA GUTIERREZ'
 
 test('un nombre de medico largo pasa a dos lineas antes de achicar la letra', () => {
-  for (const plan of [(m) => cartelera('1920x1080', 4, m), (m) => cuadricula('1920x1080', 4, m).paginas[0]]) {
+  for (const plan of [(m) => cartelera('1920x1080', 4, m), (m) => paciente('1920x1080', 4, m)]) {
     assert.equal(plan(NOMBRE_LARGO).letra.medico, plan('DRA. ANA RUIZ').letra.medico)
   }
 })
@@ -296,11 +256,6 @@ test('un nombre que no cabe ni en dos lineas achica SOLO al medico, sin bajar de
 
 /** Los consultorios con nombre corto, como los deja el administrador al renombrarlos. */
 const conNombreCorto = (lista) => lista.map((c, i) => ({ ...c, moduloNombre: `Consultorio ${i + 1}` }))
-
-test('en 1080p y en 1366x768 los 12 consultorios caben en una sola pagina de la cuadricula', () => {
-  assert.equal(cuadricula('1920x1080', 12).paginas.length, 1)
-  assert.equal(cuadricula('1366x768', 12).paginas.length, 1)
-})
 
 test('la cartelera usa varias columnas antes que paginas: 12 con nombre corto caben en una pagina', () => {
   for (const nombre of ['1920x1080', '1366x768', '1280x720']) {
@@ -334,20 +289,6 @@ test('con muchos mas, la cartelera pagina antes que bajar del minimo o cortar te
   letraLegible(plan.letra, 768)
 })
 
-test('antes de rotar se quitan las etiquetas de servicio: con ellas no caben, sin ellas si', () => {
-  const tv = PANTALLAS['1366x768']
-  const plan = planDeCuadricula({ ancho: 1318, alto: 560 }, casillas(12), tv.pantalla)
-  assert.equal(plan.paginas.length, 1)
-  assert.equal(plan.paginas[0].conEncabezados, false)
-})
-
-test('solo como ultimo recurso se pagina: 20 en un monitor pequeño rotan, sin perder ninguno', () => {
-  const plan = planDeCuadricula({ ancho: 600, alto: 400 }, casillas(20), { ancho: 640, alto: 480 })
-  assert.ok(plan.paginas.length > 1)
-  assert.equal(plan.paginas.at(-1).hasta, 20)
-  for (const pagina of plan.paginas) letraLegible(pagina.letra, 480)
-})
-
 test('la cartelera tambien pagina sin bajar del minimo: 40 filas en 1280x720', () => {
   const tv = PANTALLAS['1280x720']
   const plan = planDeCartelera(tv.ancha, casillas(40), tv.pantalla)
@@ -358,7 +299,6 @@ test('la cartelera tambien pagina sin bajar del minimo: 40 filas en 1280x720', (
 
 test('sin espacio medido todavia, no revienta y la columna nunca mide negativo', () => {
   const sinMedir = { ancho: 0, alto: 0 }
-  assert.equal(planDeCuadricula(sinMedir, casillas(4), sinMedir).paginas.length >= 1, true)
   const plan = planDeCartelera(sinMedir, casillas(12), sinMedir)
   assert.equal(plan.paginas >= 1, true)
   assert.ok(plan.anchoColumna > 0)
@@ -417,12 +357,12 @@ test('con una sola pagina no hay nada que rotar', () => {
 //
 // Una pagina 2 que rota cada diez segundos es un paciente que no ve su turno
 // cuando mira. Hasta `MAXIMO_EN_UNA_PANTALLA` turnos no se pagina nunca, en
-// ninguna pantalla ni en ninguno de los dos diseños.
+// ninguna pantalla ni en ninguna de las dos carteleras.
 for (const nombre of Object.keys(PANTALLAS)) {
   test(`${nombre}: de 1 a 15 turnos, todos en una sola pantalla`, () => {
     for (let n = 1; n <= MAXIMO_EN_UNA_PANTALLA; n += 1) {
       assert.equal(cartelera(nombre, n).paginas, 1, `cartelera con ${n}`)
-      assert.equal(cuadricula(nombre, n).paginas.length, 1, `cuadricula con ${n}`)
+      assert.equal(paciente(nombre, n).paginas, 1, `cartelera con paciente con ${n}`)
     }
   })
 }
@@ -456,5 +396,56 @@ test('en ventana y en pantalla completa la fila tiene la misma forma', () => {
     const completa = planDeCartelera(tv.ancha, casillas(n), tv.pantalla)
     const enVentana = planDeCartelera(ventana.ancha, casillas(n), ventana.pantalla)
     assert.equal(enVentana.forma, completa.forma, `con ${n}`)
+  }
+})
+
+// --- La cartelera con el nombre del paciente (sin turno ni medico) ----------------------
+//
+// El nombre del paciente ocupa el hueco del medico y la celda del codigo
+// desaparece: la fila tiene una columna menos y el mismo cuidado de no cortar.
+
+for (const [nombre, tv] of Object.entries(PANTALLAS)) {
+  test(`cartelera con paciente ${nombre}: sin columna de turno, nada se recorta y se lee de lejos`, () => {
+    for (const n of CANTIDADES) {
+      const espacio = espacioDeCartelera(tv, n)
+      const plan = paciente(nombre, n, 'MARIA CAMILA RODRIGUEZ MONTERROSA')
+      const { reja, letra } = plan
+      assert.equal(reja.length, plan.forma === 'una-planta' ? 2 : 1, 'la celda del turno no se reserva')
+      assert.equal(plan.celdas.turno, 0)
+      assert.equal(plan.porPagina * plan.paginas >= n, true, 'ninguna fila se pierde')
+      letraLegible(letra, ladoCorto(tv.pantalla), n)
+      alMenos(plan.altoFila, letra.medico * 2.2, 'alto para dos lineas de nombre')
+      const anchoFila = reja.reduce((suma, ancho) => suma + ancho, 0) + (reja.length - 1) * plan.separacionCeldas + 2 * plan.rellenoX
+      assert.ok(anchoFila <= plan.anchoColumna + 0.5, `la fila no desborda su columna (${anchoFila} > ${plan.anchoColumna})`)
+      const filasPorColumna = Math.ceil(Math.min(n, plan.porPagina) / plan.columnas)
+      assert.ok(filasPorColumna * plan.altoFila + (filasPorColumna - 1) * plan.separacionFilas <= espacio.alto + 0.5)
+    }
+  })
+}
+
+// La jornada real del hospital: de 9 a 11 doctores a la vez, mañana o tarde.
+// Con nombres largos del reporte, las DOS carteleras los muestran todos en una
+// sola pagina (sin rotar) y con letra legible, en cualquier televisor.
+for (const nombre of Object.keys(PANTALLAS)) {
+  test(`${nombre}: de 9 a 11 doctores, las dos carteleras en una sola pagina`, () => {
+    const lado = ladoCorto(PANTALLAS[nombre].pantalla)
+    for (const n of [9, 10, 11]) {
+      const conTurno = cartelera(nombre, n, 'CARLOS RAMON DE LEON CASTILLO')
+      const conPaciente = paciente(nombre, n, 'MARIA CAMILA RODRIGUEZ MONTERROSA')
+      for (const plan of [conTurno, conPaciente]) {
+        assert.equal(plan.paginas, 1, `${n} filas`)
+        letraLegible(plan.letra, lado, n)
+      }
+    }
+  })
+}
+
+test('la cartelera con paciente va en una planta en los televisores horizontales: paciente | consultorio', () => {
+  for (const nombre of Object.keys(PANTALLAS).filter((n) => !n.includes('vertical'))) {
+    for (const n of [1, 4, 9, 11, 15]) {
+      const plan = paciente(nombre, n, 'MARIA CAMILA RODRIGUEZ MONTERROSA')
+      assert.equal(plan.forma, 'una-planta', `${nombre} con ${n}`)
+      assert.equal(plan.reja.length, 2, 'dos columnas: paciente y consultorio')
+    }
   }
 })

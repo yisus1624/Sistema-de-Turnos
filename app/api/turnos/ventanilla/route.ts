@@ -45,7 +45,7 @@ export async function POST(request: Request) {
 
     // La fila compartida la atienden varias ventanillas a la vez: el turno que
     // genera una tiene que aparecerle a la otra sin que pulse nada.
-    avisarFilaCambiada(turno)
+    await avisarFilaCambiada(turno)
 
     return NextResponse.json({ turno })
   } catch (error) {

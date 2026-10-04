@@ -10,6 +10,8 @@ declare module 'next-auth' {
       area: string | null
       /** Secciones del menu permitidas para OPERADOR; `null` = todas. */
       secciones: string[] | null
+      /** Cuenta de demostracion: ver `lib/demostracion/mundo.ts`. */
+      demostracion: boolean
     } & DefaultSession['user']
   }
 
@@ -19,6 +21,7 @@ declare module 'next-auth' {
     area: string | null
     secciones?: string[] | null
     versionCredenciales?: number
+    esDemostracion?: boolean
   }
 }
 
@@ -30,5 +33,6 @@ declare module 'next-auth/jwt' {
     secciones?: string[] | null
     /** Ausente en tokens emitidos antes de existir la marca: siguen validos. */
     versionCredenciales?: number
+    demostracion?: boolean
   }
 }

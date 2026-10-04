@@ -63,6 +63,7 @@ function sesionDe(usuario) {
       rol: usuario.rol,
       area: usuario.area,
       secciones: usuario.secciones ?? null,
+      demostracion: usuario.esDemostracion ?? false,
     },
   }
 }
@@ -168,11 +169,11 @@ test('un nombre de usuario ya tomado se rechaza y queda apuntado', async () => {
   assert.equal(despues.usuario, objetivo.usuario)
 })
 
-// --- 2. Cada quien cambia su propia contraseña, con la actual ---
+// --- 2. El administrador cambia su propia contraseña (los operadores no: ver abajo), con la actual ---
 
 test('el cambio propio exige la contrasena actual', async () => {
   empezar()
-  const cuenta = await crearCuenta({ password: 'laquetenia123' })
+  const cuenta = await crearCuenta({ rol: 'ADMINISTRADOR', password: 'laquetenia123' })
   sesionActual = sesionDe(cuenta)
 
   const respuesta = await rutaContrasenaPropia.POST(
@@ -190,7 +191,7 @@ test('el cambio propio exige la contrasena actual', async () => {
 
 test('con la contrasena actual correcta el funcionario cambia la suya', async () => {
   empezar()
-  const cuenta = await crearCuenta({ password: 'laquetenia123' })
+  const cuenta = await crearCuenta({ rol: 'ADMINISTRADOR', password: 'laquetenia123' })
   sesionActual = sesionDe(cuenta)
 
   const respuesta = await rutaContrasenaPropia.POST(
@@ -219,7 +220,7 @@ test('sin sesion no se cambia la contrasena de nadie', async () => {
 
 test('el formulario de cambio propio no sirve para adivinar la clave a fuerza bruta', async () => {
   empezar()
-  const cuenta = await crearCuenta({ password: 'laquetenia123' })
+  const cuenta = await crearCuenta({ rol: 'ADMINISTRADOR', password: 'laquetenia123' })
   sesionActual = sesionDe(cuenta)
   limitePermitido = false
 
@@ -234,7 +235,7 @@ test('el formulario de cambio propio no sirve para adivinar la clave a fuerza br
 
 test('la contrasena nueva tiene minimo ocho caracteres', async () => {
   empezar()
-  const cuenta = await crearCuenta({ password: 'laquetenia123' })
+  const cuenta = await crearCuenta({ rol: 'ADMINISTRADOR', password: 'laquetenia123' })
   sesionActual = sesionDe(cuenta)
 
   const respuesta = await rutaContrasenaPropia.POST(peticion({ actual: 'laquetenia123', nueva: 'corta' }))
@@ -246,7 +247,7 @@ test('la contrasena nueva tiene minimo ocho caracteres', async () => {
 
 test('ninguna contrasena aparece en el registro, ni al cambiarla uno mismo ni al restablecerla', async () => {
   empezar()
-  const cuenta = await crearCuenta({ password: 'laquetenia123' })
+  const cuenta = await crearCuenta({ rol: 'ADMINISTRADOR', password: 'laquetenia123' })
   sesionActual = sesionDe(cuenta)
   await rutaContrasenaPropia.POST(peticion({ actual: 'laquetenia123', nueva: 'lanuevaclave123' }))
   await rutaContrasenaPropia.POST(peticion({ actual: 'noeraesta123', nueva: 'otraquenoentra123' }))
@@ -288,4 +289,55 @@ test('la cuenta del administrador se puede renombrar a si misma sin perder la se
   // no echa a nadie de su propia sesion.
   assert.equal(usuario.id, admin.id)
   assert.equal(usuario.usuario, 'jefatura.sistemas')
+})
+
+// --- 5. Mi cuenta es solo del administrador ---
+
+test('un operador no puede cambiar su contrasena ni su usuario: eso lo hace el administrador', async () => {
+  empezar()
+  const operador = await crearCuenta({ password: 'laquetenia123' })
+  sesionActual = sesionDe(operador)
+
+  const clave = await rutaContrasenaPropia.POST(peticion({ actual: 'laquetenia123', nueva: 'lanuevaclave123' }))
+  const nombre = await rutaContrasenaPropia.POST(peticion({ actual: 'laquetenia123', usuario: 'otro.nombre' }))
+
+  assert.equal(clave.status, 403)
+  assert.equal(nombre.status, 403)
+  assert.ok(await usuarioRepository.verificarCredenciales(operador.usuario, 'laquetenia123'), 'la clave no cambio')
+})
+
+test('la cuenta de demostracion no cambia su usuario ni su clave desde Mi cuenta', async () => {
+  empezar()
+  const demo = await crearCuenta({ rol: 'ADMINISTRADOR', password: 'laquetenia123' })
+  sesionActual = sesionDe({ ...demo, esDemostracion: true })
+
+  const respuesta = await rutaContrasenaPropia.POST(peticion({ actual: 'laquetenia123', usuario: 'demo.otro' }))
+  assert.equal(respuesta.status, 403)
+})
+
+test('el administrador cambia su usuario con la contrasena actual, y sigue siendo la misma cuenta', async () => {
+  empezar()
+  const admin = await crearCuenta({ rol: 'ADMINISTRADOR', password: 'laquetenia123' })
+  sesionActual = sesionDe(admin)
+
+  const mal = await rutaContrasenaPropia.POST(peticion({ actual: 'noeraesta123', usuario: 'jefe.sistemas' }))
+  assert.equal(mal.status, 400, 'sin la contrasena actual correcta no se cambia')
+
+  const bien = await rutaContrasenaPropia.POST(peticion({ actual: 'laquetenia123', usuario: 'Jefe.Sistemas' }))
+  assert.equal(bien.status, 200)
+  assert.equal((await bien.json()).usuario, 'jefe.sistemas')
+  const renombrada = await usuarioRepository.buscarPorId(admin.id)
+  assert.equal(renombrada.usuario, 'jefe.sistemas')
+  assert.ok(await usuarioRepository.verificarCredenciales('jefe.sistemas', 'laquetenia123'), 'la clave sigue igual')
+})
+
+test('el administrador no puede quedarse con el usuario de otra cuenta', async () => {
+  empezar()
+  const otro = await crearCuenta()
+  const admin = await crearCuenta({ rol: 'ADMINISTRADOR', password: 'laquetenia123' })
+  sesionActual = sesionDe(admin)
+
+  const respuesta = await rutaContrasenaPropia.POST(peticion({ actual: 'laquetenia123', usuario: otro.usuario }))
+  assert.equal(respuesta.status, 400)
+  assert.equal((await usuarioRepository.buscarPorId(admin.id)).usuario, admin.usuario)
 })

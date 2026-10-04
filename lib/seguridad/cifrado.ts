@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto'
 
 /**
  * Cifrado simetrico para secretos que el servidor necesita PODER LEER.
@@ -104,4 +104,17 @@ export function descifrar(guardado: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Huella CON CLAVE (HMAC-SHA256) de un secreto corto, para buscarlo sin
+ * guardarlo en claro.
+ *
+ * La usa el PIN de los medicos. Con un hash a secas no serviria: hay solo un
+ * millon de PIN posibles, y quien tuviera una copia de la tabla los probaria
+ * todos en un segundo. Con la clave del servidor delante, la tabla sola no
+ * dice nada.
+ */
+export function huella(texto: string): string {
+  return createHmac('sha256', clave()).update(texto).digest('hex')
 }

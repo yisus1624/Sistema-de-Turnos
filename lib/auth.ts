@@ -185,6 +185,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           area: encontrado.area,
           secciones: encontrado.secciones ?? null,
           versionCredenciales: encontrado.versionCredenciales ?? 0,
+          esDemostracion: encontrado.esDemostracion ?? false,
         }
       },
     }),
@@ -230,6 +231,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.rol = actual.rol
         token.area = actual.area
         token.secciones = actual.secciones ?? null
+        token.demostracion = actual.esDemostracion ?? false
       }
 
       return token
@@ -241,6 +243,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       session.user.rol = token.rol as RolUsuario
       session.user.area = token.area as string | null
       session.user.secciones = (token.secciones as string[] | null) ?? null
+      session.user.demostracion = token.demostracion === true
       return session
     },
   },

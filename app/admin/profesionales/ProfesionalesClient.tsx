@@ -101,7 +101,7 @@ const DOCTOR_VACIO: FormularioDoctor = {
 
 /**
  * La jornada HABITUAL del doctor. Las horas concretas de cada una son las
- * mismas para todo el hospital y se configuran en "Pantalla y audio"; aqui
+ * mismas para todo el hospital y se configuran en "Ajustes"; aqui
  * solo se elige en cual trabaja normalmente.
  *
  * NO ES LA JORNADA DE UN DIA. El mismo medico hace el lunes completo, el

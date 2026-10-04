@@ -8,7 +8,7 @@
  * El consultorio se MUESTRA, no se elige: es el que el doctor trae asignado en
  * la agenda que carga el hospital (ver `app/api/consultorio/route.ts`).
  */
-import { MapPin } from '@phosphor-icons/react/dist/ssr'
+import { MapPin, UserSwitch } from '@phosphor-icons/react/dist/ssr'
 import { IndicadorConexion } from '@/components/ui/IndicadorConexion'
 import { Isotipo, NOMBRE_INSTITUCION } from '@/components/brand/Marca'
 import type { EstadoConexionEnVivo } from '@/lib/hooks'
@@ -19,11 +19,14 @@ export function EncabezadoConsultorio({
   especialidad,
   consultorio,
   conexion,
+  alCambiarDeMedico,
 }: {
   doctor: string
   especialidad: string | null
   consultorio: string | null
   conexion: EstadoConexionEnVivo
+  /** Sale este medico y vuelve al PIN (equipo compartido). Sin el, no hay boton. */
+  alCambiarDeMedico?: () => void
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-white/70 bg-white/75 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur-xl backdrop-saturate-150">
@@ -61,6 +64,18 @@ export function EncabezadoConsultorio({
               ) : null}
             </span>
           </span>
+
+          {alCambiarDeMedico ? (
+            <button
+              type="button"
+              onClick={alCambiarDeMedico}
+              title="Salir y dejar entrar a otro medico con su PIN"
+              className="inline-flex h-10 items-center gap-2 rounded-full border border-slate-200/80 bg-white px-3.5 text-sm font-semibold text-brand-800 transition hover:bg-slate-50 active:scale-[.98]"
+            >
+              <UserSwitch size={17} weight="bold" />
+              Cambiar de medico
+            </button>
+          ) : null}
         </div>
       </div>
     </header>

@@ -5,11 +5,11 @@ import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { camposCambiados } from '@/lib/seguridad/cambios'
-import { DISENOS_PANTALLA, type ConfiguracionSistema } from '@/lib/turnos/types'
+import { DISENOS_PANTALLA, MODOS_ACCESO_PROFESIONAL, type ConfiguracionSistema } from '@/lib/turnos/types'
 
 export async function GET() {
   try {
-    await requireSeccion('/admin/pantalla')
+    await requireSeccion('/admin/pantalla', '/admin/ajustes')
     const configuracion = await turnoRepository.configuracion()
     return NextResponse.json({ configuracion })
   } catch (error) {
@@ -39,6 +39,8 @@ const configuracionSchema = z.object({
 
   // --- Aspecto del televisor ---
   disenoPantalla: z.enum(DISENOS_PANTALLA).optional(),
+  // Como entran los medicos (ver `MODOS_ACCESO_PROFESIONAL`).
+  accesoProfesionales: z.enum(MODOS_ACCESO_PROFESIONAL).optional(),
   /*
    * Ruta de la imagen de fondo, y SOLO una ruta de este mismo sitio.
    *
@@ -72,7 +74,7 @@ const configuracionSchema = z.object({
 
 export async function PUT(request: Request) {
   try {
-    const session = await requireSeccion('/admin/pantalla')
+    const session = await requireSeccion('/admin/pantalla', '/admin/ajustes')
     const { ip } = await contextoPeticion()
 
     const body = await request.json().catch(() => null)

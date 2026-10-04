@@ -5,7 +5,8 @@
  * resoluciones, 1 a 20 consultorios) sin escribir nada en la base: los datos
  * se inventan en el navegador. En produccion no existe (404).
  *
- * Uso: /pantalla/muestra?n=12&diseno=cartelera&medico=largo&resaltar=1
+ * Uso: /pantalla/muestra?n=12&diseno=paciente&medico=largo&resaltar=1
+ * (`diseno=paciente` es la cartelera con el nombre del paciente).
  */
 import { notFound } from 'next/navigation'
 import MuestraCliente from './MuestraCliente'
@@ -21,8 +22,8 @@ export default async function MuestraDePantalla({
   return (
     <MuestraCliente
       cantidad={cantidad}
-      diseno={diseno === 'cartelera' ? 'cartelera' : 'cuadricula'}
-      medicoLargo={medico === 'largo'}
+      variante={diseno === 'paciente' ? 'paciente' : 'turno'}
+      nombresLargos={medico === 'largo'}
       resaltar={resaltar === '1'}
     />
   )

@@ -7,11 +7,21 @@
 // monitor del administrador la consulta cada pocos segundos), asi que no
 // calcula nada que nadie use.
 import { NextResponse } from 'next/server'
+import { esPeticionDeDemostracion, mundoDeDemostracion } from '@/lib/demostracion/mundo'
 import { estadoPantallaCacheado } from '@/lib/turnos/pantalla-cacheada'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
+  // Un navegador con la sesion de demostracion ve la sala de la demostracion,
+  // marcada como tal (`demostracion: true`) para que el televisor lo diga en
+  // grande. Un televisor sin sesion no paga nada por esta pregunta: sin
+  // cookie de sesion ni siquiera se lee (ver `esPeticionDeDemostracion`).
+  if (await esPeticionDeDemostracion()) {
+    const { casillas, configuracion } = await mundoDeDemostracion().repositorio.estadoPantalla()
+    return NextResponse.json({ casillas, configuracion, ahora: new Date().toISOString(), demostracion: true })
+  }
+
   // UNA sola llamada al repositorio. Antes se pedia aparte la configuracion,
   // que `estadoPantalla` ya habia cargado por dentro: la misma fila leida dos
   // veces en cada refresco de cada televisor encendido.

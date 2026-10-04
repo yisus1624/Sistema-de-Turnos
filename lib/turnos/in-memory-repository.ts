@@ -14,11 +14,13 @@
  * EJEMPLO inventados solo para el demo. Los nombres de paciente son ficticios:
  * no hay ni debe haber datos reales de pacientes en el repositorio.
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomBytes } from 'node:crypto'
 import { CONFIGURACION_INICIAL } from './configuracion-inicial'
 import { MINUTOS_ACCESO_MAXIMO, MINUTOS_ACCESO_MINIMO, MS_ENTRE_APUNTES_DE_USO } from './repository'
 import type { TurnoRepository } from './repository'
 import type {
+  PinProfesional,
   AccionSobreTurno,
   FiltroTurnoAbierto,
   LlegadaRegistrada,
@@ -47,6 +49,8 @@ import type {
   Turno,
 } from './types'
 import { errorDeNegocio } from './errores'
+import { esModoAccesoProfesional } from './types'
+import { esPinValido, sortearPin, SORTEOS_MAXIMOS } from './reglas-pin'
 import { mismoDocumento, normalizarDocumento } from './documento'
 import { DEVUELTO_A_LA_FILA, exigirPlanVisto, planDeRetroceso, REABIERTO, type PlanDeRetroceso } from './reglas-retroceso'
 import { decidirCierre, decidirRepeticion, estaAbierto, type EstadoDeCierre } from './reglas-cierre'
@@ -61,7 +65,7 @@ import {
 } from './reglas-llamado'
 import { ordenAtencion, resumir } from './estadisticas'
 import { reunirActividad } from './actividad'
-import { modulosVisiblesEnPantalla, puestoDe } from './casillas'
+import { modulosVisiblesEnPantalla, nombreParaPantalla, puestoDe } from './casillas'
 import { motivoQueImpideCancelar, motivoQueImpideReprogramar } from './cita-transiciones'
 import { motivoQueImpideDesactivarModulo, type DoctorDelConsultorio } from './reglas-catalogo'
 import { exigirConfiguracionAlDia, marcaSiguiente } from './configuracion-version'
@@ -79,7 +83,7 @@ import {
   horaColombia,
   instanteDeFranja,
 } from './tiempo'
-import { realtimeHub } from '@/lib/realtime/hub'
+import { realtimeHub, type EventoTurno } from '@/lib/realtime/hub'
 
 interface EstadoMemoria {
   servicios: Servicio[]
@@ -106,6 +110,22 @@ interface EstadoMemoria {
    * importa y la que se puede probar.
    */
   accesosProfesional: Array<AccesoProfesional & { tokenHash: string; tokenGuardado: string | null }>
+  /** Cuantas citas de ejemplo se le siembran a cada doctor (3 si falta). */
+  citasDeEjemploPorDoctor?: number
+  /**
+   * Los PIN de los medicos. Aqui en claro, por lo mismo que `tokenGuardado`:
+   * este almacen vive en la memoria del proceso, y cifrar no protegeria de
+   * nada. Lo que si es igual en las dos implementaciones son las reglas
+   * (unico, de seis digitos, desactivable).
+   */
+  pines: PinEnMemoria[]
+}
+
+interface PinEnMemoria {
+  profesionalId: string
+  pin: string
+  activo: boolean
+  actualizadoEn: string
 }
 
 function crearId() {
@@ -190,6 +210,58 @@ function sembrar(): EstadoMemoria {
     contadores: {},
     configuracion: { ...CONFIGURACION_INICIAL, actualizadoEn: ahoraISO() },
     accesosProfesional: [],
+    pines: [],
+  }
+}
+
+/** Doctores ficticios del hospital de demostracion: once por jornada. */
+const DOCTORES_DE_DEMOSTRACION = {
+  MANANA: ['Dr. Arango', 'Dra. Benitez', 'Dr. Cardona', 'Dra. Duarte', 'Dr. Escobar', 'Dra. Franco', 'Dr. Galvis', 'Dra. Henao', 'Dr. Ibarra', 'Dra. Jaramillo', 'Dr. Lozano'],
+  TARDE: ['Dra. Montes', 'Dr. Navarro', 'Dra. Ortega', 'Dr. Parra', 'Dra. Quiroga', 'Dr. Restrepo', 'Dra. Salazar', 'Dr. Tobon', 'Dra. Uribe', 'Dr. Velez', 'Dra. Zapata'],
+} as const
+
+/** Citas por doctor en la demostracion: alcanza para una presentacion larga. */
+const CITAS_POR_DOCTOR_EN_DEMOSTRACION = 12
+
+/**
+ * El hospital de la cuenta de demostracion: la jornada real del hospital, con
+ * 11 consultorios (9 de consulta externa y 2 de odontologia) y 11 doctores en
+ * la mañana y otros 11 en la tarde, que comparten consultorio como alla. Todo
+ * inventado: ni un dato sale de la base real.
+ */
+export function sembrarDemostracion(): EstadoMemoria {
+  const base = sembrar()
+  const modulos: Modulo[] = Array.from({ length: 11 }, (_, i) => ({
+    id: `mod-demo-${i + 1}`,
+    nombre: `Consultorio ${i + 1}`,
+    servicioId: i < 9 ? 'srv-consulta-externa' : 'srv-odontologia',
+    activo: true,
+  }))
+  const profesionales: Profesional[] = (['MANANA', 'TARDE'] as const).flatMap((jornada) =>
+    DOCTORES_DE_DEMOSTRACION[jornada].map((nombre, i) => ({
+      id: `pro-demo-${jornada.toLowerCase()}-${i + 1}`,
+      nombre,
+      servicioId: modulos[i].servicioId!,
+      jornada,
+      moduloId: modulos[i].id,
+      activo: true,
+    })),
+  )
+  // Cada medico de prueba ya con su PIN, para mostrar la entrada con PIN sin
+  // tener que generarlos uno por uno (se ven en "PIN de medicos").
+  const pines: PinEnMemoria[] = []
+  for (const profesional of profesionales) {
+    let pin = sortearPin()
+    while (pines.some((p) => p.pin === pin)) pin = sortearPin()
+    pines.push({ profesionalId: profesional.id, pin, activo: true, actualizadoEn: ahoraISO() })
+  }
+  return {
+    ...base,
+    modulos,
+    profesionales,
+    citas: sembrarCitas(profesionales, base.configuracion, CITAS_POR_DOCTOR_EN_DEMOSTRACION),
+    citasDeEjemploPorDoctor: CITAS_POR_DOCTOR_EN_DEMOSTRACION,
+    pines,
   }
 }
 
@@ -227,6 +299,23 @@ const PACIENTES_DE_EJEMPLO = [
   'Melissa Andrea Buelvas Otero',
 ]
 
+const NOMBRES_DE_EJEMPLO = ['Juan', 'Maria', 'Pedro', 'Ana', 'Carlos', 'Luisa', 'Jorge', 'Sofia', 'Miguel', 'Diana', 'Andres', 'Camila', 'Luis', 'Paola', 'Jose', 'Natalia', 'Sergio']
+const APELLIDOS_DE_EJEMPLO = ['Perez', 'Gomez', 'Lopez', 'Diaz', 'Ruiz', 'Mora', 'Vega', 'Castro', 'Herrera', 'Sosa', 'Pacheco', 'Luna', 'Rojas', 'Osorio', 'Cano', 'Toro', 'Arias', 'Prada', 'Beltran']
+
+/**
+ * El nombre ficticio de la cita numero `n`: primero los de la lista fija, y
+ * despues combinaciones de nombre y dos apellidos, para que una agenda larga
+ * (la de demostracion) no repita pacientes.
+ */
+function nombreDePaciente(n: number): string {
+  if (n < PACIENTES_DE_EJEMPLO.length) return PACIENTES_DE_EJEMPLO[n]
+  const resto = n - PACIENTES_DE_EJEMPLO.length
+  const nombre = NOMBRES_DE_EJEMPLO[resto % NOMBRES_DE_EJEMPLO.length]
+  const primero = APELLIDOS_DE_EJEMPLO[Math.floor(resto / NOMBRES_DE_EJEMPLO.length) % APELLIDOS_DE_EJEMPLO.length]
+  const segundo = APELLIDOS_DE_EJEMPLO[(resto * 7 + 3) % APELLIDOS_DE_EJEMPLO.length]
+  return `${nombre} ${primero} ${segundo}`
+}
+
 /**
  * Citas de ejemplo del dia, colocadas en franjas REALES de la jornada de cada
  * doctor.
@@ -236,8 +325,7 @@ const PACIENTES_DE_EJEMPLO = [
  * 8:20 dejarian de encajar en cuanto el administrador cambiara la consulta a
  * 10 minutos, y apareceria media agenda de ejemplo "fuera de horario".
  */
-function sembrarCitas(profesionales: Profesional[], configuracion: ConfiguracionSistema): Cita[] {
-  const CITAS_POR_DOCTOR = 3
+function sembrarCitas(profesionales: Profesional[], configuracion: ConfiguracionSistema, CITAS_POR_DOCTOR = 3): Cita[] {
   const hoy = diaColombia(new Date().toISOString())
   const citas: Cita[] = []
 
@@ -265,7 +353,7 @@ function sembrarCitas(profesionales: Profesional[], configuracion: Configuracion
       citas.push({
         id: crearId(),
         documentoPaciente: String(1067890123 + citas.length),
-        nombrePaciente: PACIENTES_DE_EJEMPLO[citas.length % PACIENTES_DE_EJEMPLO.length],
+        nombrePaciente: nombreDePaciente(citas.length),
         profesionalId: profesional.id,
         servicioId: profesional.servicioId,
         horaCita: instanteDeFranja(hoy, hora),
@@ -287,21 +375,57 @@ function hashToken(token: string) {
  * quedaria incompleto y reventaria en tiempo de ejecucion. La version fuerza a
  * volver a sembrar cuando eso pasa: subela al cambiar la estructura.
  */
-const VERSION_ESTADO = 12
+const VERSION_ESTADO = 13
 
 declare global {
   var __turnosMemoria: (EstadoMemoria & { version: number }) | undefined
 }
 
 const guardado = globalThis.__turnosMemoria
-const estado: EstadoMemoria & { version: number } =
+const estadoPorDefecto: EstadoMemoria & { version: number } =
   guardado?.version === VERSION_ESTADO ? guardado : { ...sembrar(), version: VERSION_ESTADO }
 
 // Se guarda SIEMPRE, tambien en produccion. Antes solo se hacia en desarrollo
 // (para el HMR) y eso hacia que un despliegue real perdiera los cambios: cada
 // vez que Next evaluaba el modulo en otro contexto se volvia a sembrar, y lo
 // que el administrador acababa de crear o editar desaparecia sin dar error.
-globalThis.__turnosMemoria = estado
+globalThis.__turnosMemoria = estadoPorDefecto
+
+/**
+ * VARIAS INSTANCIAS, CADA UNA CON SU MUNDO.
+ *
+ * Hasta aqui habia un solo estado en el modulo. La cuenta de demostracion
+ * (`lib/demostracion/mundo.ts`) necesita un hospital de mentira COMPLETO y
+ * aparte: sus datos, su canal en vivo (para que sus llamados no suenen en las
+ * salas reales) y sus enlaces de doctor, con un prefijo que los distingue.
+ *
+ * En vez de reescribir las cien funciones que leen `estado`, cada metodo de la
+ * instancia corre dentro de su contexto (`AsyncLocalStorage`), y `estado` es
+ * una vista que lee el del contexto en curso. Sin contexto —las pruebas, el
+ * `turnoRepository` de este modulo— es el de siempre.
+ */
+export interface MundoEnMemoria {
+  estado: EstadoMemoria & { version: number }
+  /** A donde se publican los eventos en vivo de este mundo. */
+  hub: { publish(evento: EventoTurno): void }
+  /** Con que empiezan los tokens de enlace de doctor de este mundo. */
+  prefijoToken: string
+}
+
+const MUNDO_POR_DEFECTO: MundoEnMemoria = { estado: estadoPorDefecto, hub: realtimeHub, prefijoToken: '' }
+const mundoEnCurso = new AsyncLocalStorage<MundoEnMemoria>()
+const mundo = () => mundoEnCurso.getStore() ?? MUNDO_POR_DEFECTO
+
+const estado = new Proxy({} as EstadoMemoria & { version: number }, {
+  get: (_, clave) => Reflect.get(mundo().estado, clave),
+  set: (_, clave, valor) => Reflect.set(mundo().estado, clave, valor),
+})
+const publicar = (evento: EventoTurno) => mundo().hub.publish(evento)
+
+/** Un estado recien sembrado para un mundo aparte. */
+export function estadoNuevo(semilla: () => EstadoMemoria = sembrar): EstadoMemoria & { version: number } {
+  return { ...semilla(), version: VERSION_ESTADO }
+}
 
 /**
  * A que jornada pertenece una franja, o `null` si esa hora no es una franja
@@ -707,7 +831,8 @@ function proximoDelProfesional(profesionalId: string | null | undefined): string
 }
 
 /**
- * Arma la casilla que ve la pantalla publica. NO lleva datos del paciente.
+ * Arma la casilla que ve la pantalla publica. El nombre del paciente solo va
+ * si el diseño elegido lo muestra (ver `nombreParaPantalla`).
  *
  * LLEVA TAMBIEN EL PROXIMO, por el mismo motivo que la version contra Postgres:
  * esta casilla viaja por el canal en vivo en cada llamado y la pantalla
@@ -728,6 +853,7 @@ function casillaDeTurno(turno: Turno): CasillaPantalla {
     servicioNombre: servicio.nombre,
     profesionalNombre: profesional?.nombre ?? null,
     codigo: turno.codigo,
+    ...nombreParaPantalla(estado.configuracion.disenoPantalla, turno.nombrePaciente),
     horaLlamado: turno.horaLlamado ?? null,
     vecesLlamado: turno.vecesLlamado,
     siguienteCodigo: proximoDelProfesional(turno.profesionalId),
@@ -776,6 +902,23 @@ function itemAgenda(cita: Cita, turno: Turno | undefined): ItemAgendaProfesional
 }
 
 export class InMemoryTurnoRepository implements TurnoRepository {
+  /**
+   * Sin argumento, el mundo de siempre (el estado global del modulo y el canal
+   * en vivo real). Con uno, un mundo aparte: ver `MundoEnMemoria`.
+   */
+  constructor(propio?: MundoEnMemoria) {
+    if (!propio) return
+    // Cada metodo corre dentro de SU mundo, tambien lo que llame por dentro.
+    const prototipo = InMemoryTurnoRepository.prototype as unknown as Record<string, unknown>
+    for (const nombre of Object.getOwnPropertyNames(prototipo)) {
+      const metodo = prototipo[nombre]
+      if (nombre === 'constructor' || typeof metodo !== 'function') continue
+      Object.defineProperty(this, nombre, {
+        value: (...argumentos: unknown[]) => mundoEnCurso.run(propio, () => metodo.apply(this, argumentos)),
+      })
+    }
+  }
+
   // --- Catalogos ---
 
   async listarServicios(incluirInactivos = false): Promise<Servicio[]> {
@@ -1128,7 +1271,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     // Con la configuracion ACTUAL, no con la inicial: si el administrador
     // cambio la duracion de la consulta, las citas de ejemplo tienen que caer
     // en las franjas que existen ahora.
-    const citasDeEjemplo = sembrarCitas(estado.profesionales, estado.configuracion)
+    const citasDeEjemplo = sembrarCitas(estado.profesionales, estado.configuracion, estado.citasDeEjemploPorDoctor)
 
     estado.citas.splice(0, estado.citas.length, ...citasDeOtrosDias, ...citasDeEjemplo)
     estado.turnos.splice(0, estado.turnos.length, ...turnosDeOtrosDias)
@@ -1417,7 +1560,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     if (abierto) cerrarAutomaticamente(abierto, modulo.id)
     marcarLlamado(siguiente, modulo.id, params.funcionarioId)
 
-    realtimeHub.publish({ tipo: 'turno.llamado', casilla: casillaDeTurno(siguiente), repetido: false })
+    publicar({ tipo: 'turno.llamado', casilla: casillaDeTurno(siguiente), repetido: false })
     return siguiente
   }
 
@@ -1439,7 +1582,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     turno.horaLlamado = ahoraISO()
     turno.horaPrimerLlamado ??= turno.horaLlamado
 
-    realtimeHub.publish({ tipo: 'turno.llamado', casilla: casillaDeTurno(turno), repetido: true })
+    publicar({ tipo: 'turno.llamado', casilla: casillaDeTurno(turno), repetido: true })
     return { turno, yaAplicada: false }
   }
 
@@ -1477,13 +1620,13 @@ export class InMemoryTurnoRepository implements TurnoRepository {
 
     const puestoRestaurado = restaurar?.moduloId ? puestoDe(restaurar.moduloId, restaurar.profesionalId) : null
     if (restaurar?.moduloId && puestoRestaurado) {
-      realtimeHub.publish({ tipo: 'turno.devuelto', moduloId: restaurar.moduloId, puesto: puestoRestaurado, casilla: casillaDeTurno(restaurar) })
+      publicar({ tipo: 'turno.devuelto', moduloId: restaurar.moduloId, puesto: puestoRestaurado, casilla: casillaDeTurno(restaurar) })
     }
     if (devolver && moduloDevuelto) {
       const puesto = puestoDe(moduloDevuelto, devolver.profesionalId)
-      if (puesto !== puestoRestaurado) realtimeHub.publish({ tipo: 'turno.devuelto', moduloId: moduloDevuelto, puesto, casilla: null })
+      if (puesto !== puestoRestaurado) publicar({ tipo: 'turno.devuelto', moduloId: moduloDevuelto, puesto, casilla: null })
     }
-    if (devolver) realtimeHub.publish({ tipo: 'fila.cambiada', servicioId: devolver.servicioId, profesionalId: devolver.profesionalId ?? null })
+    if (devolver) publicar({ tipo: 'fila.cambiada', servicioId: devolver.servicioId, profesionalId: devolver.profesionalId ?? null })
     return plan
   }
 
@@ -1958,7 +2101,15 @@ export class InMemoryTurnoRepository implements TurnoRepository {
   // --- Parametros generales ---
 
   async configuracion(): Promise<ConfiguracionGuardada> {
-    return { ...estado.configuracion }
+    // Igual que la de Postgres: un modo de entrada que ya no existe (el
+    // "AMBOS" de una version anterior) se lee como el de partida.
+    const { accesoProfesionales } = estado.configuracion
+    return {
+      ...estado.configuracion,
+      accesoProfesionales: esModoAccesoProfesional(accesoProfesionales)
+        ? accesoProfesionales
+        : CONFIGURACION_INICIAL.accesoProfesionales,
+    }
   }
 
   async guardarConfiguracion(
@@ -2006,7 +2157,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
     // enteran al instante en vez de esperar a su resincronizacion. Las dos
     // cumplen el mismo contrato y tienen que comportarse igual, o las pruebas
     // darian por bueno algo que en el hospital no pasa.
-    realtimeHub.publish({ tipo: 'configuracion.cambiada' })
+    publicar({ tipo: 'configuracion.cambiada' })
 
     return { ...estado.configuracion }
   }
@@ -2039,7 +2190,7 @@ export class InMemoryTurnoRepository implements TurnoRepository {
       }
     }
 
-    const token = randomBytes(32).toString('base64url')
+    const token = mundo().prefijoToken + randomBytes(32).toString('base64url')
     const creadoEn = ahoraISO()
     const expiraEn = new Date(Date.now() + duracionMinutos * 60 * 1000).toISOString()
 
@@ -2134,6 +2285,44 @@ export class InMemoryTurnoRepository implements TurnoRepository {
 
     const { tokenHash: _tokenHash, tokenGuardado: _tokenGuardado, ...accesoPublico } = acceso
     return accesoPublico
+  }
+
+  // --- PIN de los medicos ---
+
+  async listarPines(): Promise<PinProfesional[]> {
+    return estado.pines.map((p) => ({ ...p }))
+  }
+
+  async asignarPin(profesionalId: string): Promise<{ pin: string }> {
+    buscarProfesional(profesionalId)
+    for (let sorteo = 0; sorteo < SORTEOS_MAXIMOS; sorteo += 1) {
+      const pin = sortearPin()
+      if (estado.pines.some((p) => p.pin === pin && p.profesionalId !== profesionalId)) continue
+      const nuevo = { profesionalId, pin, activo: true, actualizadoEn: ahoraISO() }
+      estado.pines = [...estado.pines.filter((p) => p.profesionalId !== profesionalId), nuevo]
+      return { pin }
+    }
+    errorDeNegocio('No se pudo sortear un PIN libre. Vuelve a intentarlo.')
+  }
+
+  async cambiarEstadoPin(profesionalId: string, activo: boolean): Promise<PinProfesional> {
+    const actual = estado.pines.find((p) => p.profesionalId === profesionalId)
+    if (!actual) errorDeNegocio('Ese medico todavia no tiene PIN.')
+    actual.activo = activo
+    actual.actualizadoEn = ahoraISO()
+    return { ...actual }
+  }
+
+  async eliminarPin(profesionalId: string): Promise<void> {
+    estado.pines = estado.pines.filter((p) => p.profesionalId !== profesionalId)
+  }
+
+  async profesionalPorPin(pin: string): Promise<Profesional | null> {
+    if (!esPinValido(pin)) return null
+    const fila = estado.pines.find((p) => p.pin === pin)
+    if (!fila?.activo) return null
+    const profesional = estado.profesionales.find((p) => p.id === fila.profesionalId)
+    return profesional?.activo ? { ...profesional } : null
   }
 }
 
@@ -2261,7 +2450,7 @@ function cerrarTurno(turnoId: string, nuevo: EstadoDeCierre, cerradoPor?: string
 
   aplicarCierre(turno, nuevo, cerradoPor ?? null, false)
   if (turno.moduloId) {
-    realtimeHub.publish({ tipo: 'modulo.liberado', moduloId: turno.moduloId, puesto: puestoDe(turno.moduloId, turno.profesionalId) })
+    publicar({ tipo: 'modulo.liberado', moduloId: turno.moduloId, puesto: puestoDe(turno.moduloId, turno.profesionalId) })
   }
   return { turno, yaAplicada: false }
 }
@@ -2277,7 +2466,7 @@ function cerrarTurno(turnoId: string, nuevo: EstadoDeCierre, cerradoPor?: string
 function cerrarAutomaticamente(turno: Turno, moduloDelLlamado: string) {
   aplicarCierre(turno, 'ATENDIDO', null, true)
   if (turno.moduloId && turno.moduloId !== moduloDelLlamado) {
-    realtimeHub.publish({ tipo: 'modulo.liberado', moduloId: turno.moduloId, puesto: puestoDe(turno.moduloId, turno.profesionalId) })
+    publicar({ tipo: 'modulo.liberado', moduloId: turno.moduloId, puesto: puestoDe(turno.moduloId, turno.profesionalId) })
   }
 }
 

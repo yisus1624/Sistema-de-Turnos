@@ -25,18 +25,33 @@
  * el adaptador que implementa `TurnoRepository` contra ella y se cambia la
  * asignacion de abajo. Nada mas del sistema se toca.
  */
-import { turnoRepository as enPostgres } from './prisma-repository'
+import { mundoActual } from '@/lib/demostracion/mundo'
 import type { TurnoRepository } from './repository'
 
 /**
- * FUENTE ACTUAL: PostgreSQL (Supabase), via `prisma-repository`.
+ * FUENTE ACTUAL: PostgreSQL (Supabase), via `prisma-repository`... SALVO PARA
+ * LA CUENTA DE DEMOSTRACION.
  *
- * Hasta aqui los datos vivian en la memoria del proceso y se perdian en cada
- * reinicio: servia para el demo, pero un hospital no puede perder la agenda del
- * dia porque se reinicio el servidor. La implementacion en memoria SIGUE en el
- * repositorio (`in-memory-repository.ts`) y cumple el mismo contrato, asi que
- * cambiar esta linea la devuelve entera para desarrollar sin base de datos.
+ * Cada llamada pregunta primero de que mundo es la peticion (ver
+ * `lib/demostracion/mundo.ts`): una sesion de demostracion, o un enlace de
+ * doctor de demostracion, va al hospital de mentira en memoria; todo lo demas
+ * —y cualquier duda— a la base real. Las rutas no se enteran: siguen
+ * importando este `turnoRepository` y hablando con el mismo contrato.
+ *
+ * Funciona porque TODO el contrato es asincrono: cada metodo devuelve una
+ * promesa, asi que elegir el mundo antes de llamarlo no cambia nada para
+ * quien llama.
  */
-export const turnoRepository: TurnoRepository = enPostgres
+export const turnoRepository: TurnoRepository = new Proxy({} as TurnoRepository, {
+  get(_, metodo) {
+    // Que no parezca una promesa (`then`) ni otra cosa que un repositorio.
+    if (typeof metodo !== 'string' || metodo === 'then') return undefined
+    return async (...argumentos: unknown[]) => {
+      const { repositorio } = await mundoActual()
+      const elegido = Reflect.get(repositorio, metodo) as (...a: unknown[]) => Promise<unknown>
+      return elegido.apply(repositorio, argumentos)
+    }
+  },
+})
 
 export type { TurnoRepository }

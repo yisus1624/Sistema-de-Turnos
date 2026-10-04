@@ -80,6 +80,16 @@ export default function ConsultorioClient() {
   const [servicio, setServicio] = useState<Servicio | null>(null)
   const [pendientes, setPendientes] = useState<Turno[]>([])
   const [turnoActual, setTurnoActual] = useState<Turno | null>(null)
+  // Con la cartelera de nombres el codigo no sale en ninguna parte.
+  const [salaConNombres, setSalaConNombres] = useState(false)
+  // Con la entrada por PIN, el equipo es compartido: se ofrece "Cambiar de medico".
+  const [entradaConPin, setEntradaConPin] = useState(false)
+
+  /** Sale este medico y deja el equipo en el PIN para el siguiente. */
+  async function cambiarDeMedico() {
+    await pedir('/api/consultorio/sesion', { method: 'DELETE', sinRedirigirAlLogin: true }).catch(() => {})
+    window.location.replace('/medico')
+  }
   const [agenda, setAgenda] = useState<ItemAgendaProfesional[]>([])
   // Lo que haria "Retroceder" ahora mismo, tal como lo calcula el servidor.
   const [retroceso, setRetroceso] = useState<PlanDeRetroceso | null>(null)
@@ -120,6 +130,8 @@ export default function ConsultorioClient() {
         agenda: ItemAgendaProfesional[]
         retroceso: PlanDeRetroceso | null
         expiraEn?: string | null
+        salaConNombres?: boolean
+        entradaConPin?: boolean
       }>(`/api/consultorio?fecha=${fecha}`, { ...SIN_LOGIN, signal: recarga.signal })
       if (!recarga.esVigente()) return 'reemplazada'
 
@@ -133,6 +145,8 @@ export default function ConsultorioClient() {
       }
 
       setProfesional(data.profesional)
+      setSalaConNombres(data.salaConNombres === true)
+      setEntradaConPin(data.entradaConPin === true)
       setConsultorio(data.consultorio)
       setServicio(data.servicio)
       setPendientes(data.pendientes)
@@ -342,11 +356,12 @@ export default function ConsultorioClient() {
         // Se pinta ya lo que devolvio el servidor, sin esperar la recarga.
         setTurnoActual(restaurado)
         setRetroceso(null)
+        const nombrar = (turno: Turno) => (salaConNombres ? (turno.nombrePaciente ?? 'El paciente') : turno.codigo)
         toast.success(
           'Listo, retrocediste',
           restaurado
-            ? `${restaurado.codigo} volvio a atencion${devuelto ? ` y ${devuelto.codigo} a la fila de espera` : ''}.`
-            : `${devuelto?.codigo ?? 'El paciente'} volvio a la fila de espera.`,
+            ? `${nombrar(restaurado)} volvio a atencion${devuelto ? ` y ${nombrar(devuelto)} a la fila de espera` : ''}.`
+            : `${devuelto ? nombrar(devuelto) : 'El paciente'} volvio a la fila de espera.`,
         )
       } finally {
         setConfirmandoRetroceso(false)
@@ -380,6 +395,12 @@ export default function ConsultorioClient() {
         descripcion="Puede que haya vencido o que se haya generado uno nuevo. Si es asi, pide un enlace nuevo a la oficina de sistemas del hospital."
       >
         <ComprobarDeNuevo comprobando={comprobando} alComprobar={() => void comprobarAhora()} />
+        <a
+          href="/medico"
+          className="mt-3 inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-brand-800 transition hover:bg-slate-50"
+        >
+          Entrar con mi PIN
+        </a>
       </AvisoAPantallaCompleta>
     )
   }
@@ -407,6 +428,7 @@ export default function ConsultorioClient() {
         especialidad={servicio?.nombre ?? null}
         consultorio={consultorio?.nombre ?? null}
         conexion={conexion}
+        alCambiarDeMedico={entradaConPin ? () => void cambiarDeMedico() : undefined}
       />
 
       <div className="mx-auto max-w-6xl space-y-5 px-4 py-5 sm:px-6 sm:py-7">
@@ -446,6 +468,7 @@ export default function ConsultorioClient() {
 
         <TarjetaPaciente
           turno={turnoActual}
+          sinCodigo={salaConNombres}
           documento={documentoActual}
           especialidad={servicio?.nombre ?? null}
           consultorio={consultorio?.nombre ?? null}
@@ -467,11 +490,12 @@ export default function ConsultorioClient() {
           alAusente={() => cerrarTurno('ausente')}
         />
 
-        <AgendaDeHoy agenda={agenda} resumen={resumen} turnoActualId={turnoActual?.id ?? null} />
+        <AgendaDeHoy agenda={agenda} resumen={resumen} turnoActualId={turnoActual?.id ?? null} sinCodigo={salaConNombres} />
       </div>
 
       <ConfirmarRetroceso
         plan={retroceso}
+        sinCodigo={salaConNombres}
         abierto={confirmandoRetroceso}
         cargando={accion === 'retroceder'}
         alCerrar={() => setConfirmandoRetroceso(false)}

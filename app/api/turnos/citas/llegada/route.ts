@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     // El aviso va SIEMPRE: es idempotente (solo dice "recarga tu fila") y
     // cubre justo ese caso. El apunte solo la primera vez: la llegada paso una
     // sola vez.
-    avisarFilaCambiada(turno)
+    await avisarFilaCambiada(turno)
     if (!yaRegistrada) {
       await registrarEvento({
         tipo: EVENTOS.LLEGADA_REGISTRADA,

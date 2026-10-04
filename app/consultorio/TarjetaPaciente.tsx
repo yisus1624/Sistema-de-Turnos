@@ -48,7 +48,10 @@ export function TarjetaPaciente({
   retrocediendo,
   ocupado,
   alRetroceder,
+  sinCodigo = false,
 }: {
+  /** Con la cartelera de nombres el codigo no se muestra (el paciente no lo conoce). */
+  sinCodigo?: boolean
   turno: Turno | null
   documento: string | null
   especialidad: string | null
@@ -128,9 +131,11 @@ export function TarjetaPaciente({
                 </p>
               ) : null}
               <div className="mt-3 flex flex-wrap gap-2">
-                <span className="inline-flex items-center rounded-full bg-acento-50 px-3.5 py-1.5 text-sm font-semibold tabular-nums text-acento-700 ring-1 ring-acento-100">
-                  Turno {turno.codigo}
-                </span>
+                {sinCodigo ? null : (
+                  <span className="inline-flex items-center rounded-full bg-acento-50 px-3.5 py-1.5 text-sm font-semibold tabular-nums text-acento-700 ring-1 ring-acento-100">
+                    Turno {turno.codigo}
+                  </span>
+                )}
                 {turno.horaCita ? (
                   <span className="inline-flex items-center rounded-full bg-slate-100 px-3.5 py-1.5 text-sm font-medium tabular-nums text-slate-600">
                     Cita {horaCorta(turno.horaCita)}

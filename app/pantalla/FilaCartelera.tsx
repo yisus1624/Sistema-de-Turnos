@@ -10,6 +10,10 @@
  * Jerarquia, de lo que mas a lo que menos se busca: el TURNO (el mas grande y
  * pesado), el CONSULTORIO (a donde ir, en su pastilla), el MEDICO y, pequeño y
  * secundario, el servicio.
+ *
+ * En la variante `paciente` no hay turno ni medico: el NOMBRE del paciente va
+ * donde iba el medico (mismo hueco de dos lineas, en negrita) y despues el
+ * consultorio con su numero.
  */
 import type { CSSProperties } from 'react'
 import { leerLugarYNumero } from '@/lib/turnos/nombre-consultorio'
@@ -18,6 +22,7 @@ import { Door, MapPin, Stethoscope, User } from '@phosphor-icons/react/dist/ssr'
 import type { FormaDeFila, PlanDeCartelera } from '@/lib/turnos/distribucion-pantalla'
 import type { CasillaPantalla } from '@/lib/turnos/types'
 import { cn } from '@/lib/ui'
+import type { VarianteCartelera } from './Cartelera'
 import { AZUL_CLARO, AZUL_FILA_ACTUAL, AZUL_MEDIO, AZUL_PROFUNDO, FONDO_FILA } from './colores-cartelera'
 
 type Reja = Pick<PlanDeCartelera, 'forma' | 'reja' | 'rellenoX' | 'separacionCeldas'>
@@ -48,11 +53,23 @@ const TITULOS: Record<FormaDeFila, ReadonlyArray<{ Icono: typeof User; texto: st
   ],
 }
 
+/** Los de la cartelera con el nombre del paciente: sin turno ni medico. */
+const TITULOS_PACIENTE: typeof TITULOS = {
+  'una-planta': [
+    { Icono: User, texto: 'Paciente' },
+    { Icono: Door, texto: 'Consultorio', conNumero: true },
+  ],
+  // Solo en un televisor puesto en vertical, donde lado a lado no cabe (ver
+  // `planDeCartelera`): el nombre arriba y el consultorio debajo.
+  'dos-pisos': [{ Icono: User, texto: 'Paciente', conNumero: true }],
+}
+
 /** Los titulos de una columna de filas: icono y palabra, en blanco sobre el azul profundo. */
-export function EncabezadoDeColumna({ reja }: { reja: Reja }) {
+export function EncabezadoDeColumna({ reja, variante = 'turno' }: { reja: Reja; variante?: VarianteCartelera }) {
+  const titulos = variante === 'paciente' ? TITULOS_PACIENTE : TITULOS
   return (
     <div className="grid items-center py-[0.9rem]" style={estiloDeReja(reja)}>
-      {TITULOS[reja.forma].map(({ Icono, texto, conNumero }) => (
+      {titulos[reja.forma].map(({ Icono, texto, conNumero }) => (
         <Titulo key={texto} Icono={Icono} texto={texto} conNumero={conNumero} />
       ))}
     </div>
@@ -74,6 +91,7 @@ function Titulo({ Icono, texto, conNumero }: { Icono: typeof User; texto: string
 
 type FilaProps = {
   casilla: CasillaPantalla
+  variante?: VarianteCartelera
   plan: PlanDeCartelera
   /** El turno en curso: la unica fila con fondo de color. */
   destacada: boolean
@@ -88,7 +106,8 @@ type FilaProps = {
  * bloques parecidos: si estuvieran escritas aparte, bastaria tocar una para
  * que la tabla se viera torcida desde la sala.
  */
-export function FilaCartelera({ casilla, plan, destacada, resaltada, nueva }: FilaProps) {
+export function FilaCartelera({ casilla, variante = 'turno', plan, destacada, resaltada, nueva }: FilaProps) {
+  if (variante === 'paciente') return <FilaDePaciente casilla={casilla} plan={plan} destacada={destacada} resaltada={resaltada} nueva={nueva} />
   return (
     <div
       className={cn(
@@ -144,14 +163,52 @@ function CodigoDeTurno({ codigo, tamano, destacada, resaltada }: { codigo?: stri
  * significa. Un nombre largo pasa a DOS lineas antes que achicar la letra.
  */
 function Medico({ casilla, plan, destacada }: { casilla: CasillaPantalla; plan: PlanDeCartelera; destacada: boolean }) {
+  return <Nombre texto={casilla.profesionalNombre} tamano={plan.letra.medico} destacada={destacada} peso="font-semibold" />
+}
+
+/** Un nombre en su hueco de dos lineas: el del medico o, en la variante `paciente`, el del paciente. */
+function Nombre({ texto, tamano, destacada, peso = 'font-bold' }: { texto?: string | null; tamano: number; destacada: boolean; peso?: string }) {
   return (
     <div className="min-w-0">
       <p
-        className={cn('line-clamp-2 break-words font-semibold leading-[1.1] tracking-[-0.01em]', destacada ? 'text-white' : 'text-slate-800')}
-        style={{ fontSize: plan.letra.medico }}
+        className={cn('line-clamp-2 break-words leading-[1.1] tracking-[-0.01em]', peso, destacada ? 'text-white' : 'text-slate-800')}
+        style={{ fontSize: tamano }}
       >
-        {casilla.profesionalNombre ?? ''}
+        {texto ?? ''}
       </p>
+    </div>
+  )
+}
+
+/**
+ * La fila de la cartelera con el nombre del paciente: el mismo marco, el mismo
+ * resalte y la misma etiqueta "NUEVO" que la de turno, sin codigo ni medico.
+ * En dos pisos, quien arriba y a donde ir debajo.
+ */
+function FilaDePaciente({ casilla, plan, destacada, resaltada, nueva }: Omit<FilaProps, 'variante'>) {
+  const nombre = <Nombre texto={casilla.nombrePaciente} tamano={plan.letra.medico} destacada={destacada} />
+  const consultorio = <Consultorio nombre={casilla.moduloNombre} tamano={plan.letra.consultorio} destacada={destacada} />
+  return (
+    <div
+      className={cn(
+        'resalte-tv relative grid min-h-0 items-center overflow-hidden rounded-[1.1rem] transition-[background-color,box-shadow] duration-700 ease-[var(--curva)]',
+        resaltada && 'llamado-tv ring-[0.3rem] ring-inset ring-amber-300',
+      )}
+      style={{ ...estiloDeReja(plan), backgroundColor: destacada ? AZUL_FILA_ACTUAL : FONDO_FILA }}
+    >
+      {/* A la derecha: a la izquierda tapaba el comienzo del nombre, que es lo que se lee. */}
+      {nueva ? <EtiquetaNuevo tamano={plan.letra.turno * 0.34} className="right-[0.35rem] top-[0.3rem]" /> : null}
+      {plan.forma === 'dos-pisos' ? (
+        <div className="flex min-w-0 flex-col items-start" style={{ gap: plan.separacionPisos }}>
+          {nombre}
+          {consultorio}
+        </div>
+      ) : (
+        <>
+          {nombre}
+          {consultorio}
+        </>
+      )}
     </div>
   )
 }

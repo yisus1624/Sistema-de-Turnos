@@ -17,7 +17,7 @@
  * daba por bueno justo lo contrario de lo que hacia produccion. Aqui esta una
  * sola vez, sin base de datos delante, y se puede probar caso por caso.
  */
-import type { CasillaPantalla } from './types'
+import type { CasillaPantalla, DisenoPantalla } from './types'
 
 export interface EntradaDePantalla {
   /** Consultorios y ventanillas ACTIVOS del catalogo. */
@@ -104,10 +104,28 @@ export function puestoDe(moduloId: string, profesionalId?: string | null): strin
  * turno y sin puesto, como la manda el servidor cuando nadie atiende ahi.
  */
 export function casillaLibreDe(casilla: CasillaPantalla): CasillaPantalla {
-  return { ...casilla, puesto: undefined, codigo: null, horaLlamado: null, vecesLlamado: 0 }
+  return { ...casilla, puesto: undefined, codigo: null, nombrePaciente: undefined, horaLlamado: null, vecesLlamado: 0 }
 }
 
 /** La clave de una casilla en el televisor: su puesto o, si no lo trae, su consultorio. */
 export function claveDeCasilla(casilla: { moduloId: string; puesto?: string }): string {
   return casilla.puesto ?? casilla.moduloId
+}
+
+/**
+ * El nombre del paciente que puede salir a la pantalla publica, o null.
+ *
+ * SOLO con el diseño `CARTELERA_PACIENTE`. Lo aplican las dos
+ * implementaciones del repositorio al armar cada casilla, de modo que con la
+ * cartelera de siempre el nombre ni siquiera viaja por la ruta publica ni por
+ * el canal en vivo: no basta con que la pantalla no lo pinte.
+ */
+export function nombreParaPantalla(
+  diseno: DisenoPantalla,
+  nombrePaciente: string | null | undefined,
+): Pick<CasillaPantalla, 'nombrePaciente'> {
+  // Un objeto para esparcir, no un null: con la cartelera de siempre la clave
+  // ni aparece en lo que sale por la ruta publica.
+  const nombre = nombrePaciente?.trim()
+  return diseno === 'CARTELERA_PACIENTE' && nombre ? { nombrePaciente: nombre } : {}
 }

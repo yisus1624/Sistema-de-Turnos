@@ -7,6 +7,8 @@ import { CaretDown, CaretLeft, CaretRight, List, SignOut, UserCircle } from '@ph
 import { logoutAction } from '@/app/actions/auth'
 import { Isotipo, Logotipo } from '@/components/brand/Marca'
 import type { RolUsuario } from '@/lib/usuarios/types'
+import type { ModoAccesoProfesional } from '@/lib/turnos/types'
+import { tieneMiCuenta } from '@/lib/permissions/rutas'
 import { navDelUsuario, rolLabels } from './navigation'
 import { cn } from '@/lib/ui'
 
@@ -18,10 +20,15 @@ type AppShellProps = {
   description: string
   /** Secciones permitidas del usuario; `null` = las propias de su rol. */
   secciones?: string[] | null
+  /** Cuenta de demostracion: ve la simulacion y no tiene "Mi cuenta". */
+  demostracion?: boolean
+  /** Como entran los medicos: decide si el menu muestra Enlaces o PIN. */
+  modoAcceso?: ModoAccesoProfesional
   children: React.ReactNode
 }
 
 const CLAVE_SIDEBAR = 'turnos-sidebar-colapsado'
+
 
 function esActiva(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`)
@@ -34,6 +41,8 @@ export default function AppShell({
   title,
   description,
   secciones,
+  demostracion = false,
+  modoAcceso,
   children,
 }: AppShellProps) {
   const pathname = usePathname()
@@ -82,7 +91,7 @@ export default function AppShell({
 
   const iniciales = (nombreUsuario || rolLabels[rol]).slice(0, 2).toUpperCase()
 
-  const seccionesNav = navDelUsuario(rol, secciones)
+  const seccionesNav = navDelUsuario(rol, secciones, demostracion, modoAcceso)
   const hrefActivo = seccionesNav
     .flatMap((seccionNav) => seccionNav.items.map((item) => item.href))
     .filter((href) => esActiva(pathname, href))
@@ -227,7 +236,7 @@ export default function AppShell({
         sidebarColapsado && 'lg:flex lg:flex-col lg:items-center lg:space-y-2',
       )}
     >
-      {enlaceMiCuenta}
+      {tieneMiCuenta(rol, demostracion) ? enlaceMiCuenta : null}
       {botonSalir}
     </div>
   )

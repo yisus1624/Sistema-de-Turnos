@@ -5,6 +5,7 @@ import { apiError, requireSeccion } from '@/lib/permissions/session'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
 import { nombreDeProfesional } from '@/lib/turnos/catalogo-nombres'
+import { permiteEnlace } from '@/lib/turnos/types'
 
 // 15 minutos a 72 horas: mismo rango que valida el repositorio. Se repite
 // aqui para devolver un mensaje en espanol antes de tocar el dominio.
@@ -42,6 +43,15 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return NextResponse.json(
         { error: 'La vigencia del enlace debe estar entre 15 minutos y 72 horas.' },
         { status: 400 },
+      )
+    }
+
+    // Con la entrada solo por PIN no se reparten enlaces nuevos (los que ya
+    // estaban siguen hasta vencer, como mucho 72 horas).
+    if (!permiteEnlace((await turnoRepository.configuracion()).accesoProfesionales)) {
+      return NextResponse.json(
+        { error: 'El hospital esta usando la entrada con PIN: ya no se generan enlaces. Cambialo en Ajustes.' },
+        { status: 403 },
       )
     }
 

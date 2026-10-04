@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
-import { primeraRutaPermitida, puedeVerSeccion } from '@/lib/permissions/rutas'
+import { primeraRutaPermitida, puedeVerSeccion, seccionDelModo } from '@/lib/permissions/rutas'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import type { RolUsuario } from '@/lib/usuarios/types'
 import AppShell from './AppShell'
 
@@ -24,9 +25,19 @@ export default async function RoleShell({ rol, seccion, title, description, chil
 
   if (!session?.user) redirect('/auth/login')
 
-  const { rol: rolUsuario, secciones } = session.user
+  const { rol: rolUsuario, secciones, demostracion } = session.user
 
-  const permitido = seccion ? puedeVerSeccion(rolUsuario, secciones, seccion) : rolUsuario === rol
+  // El modo de entrada de los medicos oculta Enlaces o PIN (ver `soloConAcceso`).
+  // Si no se pudiera leer, se muestran las dos: mejor que dejar al
+  // administrador sin la pantalla que necesita.
+  const modoAcceso = await turnoRepository
+    .configuracion()
+    .then((configuracion) => configuracion.accesoProfesionales)
+    .catch(() => undefined)
+
+  const permitido =
+    (seccion ? puedeVerSeccion(rolUsuario, secciones, seccion, demostracion) : rolUsuario === rol) &&
+    (!seccion || seccionDelModo(seccion, modoAcceso))
   if (!permitido) redirect(primeraRutaPermitida(rolUsuario, secciones))
 
   return (
@@ -37,6 +48,8 @@ export default async function RoleShell({ rol, seccion, title, description, chil
       nombreUsuario={session.user.name}
       area={session.user.area}
       secciones={secciones}
+      demostracion={demostracion}
+      modoAcceso={modoAcceso}
     >
       {children}
     </AppShell>

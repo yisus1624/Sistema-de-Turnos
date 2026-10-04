@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server'
+import { seNombraAlPaciente } from '@/lib/turnos/nombre-abreviado'
+import { permitePin } from '@/lib/turnos/types'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { errorConsultorio, requireProfesionalDelConsultorio, tokenDeLaPeticion } from '@/lib/turnos/acceso-consultorio'
 import { diaColombia } from '@/lib/turnos/tiempo'
@@ -35,7 +37,7 @@ export async function GET(request: Request) {
     // `retroceso` es lo que haria el boton "Retroceder" ahora mismo: la
     // pantalla lo muestra antes de confirmar y lo devuelve al pulsar, para que
     // el servidor solo haga ESE retroceso.
-    const [modulos, servicios, pendientes, turnoActual, agenda, retroceso, expiraEn] = await Promise.all([
+    const [modulos, servicios, pendientes, turnoActual, agenda, retroceso, expiraEn, configuracion] = await Promise.all([
       // Todos, activos o no: el consultorio del doctor puede ser de otro
       // servicio ("consultorio general") y aun asi hay que decir cual es.
       turnoRepository.listarModulos(undefined, true),
@@ -46,12 +48,30 @@ export async function GET(request: Request) {
       turnoRepository.planDeRetroceso(profesional.id),
       // Para avisar al doctor antes de que el enlace se le venza a media consulta.
       turnoRepository.expiracionDelAcceso(tokenDeLaPeticion(request)),
+      // Con la cartelera de nombres el paciente no conoce su codigo: la
+      // pantalla del doctor tampoco se lo muestra.
+      turnoRepository.configuracion(),
     ])
 
     const consultorio = modulos.find((m) => m.id === profesional.moduloId) ?? null
     const servicio = servicios.find((s) => s.id === profesional.servicioId) ?? null
 
-    return NextResponse.json({ profesional, consultorio, servicio, pendientes, turnoActual, agenda, retroceso, fecha, expiraEn })
+    const salaConNombres = seNombraAlPaciente(configuracion.disenoPantalla)
+    // Si se entra con PIN, la pantalla ofrece "Cambiar de medico" (equipo compartido).
+    const entradaConPin = permitePin(configuracion.accesoProfesionales)
+    return NextResponse.json({
+      profesional,
+      consultorio,
+      servicio,
+      pendientes,
+      turnoActual,
+      agenda,
+      retroceso,
+      fecha,
+      expiraEn,
+      salaConNombres,
+      entradaConPin,
+    })
   } catch (error) {
     return errorConsultorio(error)
   }

@@ -131,3 +131,14 @@ test('en cuanto entra la agenda del dia, mandan las citas y el respaldo se apaga
   assert.ok(visibles.has('cons-1'))
   assert.equal(visibles.has('cons-2'), false)
 })
+
+// --- El nombre del paciente solo sale con la cartelera que lo muestra ------------------
+
+test('el nombre del paciente solo viaja con el diseño CARTELERA_PACIENTE', async () => {
+  const { nombreParaPantalla } = await import('@/lib/turnos/casillas')
+  assert.deepEqual(nombreParaPantalla('CARTELERA_PACIENTE', '  Juan Perez  '), { nombrePaciente: 'Juan Perez' })
+  // Con la cartelera de siempre ni la clave aparece en la ruta publica.
+  assert.deepEqual(nombreParaPantalla('CARTELERA', 'Juan Perez'), {})
+  assert.deepEqual(nombreParaPantalla('CARTELERA_PACIENTE', null), {})
+  assert.deepEqual(nombreParaPantalla('CARTELERA_PACIENTE', '   '), {})
+})

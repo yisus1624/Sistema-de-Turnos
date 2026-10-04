@@ -16,9 +16,22 @@ import { Campo, Entrada, Interruptor, Seleccion } from '@/components/admin/Campo
 import { mensajeDeError, pedir } from '@/lib/api/cliente'
 import { sonarCampana } from '@/lib/turnos/anuncio'
 import { franjasDeJornada } from '@/lib/turnos/tiempo'
-import type { ConfiguracionGuardada, ConfiguracionSistema, DisenoPantalla } from '@/lib/turnos/types'
+import type { ConfiguracionGuardada, ConfiguracionSistema, DisenoPantalla, ModoAccesoProfesional } from '@/lib/turnos/types'
 
-export default function PantallaConfigClient() {
+/**
+ * La configuracion del sistema, partida en dos pantallas (decision del
+ * hospital):
+ *
+ * - `pantalla` ("Pantalla"): abrir el televisor y el volumen del llamado. Lo
+ *   que se toca a diario.
+ * - `ajustes` ("Ajustes"): si suena el llamado, el diseño del televisor, la
+ *   imagen y el mensaje, la entrada de los medicos y los horarios.
+ *
+ * Las dos guardan la MISMA configuracion, con su marca de version: si alguien
+ * cambia una mientras otro tiene abierta la otra, el segundo en guardar recibe
+ * el aviso de que cambio, en vez de pisarla.
+ */
+export default function PantallaConfigClient({ parte }: { parte: 'pantalla' | 'ajustes' }) {
   const [configuracion, setConfiguracion] = useState<ConfiguracionGuardada | null>(null)
   const [guardando, setGuardando] = useState(false)
 
@@ -103,6 +116,7 @@ export default function PantallaConfigClient() {
 
   return (
     <div className="max-w-2xl space-y-6">
+      {parte === 'pantalla' ? (
       <Card padded={false}>
         <CardHeader>
           <CardTitle>Abrir la pantalla</CardTitle>
@@ -123,8 +137,55 @@ export default function PantallaConfigClient() {
           </Link>
         </CardContent>
       </Card>
+      ) : null}
 
       <form onSubmit={guardar}>
+        {parte === 'pantalla' ? (
+          <Card padded={false}>
+            <CardHeader>
+              <CardTitle>Volumen del llamado</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {configuracion.audioActivo ? null : (
+                <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+                  El sonido del llamado esta apagado. Se enciende en{' '}
+                  <Link href="/admin/ajustes" className="font-semibold underline">
+                    Ajustes
+                  </Link>
+                  .
+                </p>
+              )}
+              <Campo etiqueta={`Volumen (${Math.round(configuracion.volumen * 100)}%)`}>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(configuracion.volumen * 100)}
+                  onChange={(e) => cambiar('volumen', Number(e.target.value) / 100)}
+                  disabled={!configuracion.audioActivo}
+                  className="h-11 w-full accent-brand-600"
+                  aria-label="Volumen del llamado"
+                />
+              </Campo>
+              <div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => sonarCampana(configuracion.volumen)}
+                  disabled={!configuracion.audioActivo}
+                >
+                  <SpeakerHigh size={17} weight="bold" />
+                  Probar sonido
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {parte === 'ajustes' ? (
+        <>
         <Card padded={false}>
           <CardHeader>
             <CardTitle>Sonido del llamado</CardTitle>
@@ -144,32 +205,13 @@ export default function PantallaConfigClient() {
               />
             </div>
 
-            <Campo etiqueta={`Volumen (${Math.round(configuracion.volumen * 100)}%)`}>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={5}
-                value={Math.round(configuracion.volumen * 100)}
-                onChange={(e) => cambiar('volumen', Number(e.target.value) / 100)}
-                disabled={!configuracion.audioActivo}
-                className="h-11 w-full accent-brand-600"
-                aria-label="Volumen del llamado"
-              />
-            </Campo>
-
-            <div>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => sonarCampana(configuracion.volumen)}
-                disabled={!configuracion.audioActivo}
-              >
-                <SpeakerHigh size={17} weight="bold" />
-                Probar sonido
-              </Button>
-            </div>
+            <p className="text-sm text-slate-600">
+              El volumen se ajusta en{' '}
+              <Link href="/admin/pantalla" className="font-semibold text-brand-700 hover:underline">
+                Pantalla
+              </Link>
+              .
+            </p>
 
             <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
               Cada vez que un doctor o una ventanilla pasa al siguiente paciente suena una campanita corta,
@@ -183,7 +225,7 @@ export default function PantallaConfigClient() {
 
         <Card padded={false} className="mt-6">
           <CardHeader>
-            <CardTitle>Pantalla</CardTitle>
+            <CardTitle>Diseño del televisor</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             {/*
@@ -197,7 +239,7 @@ export default function PantallaConfigClient() {
             {/*
               EL ASPECTO DEL TELEVISOR, con las dos opciones descritas por lo
               que el paciente ve, no por su nombre tecnico: quien elige aqui no
-              tiene por que saber que es una "cuadricula" hasta que se lo
+              tiene por que saber que es una "variante" hasta que se lo
               cuentan. El cambio alcanza a TODAS las salas en cuanto se guarda,
               y eso se avisa, porque desde esta pantalla no se ve ninguna.
             */}
@@ -209,33 +251,38 @@ export default function PantallaConfigClient() {
                 value={configuracion.disenoPantalla}
                 onChange={(e) => cambiar('disenoPantalla', e.target.value as DisenoPantalla)}
               >
-                <option value="CUADRICULA">
-                  Cuadricula — una casilla por consultorio, todas visibles a la vez
-                </option>
                 <option value="CARTELERA">
-                  Cartelera — el turno en curso en grande, con los anteriores debajo
+                  Cartelera con turno — turno en curso, medico y consultorio
+                </option>
+                <option value="CARTELERA_PACIENTE">
+                  Cartelera con paciente — nombre completo del paciente y consultorio
                 </option>
               </Seleccion>
             </Campo>
 
             {/*
-              La imagen solo se ofrece con la cartelera, que es la unica que la
-              usa. Mostrarla siempre invitaria a configurar un fondo que no se
-              ve en ninguna parte, y despues a buscar por que no aparece.
+              El nombre del paciente sale a la sala de espera: que quien lo
+              elige lo vea escrito antes de guardar, no despues.
             */}
-            {configuracion.disenoPantalla === 'CARTELERA' ? (
-              <Campo
-                etiqueta="Imagen de fondo"
-                ayuda="Ruta de una imagen de este mismo sitio, por ejemplo /img/fondo-sala.jpg. Copia el archivo en la carpeta public/img del servidor. Dejalo vacio para un fondo liso."
-              >
-                <Entrada
-                  value={configuracion.fondoPantalla}
-                  onChange={(e) => cambiar('fondoPantalla', e.target.value)}
-                  maxLength={200}
-                  placeholder="/img/fondo-sala.jpg"
-                />
-              </Campo>
+            {configuracion.disenoPantalla === 'CARTELERA_PACIENTE' ? (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
+                Con este diseño el televisor muestra el <strong className="font-semibold">nombre completo</strong>{' '}
+                de cada paciente que se llama, y lo ve cualquiera que este en la sala. Sin turno ni medico.
+              </p>
             ) : null}
+
+            {/* Las dos carteleras usan la misma imagen de fondo. */}
+            <Campo
+              etiqueta="Imagen de fondo"
+              ayuda="Ruta de una imagen de este mismo sitio, por ejemplo /img/fondo-sala.jpg. Copia el archivo en la carpeta public/img del servidor. Dejalo vacio para un fondo liso."
+            >
+              <Entrada
+                value={configuracion.fondoPantalla}
+                onChange={(e) => cambiar('fondoPantalla', e.target.value)}
+                maxLength={200}
+                placeholder="/img/fondo-sala.jpg"
+              />
+            </Campo>
 
             <Campo etiqueta="Mensaje al pie" ayuda="Texto institucional que se muestra abajo. Dejalo vacio para ocultarlo.">
               <Entrada
@@ -245,6 +292,36 @@ export default function PantallaConfigClient() {
                 placeholder="Bienvenido a la ESE Hospital San Rafael de Chinu."
               />
             </Campo>
+          </CardContent>
+        </Card>
+
+        {/*
+          COMO ENTRAN LOS MEDICOS. Las dos formas conviven mientras el hospital
+          decide; aqui se elige con cual se trabaja (ver
+          `MODOS_ACCESO_PROFESIONAL`). Los PIN se manejan en "PIN de medicos".
+        */}
+        <Card padded={false} className="mt-6">
+          <CardHeader>
+            <CardTitle>Entrada de los medicos</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Campo
+              etiqueta="Como entran los medicos a su consultorio"
+              ayuda="Uno u otro: lo del modo que no se usa se oculta del menu."
+            >
+              <Seleccion
+                value={configuracion.accesoProfesionales}
+                onChange={(e) => cambiar('accesoProfesionales', e.target.value as ModoAccesoProfesional)}
+              >
+                <option value="ENLACE">Con enlace — se genera en Enlaces de consultorio y se envia al medico</option>
+                <option value="PIN">Con PIN — cada medico escribe su PIN en un computador autorizado</option>
+              </Seleccion>
+            </Campo>
+            <p className="text-sm text-slate-600">
+              {configuracion.accesoProfesionales === 'PIN'
+                ? 'Al guardar, el menu muestra "PIN de medicos" (para generar y ver los PIN) y oculta "Enlaces de consultorio". Los enlaces que ya se habian enviado siguen sirviendo hasta que venzan.'
+                : 'Al guardar, el menu muestra "Enlaces de consultorio" y oculta "PIN de medicos". Los PIN quedan guardados por si se vuelve a cambiar.'}
+            </p>
           </CardContent>
         </Card>
 
@@ -333,6 +410,8 @@ export default function PantallaConfigClient() {
             </div>
           </CardContent>
         </Card>
+        </>
+        ) : null}
 
         <div className="mt-5 flex justify-end">
           <Button type="submit" loading={guardando}>

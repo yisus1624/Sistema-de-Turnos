@@ -157,6 +157,8 @@ export interface MedidaDeTextos {
   turno: number
   medico: AnchoDeTexto
   consultorio: AnchoDeTexto
+  /** La pastilla del consultorio pide el ancho de UNA linea (cartelera de paciente). */
+  consultorioEnUnaLinea?: boolean
 }
 
 /** Si aun no hay ningun turno llamado: el ancho de un codigo corriente ("C-010"). */

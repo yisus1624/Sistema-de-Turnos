@@ -13,13 +13,14 @@ import type { CasillaPantalla } from './types'
  * Cada llamado tiene el suyo: varios pueden estar resaltados a la vez. Lo usa
  * tambien la rotacion de paginas, que no se va de la pagina antes.
  */
-export const MS_RESALTE = 20000
+export const MS_RESALTE = 15000
 
 /**
- * Cuanto dura la etiqueta "NUEVO" de un turno recien llamado: mas que el
- * resalte, para quien levanta la vista tarde y quiere saber que cambio.
+ * Cuanto dura la etiqueta "NUEVO" de un turno recien llamado. Quince segundos,
+ * lo mismo que el resalte: a peticion del hospital, con un minuto la sala veia
+ * el "NUEVO" pegado a filas que ya no lo eran y dejaba de fijarse en el.
  */
-export const MS_NUEVO = 60000
+export const MS_NUEVO = 15000
 
 /** Los llamados recientes que el televisor marca (ver `useResaltes`). */
 export interface Resaltes {

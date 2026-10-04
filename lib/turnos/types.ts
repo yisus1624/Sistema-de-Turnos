@@ -550,6 +550,13 @@ export interface CasillaPantalla {
   // unica pieza que permite encadenar lo que se ve en el televisor con un
   // paciente concreto (minimizacion de datos, requerimiento seccion 17).
   codigo?: string | null
+  /**
+   * Nombre completo del paciente en atencion. SOLO viaja cuando el
+   * administrador eligio el diseño `CARTELERA_PACIENTE` (ver
+   * `nombreParaPantalla`): con cualquier otro diseño va en null, para que el
+   * nombre no salga por la ruta publica si la pantalla no lo va a mostrar.
+   */
+  nombrePaciente?: string | null
   horaLlamado?: string | null
   /** Cuantas veces se llamo; la pantalla lo usa para repetir la animacion. */
   vecesLlamado?: number
@@ -581,9 +588,54 @@ export interface CasillaPantalla {
  * diseño nuevo no deberia costar una migracion. Lo que SI valida el servidor al
  * guardar es que el valor este en esta lista.
  */
-export const DISENOS_PANTALLA = ['CUADRICULA', 'CARTELERA'] as const
+/**
+ * - `CARTELERA`: turno en curso, medico y consultorio, sobre la imagen de fondo.
+ * - `CARTELERA_PACIENTE`: la misma pieza, pero con el NOMBRE DEL PACIENTE y el
+ *   consultorio, sin turno ni medico. Decision del hospital: es la unica que
+ *   saca el nombre a la sala, y solo con ella lo manda el servidor.
+ *
+ * La cuadricula se retiro; una configuracion guardada con ella se lee como
+ * `CARTELERA` (ver `esDisenoPantalla` y el respaldo al leer la configuracion).
+ */
+export const DISENOS_PANTALLA = ['CARTELERA', 'CARTELERA_PACIENTE'] as const
 
 export type DisenoPantalla = (typeof DISENOS_PANTALLA)[number]
+
+/**
+ * Como entran los medicos a su consultorio. Lo elige el administrador en
+ * "Ajustes", y es UNO U OTRO (decision del hospital): lo del otro
+ * modo se oculta del menu.
+ *
+ * - `ENLACE`: el enlace temporal que se genera en "Enlaces de consultorio".
+ * - `PIN`: el PIN de 6 digitos de cada medico, en un equipo autorizado (ver
+ *   `app/medico`). No se generan enlaces nuevos.
+ */
+export const MODOS_ACCESO_PROFESIONAL = ['ENLACE', 'PIN'] as const
+
+export type ModoAccesoProfesional = (typeof MODOS_ACCESO_PROFESIONAL)[number]
+
+export function esModoAccesoProfesional(valor: unknown): valor is ModoAccesoProfesional {
+  return typeof valor === 'string' && (MODOS_ACCESO_PROFESIONAL as readonly string[]).includes(valor)
+}
+
+/** Si con este modo se entra con PIN / con enlace. */
+export const permitePin = (modo: ModoAccesoProfesional) => modo === 'PIN'
+export const permiteEnlace = (modo: ModoAccesoProfesional) => modo === 'ENLACE'
+
+/**
+ * El PIN de un medico, tal como lo ve el administrador.
+ *
+ * El PIN SE PUEDE VOLVER A VER (decision del hospital: el administrador se lo
+ * dicta al medico que lo olvido). Por eso se guarda cifrado y no solo su
+ * huella; la huella es lo que se busca al entrar.
+ */
+export interface PinProfesional {
+  profesionalId: string
+  /** El PIN, o null si no se pudo descifrar (cambio la clave del servidor). */
+  pin: string | null
+  activo: boolean
+  actualizadoEn: string
+}
 
 export function esDisenoPantalla(valor: unknown): valor is DisenoPantalla {
   return typeof valor === 'string' && (DISENOS_PANTALLA as readonly string[]).includes(valor)
@@ -676,9 +728,11 @@ export interface ConfiguracionSistema {
 
   /**
    * Con que aspecto se dibuja el televisor de la sala de espera. Lo elige el
-   * administrador en /admin/pantalla y vale para TODAS las salas.
+   * administrador en /admin/ajustes y vale para TODAS las salas.
    */
   disenoPantalla: DisenoPantalla
+  /** Como entran los medicos: con enlace o con PIN (ver `MODOS_ACCESO_PROFESIONAL`). */
+  accesoProfesionales: ModoAccesoProfesional
   /**
    * Imagen de fondo de la cartelera, como ruta servida desde `public/`
    * (por ejemplo "/img/fondo-sala.jpg"). Vacio = fondo liso, sin imagen.

@@ -68,6 +68,7 @@ function crearRegistro(params: {
   area: string | null
   passwordHash: string
   secciones?: string[] | null
+  esDemostracion?: boolean
 }): RegistroUsuario {
   return {
     id: crearId(),
@@ -84,6 +85,7 @@ function crearRegistro(params: {
     // pantalla a la que entrar: el guarda lo devolvia al login y el login lo
     // mandaba de vuelta, en bucle.
     secciones: params.rol === 'ADMINISTRADOR' ? null : normalizarSecciones(params.secciones),
+    esDemostracion: params.esDemostracion ?? false,
   }
 }
 
@@ -155,6 +157,7 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
       area: datos.area ?? null,
       passwordHash: await cifrarContrasena(datos.password),
       secciones: datos.secciones,
+      esDemostracion: datos.esDemostracion,
     })
     usuarios.push(registro)
     return sinPassword(registro)
@@ -179,6 +182,10 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
       registro.versionCredenciales = (registro.versionCredenciales ?? 0) + 1
     }
     if (datos.secciones !== undefined) registro.secciones = normalizarSecciones(datos.secciones)
+    if (datos.esDemostracion !== undefined && datos.esDemostracion !== (registro.esDemostracion ?? false)) {
+      registro.esDemostracion = datos.esDemostracion
+      registro.versionCredenciales = (registro.versionCredenciales ?? 0) + 1
+    }
     // Un administrador siempre ve todo; el campo solo aplica a OPERADOR.
     if (registro.rol === 'ADMINISTRADOR') registro.secciones = null
 

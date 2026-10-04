@@ -74,11 +74,12 @@ export async function register() {
       )
     }
 
-    // Este panel borra las citas y los turnos del dia de un clic.
-    if (process.env.TURNOS_SIMULACION === '1') {
+    // La variable ya no hace nada: la simulacion solo corre en la cuenta de
+    // demostracion. Se avisa para que nadie crea que la encendio.
+    if (process.env.TURNOS_SIMULACION) {
       aviso(
-        'TURNOS_SIMULACION=1: el panel de simulacion esta habilitado y BORRA las citas y los turnos del dia. ' +
-          'Quitarla en el servidor de produccion.',
+        'TURNOS_SIMULACION ya no se usa: la simulacion de carga corre solo en la cuenta de demostracion ' +
+          '(Usuarios -> "Cuenta de demostracion"). Se puede quitar del entorno.',
       )
     }
   }

@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { recalcularJornadas } from '@/lib/citas/jornadas'
 import { contextoPeticion, registrarEvento } from '@/lib/seguridad/registro'
 import { EVENTOS } from '@/lib/seguridad/eventos'
-import { apiError, requireSeccion } from '@/lib/permissions/session'
+import { apiError, exigirCuentaReal, requireSeccion } from '@/lib/permissions/session'
 import { turnoRepository } from '@/lib/turnos/repositorio'
 import { diaColombia, ahoraISO, esFechaValida } from '@/lib/turnos/tiempo'
 
@@ -50,6 +50,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const session = await requireSeccion('/admin/profesionales')
+    exigirCuentaReal(session)
 
     // El cuerpo es opcional: sin el se miran los ultimos 30 dias, que es lo que
     // hacia antes de que se pudiera elegir el periodo.

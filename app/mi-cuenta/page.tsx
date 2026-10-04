@@ -1,23 +1,26 @@
 import { redirect } from 'next/navigation'
 import AppShell from '@/components/layout/AppShell'
 import { auth } from '@/lib/auth'
+import { primeraRutaPermitida, tieneMiCuenta } from '@/lib/permissions/rutas'
+import { turnoRepository } from '@/lib/turnos/repositorio'
 import MiCuentaClient from './MiCuentaClient'
 
 export const metadata = { title: 'Mi cuenta' }
 
 /**
- * NO PASA POR `RoleShell` NI POR EL CATALOGO DE SECCIONES, y es deliberado.
+ * SOLO EL ADMINISTRADOR (decision del hospital): aqui cambia su usuario y su
+ * contrasena. A un operador, o a la cuenta de demostracion, se le devuelve a
+ * su pantalla de entrada; sus cuentas las maneja el administrador en Usuarios.
+ * El servidor lo vuelve a comprobar en la ruta, que es donde de verdad protege.
  *
- * Una "seccion" es algo que un administrador reparte: se puede dar o quitar.
- * Cambiar la propia contrasena no se le puede quitar a nadie —un operador al
- * que le recortaron el menu tiene que poder hacerlo igual—, asi que no es una
- * seccion y no entra en `lib/permissions/rutas.ts`. El unico requisito es
- * tener sesion, que es lo que se comprueba aqui; el servidor lo vuelve a
- * comprobar en la ruta, que es donde de verdad protege.
+ * No pasa por `RoleShell` porque no es una seccion que se reparta.
  */
 export default async function MiCuentaPage() {
   const session = await auth()
   if (!session?.user) redirect('/auth/login')
+  if (!tieneMiCuenta(session.user.rol, session.user.demostracion)) {
+    redirect(primeraRutaPermitida(session.user.rol, session.user.secciones))
+  }
 
   return (
     <AppShell
@@ -25,8 +28,10 @@ export default async function MiCuentaPage() {
       nombreUsuario={session.user.name}
       area={session.user.area}
       secciones={session.user.secciones}
+      demostracion={session.user.demostracion}
+      modoAcceso={await turnoRepository.configuracion().then((c) => c.accesoProfesionales).catch(() => undefined)}
       title="Mi cuenta"
-      description="Cambia tu contrasena. Se te pide la actual para confirmar que eres tu."
+      description="Cambia tu usuario o tu contrasena. Se te pide la contrasena actual para confirmar que eres tu."
     >
       <MiCuentaClient usuario={session.user.usuario} rol={session.user.rol} />
     </AppShell>

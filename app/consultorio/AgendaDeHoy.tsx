@@ -7,7 +7,12 @@
  * llegan el doctor no puede hacer nada, y se cuentan arriba en vez de llenar
  * la lista. El paciente en atencion se marca; los cerrados quedan atenuados.
  * Siempre es el dia de hoy: la pantalla pasa sola al dia siguiente.
+ *
+ * FILTROS (pedido del hospital): "en espera" y "atendidos" se tocan y dejan en
+ * la lista solo esos; tocar otra vez el mismo vuelve a todos. El total del dia
+ * es solo un numero, no filtra.
  */
+import { useState } from 'react'
 import { CalendarCheck, Clock } from '@phosphor-icons/react/dist/ssr'
 import { Badge } from '@/components/ui/Badge'
 import { horaCorta } from '@/lib/api/cliente'
@@ -26,6 +31,21 @@ const ETIQUETA: Record<EstadoAgendaItem, { texto: string; tono: Tono }> = {
   AUSENTE: { texto: 'No se presentó', tono: 'red' },
 }
 
+type Filtro = 'todos' | 'espera' | 'atendidos'
+
+/** Que deja ver cada filtro. */
+const DEJA_VER: Record<Filtro, (item: ItemAgendaProfesional) => boolean> = {
+  todos: () => true,
+  espera: (item) => item.estado === 'EN_ESPERA',
+  atendidos: (item) => item.estado === 'ATENDIDA',
+}
+
+/** Lo que se dice cuando el filtro no deja a nadie. */
+const SIN_NADIE: Record<Exclude<Filtro, 'todos'>, string> = {
+  espera: 'No hay pacientes esperando en este momento.',
+  atendidos: 'Todavia no has atendido a ningun paciente hoy.',
+}
+
 function Contador({ valor, texto, tono }: { valor: number; texto: string; tono: string }) {
   return (
     <span className={cn('inline-flex items-baseline gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium', tono)}>
@@ -35,16 +55,54 @@ function Contador({ valor, texto, tono }: { valor: number; texto: string; tono: 
   )
 }
 
+/** Un contador que filtra: se ve apretado mientras su filtro esta puesto. */
+function Filtrar({
+  valor,
+  texto,
+  tono,
+  activo,
+  alPulsar,
+}: {
+  valor: number
+  texto: string
+  tono: { normal: string; activo: string }
+  activo: boolean
+  alPulsar: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={alPulsar}
+      aria-pressed={activo}
+      title={activo ? 'Ver todos los pacientes' : `Ver solo los ${texto}`}
+      className={cn(
+        'inline-flex items-baseline gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition active:scale-[.97]',
+        activo ? tono.activo : tono.normal,
+      )}
+    >
+      <span className="text-sm font-semibold tabular-nums">{valor}</span>
+      {texto}
+    </button>
+  )
+}
+
 export function AgendaDeHoy({
   agenda,
   resumen,
   turnoActualId,
+  sinCodigo = false,
 }: {
+  /** Con la cartelera de nombres el codigo no se muestra (el paciente no lo conoce). */
+  sinCodigo?: boolean
   agenda: ItemAgendaProfesional[]
   resumen: ResumenDelDia
   turnoActualId: string | null
 }) {
+  const [filtro, setFiltro] = useState<Filtro>('todos')
+  const alternar = (elegido: Exclude<Filtro, 'todos'>) => setFiltro((actual) => (actual === elegido ? 'todos' : elegido))
+
   const confirmados = agenda.filter((item) => item.estado !== 'PROGRAMADA')
+  const visibles = confirmados.filter(DEJA_VER[filtro])
 
   return (
     <section
@@ -58,20 +116,49 @@ export function AgendaDeHoy({
           </span>
           <div>
             <h2 className="text-lg font-semibold tracking-[-0.02em] text-brand-950">Pacientes de hoy</h2>
-            <p className="text-xs font-medium text-slate-500">Los que ya registraron su llegada, en el orden de su cita</p>
+            <p className="text-xs font-medium text-slate-500">
+              {filtro === 'espera'
+                ? 'Solo los que estan esperando, en el orden de su cita'
+                : filtro === 'atendidos'
+                  ? 'Solo los que ya atendiste hoy'
+                  : 'Los que ya registraron su llegada, en el orden de su cita'}
+            </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Contador valor={resumen.enEspera} texto="en espera" tono="bg-acento-50 text-acento-800" />
-          <Contador valor={resumen.atendidos} texto="atendidos" tono="bg-emerald-50 text-emerald-800" />
-          {resumen.sinLlegar > 0 ? (
-            <Contador valor={resumen.sinLlegar} texto="sin llegar" tono="bg-slate-100 text-slate-600" />
-          ) : null}
-          <Contador valor={resumen.total} texto="en el día" tono="bg-slate-100 text-slate-600" />
+          <Filtrar
+            valor={resumen.enEspera}
+            texto="en espera"
+            activo={filtro === 'espera'}
+            alPulsar={() => alternar('espera')}
+            tono={{
+              normal: 'bg-acento-50 text-acento-800 ring-transparent hover:ring-acento-200',
+              activo: 'bg-acento-600 text-white ring-acento-600',
+            }}
+          />
+          <Filtrar
+            valor={resumen.atendidos}
+            texto="atendidos"
+            activo={filtro === 'atendidos'}
+            alPulsar={() => alternar('atendidos')}
+            tono={{
+              normal: 'bg-emerald-50 text-emerald-800 ring-transparent hover:ring-emerald-200',
+              activo: 'bg-emerald-600 text-white ring-emerald-600',
+            }}
+          />
+          {/* El total no filtra: es cuantos pacientes tiene el medico hoy. */}
+          <Contador valor={resumen.total} texto="pacientes hoy" tono="bg-slate-100 text-slate-600" />
         </div>
       </div>
 
-      {confirmados.length === 0 ? (
+      {confirmados.length > 0 && visibles.length === 0 && filtro !== 'todos' ? (
+        <p className="mt-6 rounded-2xl bg-slate-50 px-5 py-6 text-center text-sm leading-6 text-slate-500">
+          {SIN_NADIE[filtro]}{' '}
+          <button type="button" onClick={() => setFiltro('todos')} className="font-semibold text-acento-700 hover:underline">
+            Ver todos
+          </button>
+        </p>
+      ) : confirmados.length === 0 ? (
         <p className="mt-6 rounded-2xl bg-slate-50 px-5 py-6 text-center text-sm leading-6 text-slate-500">
           {agenda.length > 0
             ? `Tienes ${resumen.sinLlegar} ${resumen.sinLlegar === 1 ? 'cita' : 'citas'} hoy. Los pacientes aparecen aqui en cuanto registran su llegada en admisiones.`
@@ -79,7 +166,7 @@ export function AgendaDeHoy({
         </p>
       ) : (
         <ol className="mt-5 space-y-2">
-          {confirmados.map((item) => {
+          {visibles.map((item) => {
             // Un turno que se cerro solo (al pasar al siguiente sin cerrar al
             // anterior) no se puede ver igual que uno atendido de verdad.
             const etiqueta =
@@ -102,7 +189,7 @@ export function AgendaDeHoy({
                   <Clock size={16} weight="duotone" className="text-acento-500" />
                   {horaCorta(item.horaCita)}
                 </span>
-                <span className="text-sm font-semibold tabular-nums text-brand-950 sm:order-none">{item.codigo ?? '—'}</span>
+                <span className="text-sm font-semibold tabular-nums text-brand-950 sm:order-none">{sinCodigo ? '' : (item.codigo ?? '—')}</span>
                 <span className="col-span-2 flex min-w-0 items-center gap-3 sm:col-span-1">
                   <span
                     aria-hidden="true"

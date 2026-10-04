@@ -31,6 +31,11 @@ export interface Usuario {
   secciones?: string[] | null
   /** Sube con cada cambio de contrasena; invalida las sesiones anteriores. */
   versionCredenciales?: number
+  /**
+   * Cuenta de DEMOSTRACION: todo lo que hace se lee y se escribe en el
+   * hospital de mentira (`lib/demostracion/mundo.ts`), nunca en la base real.
+   */
+  esDemostracion?: boolean
 }
 
 /** Datos para crear o editar un usuario desde la administracion. */
@@ -43,4 +48,5 @@ export interface DatosUsuario {
   /** Solo al crear o al cambiar la contrasena. */
   password?: string
   secciones?: string[] | null
+  esDemostracion?: boolean
 }
